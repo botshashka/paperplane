@@ -83,6 +83,57 @@ class VelocityManagerTest {
     }
 
     @Test
+    fun `clearTransferComplete deletes confirmation file`() {
+        val manager = VelocityManager(tempDir)
+        tempDir.mkdirs()
+        val file = File(tempDir, "transfer-complete")
+        file.writeText("12345")
+        assertTrue(file.exists())
+
+        manager.clearTransferComplete()
+
+        assertFalse(file.exists())
+    }
+
+    @Test
+    fun `clearTransferComplete is safe when file missing`() {
+        val manager = VelocityManager(tempDir)
+        tempDir.mkdirs()
+        // Should not throw
+        manager.clearTransferComplete()
+    }
+
+    @Test
+    fun `waitForTransferComplete returns true when file appears`() {
+        val manager = VelocityManager(tempDir)
+        tempDir.mkdirs()
+
+        // Write the file from a background thread after a short delay
+        Thread {
+            Thread.sleep(100)
+            File(tempDir, "transfer-complete").writeText(System.currentTimeMillis().toString())
+        }.start()
+
+        val result = manager.waitForTransferComplete(timeoutMs = 3000)
+        assertTrue(result)
+        // File should be cleaned up
+        assertFalse(File(tempDir, "transfer-complete").exists())
+    }
+
+    @Test
+    fun `waitForTransferComplete returns false on timeout`() {
+        val manager = VelocityManager(tempDir)
+        tempDir.mkdirs()
+
+        val start = System.currentTimeMillis()
+        val result = manager.waitForTransferComplete(timeoutMs = 300)
+        val elapsed = System.currentTimeMillis() - start
+
+        assertFalse(result)
+        assertTrue(elapsed >= 250, "Should have waited close to timeout, waited ${elapsed}ms")
+    }
+
+    @Test
     fun `isRunning returns false when not started`() {
         val manager = VelocityManager(tempDir)
         assertFalse(manager.isRunning())

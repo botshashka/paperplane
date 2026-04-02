@@ -178,4 +178,81 @@ class ServerSyncTest {
         // Should not throw, target should still exist
         assertTrue(targetDir.exists())
     }
+
+    @Test
+    fun `skips unchanged files during incremental sync`() {
+        // Setup source
+        File(sourceDir, "world/region").mkdirs()
+        File(sourceDir, "world/region/r.0.0.mca").writeText("region-data")
+        File(sourceDir, "eula.txt").writeText("eula=true")
+
+        // First sync
+        ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+
+        // Record target timestamps
+        val worldFile = File(targetDir, "world/region/r.0.0.mca")
+        val eulaFile = File(targetDir, "eula.txt")
+        val worldTimestamp = worldFile.lastModified()
+        val eulaTimestamp = eulaFile.lastModified()
+
+        // Wait a bit so any re-copy would produce a different timestamp
+        Thread.sleep(50)
+
+        // Second sync without modifying source
+        ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+
+        // Timestamps should be unchanged (files were not re-copied)
+        assertEquals(worldTimestamp, worldFile.lastModified(), "world file should not have been re-copied")
+        assertEquals(eulaTimestamp, eulaFile.lastModified(), "eula file should not have been re-copied")
+    }
+
+    @Test
+    fun `updates only modified files during incremental sync`() {
+        // Setup source
+        File(sourceDir, "world/region").mkdirs()
+        File(sourceDir, "world/region/r.0.0.mca").writeText("region-data")
+        File(sourceDir, "eula.txt").writeText("eula=true")
+
+        // First sync
+        ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+
+        val worldFile = File(targetDir, "world/region/r.0.0.mca")
+        val worldTimestamp = worldFile.lastModified()
+
+        // Wait then modify only one file
+        Thread.sleep(50)
+        File(sourceDir, "eula.txt").writeText("eula=false")
+
+        // Second sync
+        ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+
+        // Modified file should be updated
+        assertEquals("eula=false", File(targetDir, "eula.txt").readText())
+        // Unmodified file should not have been re-copied
+        assertEquals(worldTimestamp, worldFile.lastModified(), "unmodified world file should not have been re-copied")
+    }
+
+    @Test
+    fun `removes files deleted from source`() {
+        // Setup source with two files
+        File(sourceDir, "world/region").mkdirs()
+        File(sourceDir, "world/region/r.0.0.mca").writeText("region-data")
+        File(sourceDir, "world/region/r.1.1.mca").writeText("extra-region")
+
+        // First sync
+        ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+        assertTrue(File(targetDir, "world/region/r.1.1.mca").exists())
+
+        // Delete a file from source
+        File(sourceDir, "world/region/r.1.1.mca").delete()
+
+        // Second sync
+        ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+
+        // Remaining file should still be there
+        assertTrue(File(targetDir, "world/region/r.0.0.mca").exists())
+        assertEquals("region-data", File(targetDir, "world/region/r.0.0.mca").readText())
+        // Deleted file should be gone
+        assertFalse(File(targetDir, "world/region/r.1.1.mca").exists(), "deleted file should be removed from target")
+    }
 }

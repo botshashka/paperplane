@@ -182,17 +182,22 @@ class PaperServerManager(
 
     fun waitForReady(): Boolean {
         val proc = process ?: return false
-        // Wait for "Done" message in server output by polling a marker file
-        // Or we detect via the server output thread
-        // For simplicity, wait for the server process to be alive and port to be available
+        val flagFile = File(serverDir, ".paperplane/server-ready")
+        flagFile.delete() // Clear stale flag
         val startTime = System.currentTimeMillis()
         val timeout = 60_000L
         while (proc.isAlive && System.currentTimeMillis() - startTime < timeout) {
+            // Prefer flag file (written by overlay plugin after all plugins loaded)
+            if (flagFile.exists()) {
+                flagFile.delete()
+                return true
+            }
+            // Fallback: TCP port check (works even without overlay)
             try {
                 java.net.Socket("localhost", port).close()
                 return true
             } catch (_: Exception) {
-                Thread.sleep(500)
+                Thread.sleep(100)
             }
         }
         return false

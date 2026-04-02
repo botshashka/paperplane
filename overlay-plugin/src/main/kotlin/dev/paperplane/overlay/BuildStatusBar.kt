@@ -21,8 +21,8 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
         .build()
 
     fun start() {
-        // Poll overlay-status.json every 20 ticks (1 second)
-        pollTask = plugin.server.scheduler.runTaskTimer(plugin, Runnable { poll() }, 20L, 20L)
+        // Poll overlay-status.json every 5 ticks (250ms)
+        pollTask = plugin.server.scheduler.runTaskTimer(plugin, Runnable { poll() }, 5L, 5L)
     }
 
     fun stop() {

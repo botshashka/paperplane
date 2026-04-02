@@ -34,9 +34,9 @@ class ReconnectPlugin @Inject constructor(
         // Read initial state
         pollStatus()
 
-        // Poll active-server.json every 500ms
+        // Poll active-server.json every 100ms
         server.scheduler.buildTask(this, Runnable { pollStatus() })
-            .repeat(500, TimeUnit.MILLISECONDS)
+            .repeat(100, TimeUnit.MILLISECONDS)
             .schedule()
 
         logger.info("PaperPlane transfer plugin enabled")
@@ -74,6 +74,10 @@ class ReconnectPlugin @Inject constructor(
                 transferPlayers(newActive)
                 // Clear transfer flag
                 statusFile.writeText("""{"active":"$newActive","transfer":false}""")
+                // Write confirmation file for CLI to detect
+                File(statusFile.parentFile, "transfer-complete").writeText(
+                    System.currentTimeMillis().toString()
+                )
             }
         } catch (_: Exception) {}
     }

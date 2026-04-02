@@ -60,6 +60,23 @@ class VelocityManager(
         copyTransferPlugin()
     }
 
+    fun clearTransferComplete() {
+        File(proxyDir, "transfer-complete").delete()
+    }
+
+    fun waitForTransferComplete(timeoutMs: Long = 5000): Boolean {
+        val file = File(proxyDir, "transfer-complete")
+        val start = System.currentTimeMillis()
+        while (System.currentTimeMillis() - start < timeoutMs) {
+            if (file.exists()) {
+                file.delete()
+                return true
+            }
+            Thread.sleep(100)
+        }
+        return false
+    }
+
     fun writeActiveServer(serverName: String, transfer: Boolean = false) {
         File(proxyDir, "active-server.json").writeText(
             """{"active":"$serverName","transfer":$transfer}"""

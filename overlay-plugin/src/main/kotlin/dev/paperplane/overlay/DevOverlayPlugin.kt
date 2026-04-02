@@ -1,6 +1,7 @@
 package dev.paperplane.overlay
 
 import org.bukkit.plugin.java.JavaPlugin
+import java.io.File
 
 class DevOverlayPlugin : JavaPlugin() {
     private lateinit var errorCatcher: ErrorCatcher
@@ -15,6 +16,11 @@ class DevOverlayPlugin : JavaPlugin() {
             server.pluginManager.registerEvents(AutoOpListener(), this)
             server.pluginManager.registerEvents(SaveProtectionListener(buildStatusBar), this)
             buildStatusBar.start()
+
+            // Signal to CLI that the server is fully ready (all plugins loaded)
+            val readyFlag = File(dataFolder.parentFile.parentFile, ".paperplane/server-ready")
+            readyFlag.parentFile.mkdirs()
+            readyFlag.writeText(System.currentTimeMillis().toString())
 
             logger.info("PaperPlane dev overlay enabled")
         } catch (e: Exception) {

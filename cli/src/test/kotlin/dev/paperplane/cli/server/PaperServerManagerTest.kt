@@ -96,4 +96,86 @@ class PaperServerManagerTest {
         // Should not throw
         manager.sendCommand("test")
     }
+
+    @Test
+    fun `waitForSave returns true when flag file appears`() {
+        val manager = createManager()
+        manager.serverDir.mkdirs()
+        File(manager.serverDir, ".paperplane").mkdirs()
+
+        // Simulate overlay writing the flag after a short delay
+        Thread {
+            Thread.sleep(100)
+            File(manager.serverDir, ".paperplane/save-complete").writeText("done")
+        }.start()
+
+        val result = manager.waitForSave(timeoutMs = 3000)
+        assertTrue(result)
+        // Flag file should be cleaned up
+        assertFalse(File(manager.serverDir, ".paperplane/save-complete").exists())
+    }
+
+    @Test
+    fun `waitForSave returns false on timeout`() {
+        val manager = createManager()
+        manager.serverDir.mkdirs()
+        File(manager.serverDir, ".paperplane").mkdirs()
+
+        val start = System.currentTimeMillis()
+        val result = manager.waitForSave(timeoutMs = 300)
+        val elapsed = System.currentTimeMillis() - start
+
+        assertFalse(result)
+        assertTrue(elapsed >= 250, "Should have waited close to timeout, waited ${elapsed}ms")
+    }
+
+    @Test
+    fun `waitForSave clears stale flag file`() {
+        val manager = createManager()
+        manager.serverDir.mkdirs()
+        val flagFile = File(manager.serverDir, ".paperplane/save-complete")
+        flagFile.parentFile.mkdirs()
+        flagFile.writeText("stale")
+
+        // Should clear stale flag and then timeout (no new flag written)
+        val result = manager.waitForSave(timeoutMs = 300)
+        // The stale flag was cleared, and no new flag appeared, so it should timeout
+        assertFalse(result)
+    }
+
+    @Test
+    fun `waitForReady returns false when not started`() {
+        val manager = createManager()
+        val result = manager.waitForReady()
+        assertFalse(result)
+    }
+
+    @Test
+    fun `waitForReady detects flag file from overlay`() {
+        val manager = createManager()
+        manager.serverDir.mkdirs()
+        File(manager.serverDir, ".paperplane").mkdirs()
+
+        // Start a dummy process so waitForReady doesn't bail early
+        val proc = ProcessBuilder("sleep", "10").start()
+        // Use reflection to set the process field
+        val processField = PaperServerManager::class.java.getDeclaredField("process")
+        processField.isAccessible = true
+        processField.set(manager, proc)
+
+        try {
+            // Write flag file from background thread
+            Thread {
+                Thread.sleep(100)
+                val flagFile = File(manager.serverDir, ".paperplane/server-ready")
+                flagFile.parentFile.mkdirs()
+                flagFile.writeText("ready")
+            }.start()
+
+            val result = manager.waitForReady()
+            assertTrue(result)
+        } finally {
+            proc.destroyForcibly()
+        }
+    }
 }

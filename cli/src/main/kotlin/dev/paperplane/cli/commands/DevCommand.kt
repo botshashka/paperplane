@@ -163,7 +163,10 @@ class DevCommand : CliktCommand(name = "dev") {
         TerminalUI.blank()
         TerminalUI.status("Watching for changes...")
 
-        // Step 6: Watch and rebuild loop
+        // Step 6: Pre-warm standby server in background
+        preWarmStandby(servers[Slot.GREEN]!!, active, Slot.GREEN.port, builtJar, config, paperJar, velocityManager)
+
+        // Step 7: Watch and rebuild loop
         val srcDir = File(projectDir, "src")
         val watcher = FileWatcher(srcDir, config.dev.debounceMs) { changedFiles ->
             val shortName = changedFiles.firstOrNull()?.substringAfterLast("/") ?: "files"
@@ -212,12 +215,33 @@ class DevCommand : CliktCommand(name = "dev") {
         val active = servers[activeSlot]!!
         val standbySlot = activeSlot.other()
         val standby = servers[standbySlot]!!
+        val builtJar = File(projectDir, metadata.jarPath)
 
-        // 1. Build
+        // 1. Save world first — must complete before sync can start
+        active.writeOverlayStatus("saving")
+        TerminalUI.spin("Saving world...") {
+            active.waitForSave()
+        }
+
+        // 2. Stop pre-warmed standby (if running) so we can sync to its directory
+        if (standby.isRunning()) {
+            standby.stop()
+        }
+
+        // 3. Build + sync in parallel (sync uses saved state, build produces new jar)
         active.writeOverlayStatus("building")
         val buildStart = System.currentTimeMillis()
+
+        val syncThread = Thread({
+            ServerSync.syncServerState(active.serverDir, standby.serverDir, standbySlot.port, builtJar.name)
+        }, "sync-to-${standbySlot.serverName}")
+        syncThread.start()
+
         val buildSuccess = gradle.build()
         val buildDuration = formatDuration(System.currentTimeMillis() - buildStart)
+
+        // Wait for sync to finish (usually completes before build, especially with incremental sync)
+        syncThread.join()
 
         if (!buildSuccess) {
             TerminalUI.error("Build failed", buildDuration)
@@ -228,19 +252,7 @@ class DevCommand : CliktCommand(name = "dev") {
         }
         TerminalUI.success("Build succeeded", buildDuration)
 
-        // 2. Save & freeze active server
-        active.writeOverlayStatus("saving")
-        TerminalUI.spin("Saving world...") {
-            active.waitForSave()
-        }
-
-        // 3. Sync server state to standby
-        val builtJar = File(projectDir, metadata.jarPath)
-        TerminalUI.spin("Syncing server state...") {
-            ServerSync.syncServerState(active.serverDir, standby.serverDir, standbySlot.port, builtJar.name)
-        }
-
-        // 4. Deploy new plugin + overlay to standby
+        // 4. Deploy new plugin + overlay to standby (sync already done)
         standby.copyPlugin(builtJar)
         if (config.dev.overlay) standby.copyOverlay()
 
@@ -260,15 +272,21 @@ class DevCommand : CliktCommand(name = "dev") {
         }
 
         // 6. Transfer players via Velocity
+        velocityManager.clearTransferComplete()
         velocityManager.writeActiveServer(standbySlot.serverName, transfer = true)
-        Thread.sleep(3000) // Wait for transfer (plugin polls every 500ms + connection + spawn time)
+        velocityManager.waitForTransferComplete()
+        Thread.sleep(200) // Brief safety margin for connection establishment
 
         // 7. Write "ready" to new server's overlay before stopping old
         val totalDuration = formatDuration(System.currentTimeMillis() - totalStart)
         standby.writeOverlayStatus("ready", mapOf("duration" to totalDuration))
 
-        // 8. Stop old server
-        active.stop()
+        // 8. Stop old server + pre-warm it as next standby (async)
+        Thread({
+            active.stop()
+            // Pre-warm: sync current state and start so it's ready for next rebuild
+            preWarmStandby(active, standby, activeSlot.port, builtJar, config, paperJar, velocityManager)
+        }, "stop-and-prewarm-${activeSlot.serverName}").apply { isDaemon = true }.start()
 
         // 9. Report success
         TerminalUI.success("Server ready (${standbySlot.serverName})", serverDuration)
@@ -278,6 +296,34 @@ class DevCommand : CliktCommand(name = "dev") {
         TerminalUI.status("Watching for changes...")
 
         return standbySlot
+    }
+
+    /**
+     * Pre-warms a standby server by syncing state and starting it in the background.
+     * This way it's already booted when the next rebuild needs it, saving cold-start time.
+     */
+    private fun preWarmStandby(
+        standby: PaperServerManager,
+        source: PaperServerManager,
+        standbyPort: Int,
+        pluginJar: File,
+        config: PaperPlaneConfig,
+        paperJar: File,
+        velocityManager: VelocityManager
+    ) {
+        try {
+            if (standby.isRunning()) return
+            standby.serverDir.mkdirs()
+            standby.configure()
+            standby.configureVelocityForwarding(velocityManager.forwardingSecret)
+            ServerSync.syncServerState(source.serverDir, standby.serverDir, standbyPort, pluginJar.name)
+            standby.copyPlugin(pluginJar)
+            if (config.dev.overlay) standby.copyOverlay()
+            standby.start(paperJar, config.server.jvmArgs)
+            standby.waitForReady()
+        } catch (_: Exception) {
+            // Pre-warm is best-effort; failure here doesn't affect the active server
+        }
     }
 
     // ── Single-server mode (proxy=false) ────────────────────────────────
