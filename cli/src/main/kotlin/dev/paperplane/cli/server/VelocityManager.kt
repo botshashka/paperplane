@@ -12,22 +12,24 @@ class VelocityManager(
 
     val forwardingSecret: String = UUID.randomUUID().toString()
 
-    fun configure(backendPort: Int = 25566, proxyPort: Int = 25565) {
+    fun configure(bluePort: Int = 25566, greenPort: Int = 25567, proxyPort: Int = 25565) {
         proxyDir.mkdirs()
         pluginsDir.mkdirs()
 
-        writeIfMissing("velocity.toml", """
+        // Always overwrite — generated config, needs both backends registered
+        File(proxyDir, "velocity.toml").writeText("""
             # PaperPlane Velocity proxy config
             bind = "0.0.0.0:$proxyPort"
-            motd = "<aqua>PaperPlane Dev Server"
+            motd = "PaperPlane Dev Server"
             show-max-players = 2
             online-mode = false
             player-info-forwarding-mode = "modern"
             announce-forge = false
 
             [servers]
-            dev = "127.0.0.1:$backendPort"
-            try = ["dev"]
+            blue = "127.0.0.1:$bluePort"
+            green = "127.0.0.1:$greenPort"
+            try = ["blue", "green"]
 
             [forced-hosts]
 
@@ -51,8 +53,17 @@ class VelocityManager(
         // Write forwarding secret
         File(proxyDir, "forwarding.secret").writeText(forwardingSecret)
 
-        // Copy embedded reconnect plugin
-        copyReconnectPlugin()
+        // Write initial active server state
+        writeActiveServer("blue")
+
+        // Copy embedded transfer plugin
+        copyTransferPlugin()
+    }
+
+    fun writeActiveServer(serverName: String, transfer: Boolean = false) {
+        File(proxyDir, "active-server.json").writeText(
+            """{"active":"$serverName","transfer":$transfer}"""
+        )
     }
 
     fun start(velocityJar: File): Process {
@@ -60,6 +71,10 @@ class VelocityManager(
             "java",
             "-Xmx256M",
             "-XX:+UseG1GC",
+            "--enable-native-access=ALL-UNNAMED",
+            "--add-opens", "java.base/java.lang=ALL-UNNAMED",
+            "--add-opens", "java.base/sun.misc=ALL-UNNAMED",
+            "--add-opens", "java.base/java.io=ALL-UNNAMED",
             "-jar", velocityJar.absolutePath
         )
 
@@ -111,10 +126,10 @@ class VelocityManager(
         return false
     }
 
-    private fun copyReconnectPlugin() {
+    private fun copyTransferPlugin() {
         val stream = javaClass.classLoader.getResourceAsStream("paperplane-velocity.bin")
         if (stream != null) {
-            val target = File(pluginsDir, "paperplane-reconnect.jar")
+            val target = File(pluginsDir, "paperplane-transfer.jar")
             stream.use { input ->
                 target.outputStream().use { output ->
                     input.copyTo(output)
@@ -125,8 +140,8 @@ class VelocityManager(
 
     private fun shouldShowLine(line: String): Boolean {
         if (verboseProxy) return true
-        if (line.contains("[ERROR]") || line.contains("[WARN]")) return true
-        if (line.contains("paperplane", ignoreCase = true)) return true
+        if (line.startsWith("WARNING:")) return false
+        if (line.contains("[ERROR]")) return true
         return false
     }
 
@@ -137,14 +152,6 @@ class VelocityManager(
             "\u001b[2m[proxy/$thread]\u001b[0m $message"
         } else {
             "\u001b[2m[proxy]\u001b[0m $line"
-        }
-    }
-
-    private fun writeIfMissing(name: String, content: String) {
-        val file = File(proxyDir, name)
-        if (!file.exists()) {
-            file.parentFile.mkdirs()
-            file.writeText(content)
         }
     }
 }

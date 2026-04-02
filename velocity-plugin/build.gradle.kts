@@ -8,7 +8,7 @@ repositories {
 
 dependencies {
     compileOnly(libs.velocity.api)
-    annotationProcessor(libs.velocity.api)
+    implementation(libs.gson)
 }
 
 tasks.shadowJar {

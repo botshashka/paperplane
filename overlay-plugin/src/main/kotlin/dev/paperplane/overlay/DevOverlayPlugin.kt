@@ -13,6 +13,7 @@ class DevOverlayPlugin : JavaPlugin() {
 
             server.pluginManager.registerEvents(errorCatcher, this)
             server.pluginManager.registerEvents(AutoOpListener(), this)
+            server.pluginManager.registerEvents(SaveProtectionListener(buildStatusBar), this)
             buildStatusBar.start()
 
             logger.info("PaperPlane dev overlay enabled")

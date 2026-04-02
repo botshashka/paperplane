@@ -4,12 +4,13 @@ import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 
 class PaperServerManager(
-    private val serverDir: File,
+    val serverDir: File,
     private val downloader: PaperDownloader,
     var verboseServer: Boolean = false,
     private val port: Int = 25565
 ) {
     private var process: Process? = null
+    private var processStdin: java.io.OutputStream? = null
     private val pluginsDir = File(serverDir, "plugins")
 
     fun configure() {
@@ -35,6 +36,8 @@ class PaperServerManager(
             settings:
               allow-end: false
               connection-throttle: 0
+            ticks-per:
+              autosave: 0
         """.trimIndent() + "\n")
 
         writeIfMissing("spigot.yml", """
@@ -102,6 +105,7 @@ class PaperServerManager(
         val cmd = mutableListOf("java")
         // Fast startup flags
         cmd.addAll(listOf(
+            "--enable-native-access=ALL-UNNAMED",
             "-XX:+UseG1GC",
             "-XX:+ParallelRefProcEnabled",
             "-XX:+UnlockExperimentalVMOptions",
@@ -117,6 +121,7 @@ class PaperServerManager(
 
         val proc = pb.start()
         process = proc
+        processStdin = proc.outputStream
 
         // Stream server output, filtering for relevant lines
         Thread({
@@ -125,7 +130,7 @@ class PaperServerManager(
                     println("  ${formatServerLine(line)}")
                 }
             }
-        }, "server-output").apply { isDaemon = true }.start()
+        }, "server-$port-output").apply { isDaemon = true }.start()
 
         return proc
     }
@@ -141,6 +146,36 @@ class PaperServerManager(
             proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
         }
         process = null
+        processStdin = null
+    }
+
+    fun sendCommand(command: String) {
+        processStdin?.let {
+            it.write("$command\n".toByteArray())
+            it.flush()
+        }
+    }
+
+    /**
+     * Waits for the overlay plugin to complete a save.
+     * The CLI writes "saving" to overlay-status.json, the overlay does the save
+     * via Bukkit API (no broadcast), then writes a flag file.
+     */
+    fun waitForSave(timeoutMs: Long = 10_000): Boolean {
+        val flagFile = File(serverDir, ".paperplane/save-complete")
+        flagFile.delete() // Clear any stale flag
+
+        // The overlay plugin polls every 1s and saves when it sees "saving" state.
+        // We poll for the flag file it writes on completion.
+        val startTime = System.currentTimeMillis()
+        while (System.currentTimeMillis() - startTime < timeoutMs) {
+            if (flagFile.exists()) {
+                flagFile.delete()
+                return true
+            }
+            Thread.sleep(200)
+        }
+        return false
     }
 
     fun isRunning(): Boolean = process?.isAlive == true
@@ -178,44 +213,14 @@ class PaperServerManager(
 
     private fun shouldShowLine(line: String): Boolean {
         if (verboseServer) return true
+        if (line.startsWith("WARNING:")) return false // JVM native access warnings
 
-        // Suppress known server noise
-        if (isServerNoise(line)) return false
+        // Only show real errors — skip known harmless ones
+        if (line.contains("No key layers in MapLike")) return false
+        if (line.contains("ERROR")) return true
+        if (line.contains("WARN") && line.contains("plugin", ignoreCase = true)) return true
 
-        // Show plugin-related output and real errors
-        if (line.contains("Done (")) return false  // redundant, we show "server ready"
-        if (line.contains("Starting minecraft server")) return false
-        if (line.contains("ERROR") && !isServerNoise(line)) return true
-        if (line.contains("[Server thread/INFO]")) {
-            return !line.contains("UUID of player") &&
-                !line.contains("moved too quickly") &&
-                !line.contains("lost connection") &&
-                !line.contains("Preparing") &&
-                !line.contains("Time elapsed")
-        }
         return false
-    }
-
-    private fun isServerNoise(line: String): Boolean {
-        return line.contains("Advanced terminal features are not available") ||
-            line.contains("sun.misc.Unsafe") ||
-            line.contains("terminally deprecated") ||
-            line.contains("Please consider reporting this to the maintainers") ||
-            line.contains("will be removed in a future release") ||
-            line.contains("No key layers in MapLike") ||
-            line.contains("RUNNING IN OFFLINE/INSECURE MODE") ||
-            line.contains("make no attempt to authenticate") ||
-            line.contains("opens up the ability for hackers") ||
-            line.contains("set \"online-mode\" to \"true\"") ||
-            line.contains("didn't have a version set") ||
-            line.contains("ServerMain WARN") ||
-            line.contains("Loading server properties") ||
-            line.contains("Default game type") ||
-            line.contains("Generating keypair") ||
-            line.contains("Preparing level") ||
-            line.contains("Preparing start region") ||
-            line.contains("Environment:") ||
-            line.startsWith("WARNING:")
     }
 
     private fun formatServerLine(line: String): String {
