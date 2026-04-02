@@ -8,6 +8,8 @@ import dev.paperplane.cli.config.PaperPlaneConfig
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.server.PaperServerManager
+import dev.paperplane.cli.server.VelocityDownloader
+import dev.paperplane.cli.server.VelocityManager
 import dev.paperplane.cli.ui.TerminalUI
 import dev.paperplane.cli.watcher.FileWatcher
 import java.io.File
@@ -25,13 +27,21 @@ class DevCommand : CliktCommand(name = "dev") {
         val ppDir = File(projectDir, ".paperplane")
         ppDir.mkdirs()
 
+        val useProxy = config.dev.proxy
+        val paperPort = if (useProxy) 25566 else 25565
+        val proxyPort = 25565
+
         val gradle = GradleBridge(projectDir)
         val downloader = PaperDownloader(File(ppDir, "cache"))
-        val serverManager = PaperServerManager(File(ppDir, "server"), downloader, config.dev.verboseServer)
+        val serverManager = PaperServerManager(File(ppDir, "server"), downloader, config.dev.verboseServer, paperPort)
+
+        val velocityDownloader = if (useProxy) VelocityDownloader(File(ppDir, "cache")) else null
+        val velocityManager = if (useProxy) VelocityManager(File(ppDir, "proxy")) else null
 
         // Register shutdown hook
         Runtime.getRuntime().addShutdownHook(Thread {
             serverManager.stop()
+            velocityManager?.stop()
             gradle.close()
         })
 
@@ -57,7 +67,7 @@ class DevCommand : CliktCommand(name = "dev") {
             serverManager.writeOverlayStatus("error", mapOf("message" to "Build failed"))
             TerminalUI.blank()
             TerminalUI.status("Waiting for changes...")
-            waitForFixAndRestart(gradle, serverManager, config, metadata.jarPath, ppDir)
+            waitForFixAndRestart(gradle, serverManager, velocityManager, velocityDownloader, config, metadata.jarPath, ppDir)
             return
         }
         TerminalUI.success("Build succeeded", buildDuration)
@@ -68,17 +78,43 @@ class DevCommand : CliktCommand(name = "dev") {
             downloader.download(mcVersion)
         }
 
-        // Step 4: Configure server
-        serverManager.configure()
+        // Step 4: Start Velocity proxy if enabled
+        if (useProxy && velocityManager != null && velocityDownloader != null) {
+            val velocityJar = TerminalUI.spin("Downloading Velocity...") {
+                velocityDownloader.download()
+            }
 
-        // Step 5: Copy plugin + overlay
+            velocityManager.configure(backendPort = paperPort, proxyPort = proxyPort)
+
+            val proxyStart = System.currentTimeMillis()
+            velocityManager.start(velocityJar)
+            val proxyReady = TerminalUI.spin("Starting Velocity proxy...") {
+                velocityManager.waitForReady(proxyPort)
+            }
+            val proxyDuration = formatDuration(System.currentTimeMillis() - proxyStart)
+
+            if (proxyReady) {
+                TerminalUI.success("Velocity proxy ready", proxyDuration)
+            } else {
+                TerminalUI.error("Proxy failed to start", proxyDuration)
+                return
+            }
+        }
+
+        // Step 5: Configure server
+        serverManager.configure()
+        if (useProxy && velocityManager != null) {
+            serverManager.configureVelocityForwarding(velocityManager.forwardingSecret)
+        }
+
+        // Step 6: Copy plugin + overlay
         val builtJar = File(projectDir, metadata.jarPath)
         serverManager.copyPlugin(builtJar)
         if (config.dev.overlay) {
             serverManager.copyOverlay()
         }
 
-        // Step 6: Start server
+        // Step 7: Start server
         val serverStart = System.currentTimeMillis()
         serverManager.start(paperJar, config.server.jvmArgs)
         val ready = TerminalUI.spin("Starting Paper $mcVersion server...") {
@@ -96,15 +132,22 @@ class DevCommand : CliktCommand(name = "dev") {
         }
 
         TerminalUI.blank()
-        TerminalUI.info("Server:", "localhost:25565")
+        if (useProxy) {
+            TerminalUI.info("Server:", "localhost:$proxyPort (via proxy)")
+        } else {
+            TerminalUI.info("Server:", "localhost:$paperPort")
+        }
         TerminalUI.info("Plugin:", "${metadata.pluginName} v${metadata.version}")
         if (config.dev.overlay) {
             TerminalUI.info("Overlay:", "enabled")
         }
+        if (useProxy) {
+            TerminalUI.info("Proxy:", "enabled (hot reload)")
+        }
         TerminalUI.blank()
         TerminalUI.status("Watching for changes...")
 
-        // Step 7: Watch and rebuild loop
+        // Step 8: Watch and rebuild loop
         val srcDir = File(projectDir, "src")
         val watcher = FileWatcher(srcDir, config.dev.debounceMs) { changedFiles ->
             val shortName = changedFiles.firstOrNull()
@@ -122,9 +165,18 @@ class DevCommand : CliktCommand(name = "dev") {
         try {
             while (true) {
                 Thread.sleep(1000)
-                if (!serverManager.isRunning()) {
-                    TerminalUI.error("Server process exited unexpectedly")
-                    break
+                // In proxy mode, only Paper dying outside rebuild is non-fatal (proxy holds connection)
+                // Velocity dying is fatal
+                if (useProxy && velocityManager != null) {
+                    if (!velocityManager.isRunning()) {
+                        TerminalUI.error("Proxy process exited unexpectedly")
+                        break
+                    }
+                } else {
+                    if (!serverManager.isRunning()) {
+                        TerminalUI.error("Server process exited unexpectedly")
+                        break
+                    }
                 }
             }
         } catch (_: InterruptedException) {
@@ -132,6 +184,7 @@ class DevCommand : CliktCommand(name = "dev") {
         } finally {
             watcher.stop()
             serverManager.stop()
+            velocityManager?.stop()
             gradle.close()
             TerminalUI.blank()
             TerminalUI.status("Goodbye!")
@@ -148,7 +201,7 @@ class DevCommand : CliktCommand(name = "dev") {
     ) {
         val totalStart = System.currentTimeMillis()
 
-        // Stop server
+        // Stop server (proxy stays running if enabled)
         serverManager.stop()
         serverManager.writeOverlayStatus("building")
 
@@ -190,6 +243,8 @@ class DevCommand : CliktCommand(name = "dev") {
     private fun waitForFixAndRestart(
         gradle: GradleBridge,
         serverManager: PaperServerManager,
+        velocityManager: VelocityManager?,
+        velocityDownloader: VelocityDownloader?,
         config: PaperPlaneConfig,
         jarPath: String,
         ppDir: File
@@ -213,6 +268,16 @@ class DevCommand : CliktCommand(name = "dev") {
                 val downloader = PaperDownloader(File(ppDir, "cache"))
                 val paperJar = downloader.download(mcVersion)
                 serverManager.configure()
+
+                // Start proxy if enabled and not already running
+                if (config.dev.proxy && velocityManager != null && velocityDownloader != null && !velocityManager.isRunning()) {
+                    val velocityJar = velocityDownloader.download()
+                    velocityManager.configure(backendPort = 25566, proxyPort = 25565)
+                    velocityManager.start(velocityJar)
+                    velocityManager.waitForReady(25565)
+                    serverManager.configureVelocityForwarding(velocityManager.forwardingSecret)
+                }
+
                 val builtJar = File(projectDir, metadata.jarPath)
                 serverManager.copyPlugin(builtJar)
                 if (config.dev.overlay) serverManager.copyOverlay()
@@ -238,6 +303,7 @@ class DevCommand : CliktCommand(name = "dev") {
         } catch (_: InterruptedException) {
             watcher.stop()
             serverManager.stop()
+            velocityManager?.stop()
             gradle.close()
         }
     }

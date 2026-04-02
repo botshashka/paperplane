@@ -22,9 +22,17 @@ val copyOverlay = tasks.register<Copy>("copyOverlayJar") {
     rename { "paperplane-overlay.bin" }
 }
 
+// Copy velocity plugin jar as .bin so Shadow doesn't unpack it
+val copyVelocityPlugin = tasks.register<Copy>("copyVelocityPluginJar") {
+    from(project(":velocity-plugin").tasks.named("shadowJar"))
+    into(layout.buildDirectory.dir("velocity"))
+    rename { "paperplane-velocity.bin" }
+}
+
 tasks.processResources {
-    dependsOn(copyOverlay)
+    dependsOn(copyOverlay, copyVelocityPlugin)
     from(layout.buildDirectory.dir("overlay"))
+    from(layout.buildDirectory.dir("velocity"))
 }
 
 tasks.shadowJar {

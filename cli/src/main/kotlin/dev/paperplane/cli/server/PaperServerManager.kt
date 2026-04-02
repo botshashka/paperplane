@@ -6,7 +6,8 @@ import java.io.File
 class PaperServerManager(
     private val serverDir: File,
     private val downloader: PaperDownloader,
-    var verboseServer: Boolean = false
+    var verboseServer: Boolean = false,
+    private val port: Int = 25565
 ) {
     private var process: Process? = null
     private val pluginsDir = File(serverDir, "plugins")
@@ -25,7 +26,7 @@ class PaperServerManager(
             spawn-protection=0
             max-players=2
             enable-command-block=true
-            server-port=25565
+            server-port=$port
             motd=PaperPlane Dev Server
             generate-structures=false
         """.trimIndent() + "\n")
@@ -58,6 +59,21 @@ class PaperServerManager(
               auto-save-interval: -1
             spawn:
               keep-spawn-loaded: false
+        """.trimIndent() + "\n")
+    }
+
+    fun configureVelocityForwarding(secret: String) {
+        val paperConfigDir = File(serverDir, "config")
+        paperConfigDir.mkdirs()
+        // Always overwrite paper-global.yml when proxy is enabled to ensure velocity settings are correct
+        File(paperConfigDir, "paper-global.yml").writeText("""
+            proxies:
+              velocity:
+                enabled: true
+                online-mode: true
+                secret: "$secret"
+            timings:
+              enabled: false
         """.trimIndent() + "\n")
     }
 
@@ -138,7 +154,7 @@ class PaperServerManager(
         val timeout = 60_000L
         while (proc.isAlive && System.currentTimeMillis() - startTime < timeout) {
             try {
-                java.net.Socket("localhost", 25565).close()
+                java.net.Socket("localhost", port).close()
                 return true
             } catch (_: Exception) {
                 Thread.sleep(500)

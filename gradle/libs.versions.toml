@@ -5,6 +5,7 @@ kaml = "0.67.0"
 shadow = "8.3.5"
 junit = "5.11.4"
 paper-api = "1.21.4-R0.1-SNAPSHOT"
+velocity-api = "3.4.0-SNAPSHOT"
 gradle-tooling = "9.4.1"
 gson = "2.11.0"
 adventure = "4.17.0"
@@ -23,6 +24,7 @@ junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "jun
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher", version.ref = "junit" }
 mockbukkit = { module = "org.mockbukkit.mockbukkit:mockbukkit-v1.21", version.ref = "mockbukkit" }
 slf4j-nop = { module = "org.slf4j:slf4j-nop", version = "2.0.16" }
+velocity-api = { module = "com.velocitypowered:velocity-api", version.ref = "velocity-api" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

@@ -1,0 +1,150 @@
+package dev.paperplane.cli.server
+
+import java.io.File
+import java.util.UUID
+
+class VelocityManager(
+    private val proxyDir: File,
+    var verboseProxy: Boolean = false
+) {
+    private var process: Process? = null
+    private val pluginsDir = File(proxyDir, "plugins")
+
+    val forwardingSecret: String = UUID.randomUUID().toString()
+
+    fun configure(backendPort: Int = 25566, proxyPort: Int = 25565) {
+        proxyDir.mkdirs()
+        pluginsDir.mkdirs()
+
+        writeIfMissing("velocity.toml", """
+            # PaperPlane Velocity proxy config
+            bind = "0.0.0.0:$proxyPort"
+            motd = "<aqua>PaperPlane Dev Server"
+            show-max-players = 2
+            online-mode = false
+            player-info-forwarding-mode = "modern"
+            announce-forge = false
+
+            [servers]
+            dev = "127.0.0.1:$backendPort"
+            try = ["dev"]
+
+            [forced-hosts]
+
+            [advanced]
+            compression-threshold = 256
+            compression-level = -1
+            login-ratelimit = 0
+            connection-timeout = 5000
+            read-timeout = 30000
+            haproxy-protocol = false
+            tcp-fast-open = false
+            bungee-plugin-message-channel = true
+            show-ping-requests = false
+            failover-on-unexpected-server-disconnect = true
+
+            [query]
+            enabled = false
+            port = 25577
+        """.trimIndent() + "\n")
+
+        // Write forwarding secret
+        File(proxyDir, "forwarding.secret").writeText(forwardingSecret)
+
+        // Copy embedded reconnect plugin
+        copyReconnectPlugin()
+    }
+
+    fun start(velocityJar: File): Process {
+        val cmd = listOf(
+            "java",
+            "-Xmx256M",
+            "-XX:+UseG1GC",
+            "-jar", velocityJar.absolutePath
+        )
+
+        val pb = ProcessBuilder(cmd)
+            .directory(proxyDir)
+            .redirectErrorStream(true)
+
+        val proc = pb.start()
+        process = proc
+
+        Thread({
+            proc.inputStream.bufferedReader().forEachLine { line ->
+                if (shouldShowLine(line)) {
+                    println("  ${formatProxyLine(line)}")
+                }
+            }
+        }, "proxy-output").apply { isDaemon = true }.start()
+
+        return proc
+    }
+
+    fun stop() {
+        val proc = process ?: return
+        if (!proc.isAlive) return
+
+        proc.destroy()
+        val exited = proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+        if (!exited) {
+            proc.destroyForcibly()
+            proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+        }
+        process = null
+    }
+
+    fun isRunning(): Boolean = process?.isAlive == true
+
+    fun waitForReady(port: Int = 25565): Boolean {
+        val proc = process ?: return false
+        val startTime = System.currentTimeMillis()
+        val timeout = 30_000L
+        while (proc.isAlive && System.currentTimeMillis() - startTime < timeout) {
+            try {
+                java.net.Socket("localhost", port).close()
+                return true
+            } catch (_: Exception) {
+                Thread.sleep(500)
+            }
+        }
+        return false
+    }
+
+    private fun copyReconnectPlugin() {
+        val stream = javaClass.classLoader.getResourceAsStream("paperplane-velocity.bin")
+        if (stream != null) {
+            val target = File(pluginsDir, "paperplane-reconnect.jar")
+            stream.use { input ->
+                target.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+        }
+    }
+
+    private fun shouldShowLine(line: String): Boolean {
+        if (verboseProxy) return true
+        if (line.contains("[ERROR]") || line.contains("[WARN]")) return true
+        if (line.contains("paperplane", ignoreCase = true)) return true
+        return false
+    }
+
+    private fun formatProxyLine(line: String): String {
+        val match = Regex("""\[[\d:]+] \[([^]]+)] (.+)""").find(line)
+        return if (match != null) {
+            val (thread, message) = match.destructured
+            "\u001b[2m[proxy/$thread]\u001b[0m $message"
+        } else {
+            "\u001b[2m[proxy]\u001b[0m $line"
+        }
+    }
+
+    private fun writeIfMissing(name: String, content: String) {
+        val file = File(proxyDir, name)
+        if (!file.exists()) {
+            file.parentFile.mkdirs()
+            file.writeText(content)
+        }
+    }
+}

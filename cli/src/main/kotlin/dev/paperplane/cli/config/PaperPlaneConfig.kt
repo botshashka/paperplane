@@ -33,5 +33,6 @@ data class DevConfig(
     @SerialName("verbose-server")
     val verboseServer: Boolean = false,
     @SerialName("debounce-ms")
-    val debounceMs: Long = 2000
+    val debounceMs: Long = 2000,
+    val proxy: Boolean = true
 )
