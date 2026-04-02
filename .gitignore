@@ -1,0 +1,15 @@
+# Build
+build/
+.gradle/
+.kotlin/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+
+# PaperPlane dev
+.paperplane/

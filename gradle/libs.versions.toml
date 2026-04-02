@@ -1,0 +1,30 @@
+[versions]
+kotlin = "2.3.0"
+clikt = "5.0.3"
+kaml = "0.67.0"
+shadow = "8.3.5"
+junit = "5.11.4"
+paper-api = "1.21.4-R0.1-SNAPSHOT"
+gradle-tooling = "9.4.1"
+gson = "2.11.0"
+adventure = "4.17.0"
+mockbukkit = "4.108.0"
+kotlinx-serialization = "1.7.3"
+
+[libraries]
+kotlinx-serialization-core = { module = "org.jetbrains.kotlinx:kotlinx-serialization-core", version.ref = "kotlinx-serialization" }
+clikt = { module = "com.github.ajalt.clikt:clikt", version.ref = "clikt" }
+kaml = { module = "com.charleskorn.kaml:kaml", version.ref = "kaml" }
+gradle-tooling-api = { module = "org.gradle:gradle-tooling-api", version.ref = "gradle-tooling" }
+paper-api = { module = "io.papermc.paper:paper-api", version.ref = "paper-api" }
+gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
+adventure-minimessage = { module = "net.kyori:adventure-text-minimessage", version.ref = "adventure" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher", version.ref = "junit" }
+mockbukkit = { module = "org.mockbukkit.mockbukkit:mockbukkit-v1.21", version.ref = "mockbukkit" }
+slf4j-nop = { module = "org.slf4j:slf4j-nop", version = "2.0.16" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+shadow = { id = "com.gradleup.shadow", version.ref = "shadow" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

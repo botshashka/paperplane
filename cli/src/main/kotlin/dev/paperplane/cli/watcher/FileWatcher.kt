@@ -1,0 +1,84 @@
+package dev.paperplane.cli.watcher
+
+import java.io.File
+
+class FileWatcher(
+    private val watchDir: File,
+    private val debounceMs: Long = 2000,
+    private val onChange: (List<String>) -> Unit
+) {
+    @Volatile
+    private var running = false
+    private var thread: Thread? = null
+
+    fun start() {
+        running = true
+
+        // Snapshot all file modification times
+        var lastSnapshot = snapshot()
+        var lastChangeTime = 0L
+        val changedFiles = mutableSetOf<String>()
+
+        thread = Thread({
+            while (running) {
+                Thread.sleep(500)
+
+                val current = snapshot()
+
+                // Find changed files
+                for ((path, modTime) in current) {
+                    val prev = lastSnapshot[path]
+                    if (prev == null || prev != modTime) {
+                        changedFiles.add(path)
+                        lastChangeTime = System.currentTimeMillis()
+                    }
+                }
+                // Find deleted files
+                for (path in lastSnapshot.keys) {
+                    if (path !in current) {
+                        changedFiles.add(path)
+                        lastChangeTime = System.currentTimeMillis()
+                    }
+                }
+
+                lastSnapshot = current
+
+                // Debounce: fire after quiet period
+                if (changedFiles.isNotEmpty() && System.currentTimeMillis() - lastChangeTime >= debounceMs) {
+                    val files = changedFiles.toList()
+                    changedFiles.clear()
+                    onChange(files)
+                    // Re-snapshot after rebuild since build may have changed files
+                    lastSnapshot = snapshot()
+                }
+            }
+        }, "file-watcher").apply { isDaemon = true }
+
+        thread!!.start()
+    }
+
+    fun stop() {
+        running = false
+        thread?.join(2000)
+    }
+
+    private fun snapshot(): Map<String, Long> {
+        val result = mutableMapOf<String, Long>()
+        watchDir.walkTopDown()
+            .onEnter { !shouldIgnoreDir(it.name) }
+            .filter { it.isFile && !shouldIgnore(it.name) }
+            .forEach { result[it.absolutePath] = it.lastModified() }
+        return result
+    }
+
+    private fun shouldIgnore(name: String): Boolean {
+        return name.endsWith(".class") ||
+            name.endsWith(".jar") ||
+            name.endsWith(".DS_Store")
+    }
+
+    private fun shouldIgnoreDir(name: String): Boolean {
+        return name == "build" || name == ".gradle" || name == ".git" ||
+            name == ".paperplane" || name == "node_modules"
+    }
+}
