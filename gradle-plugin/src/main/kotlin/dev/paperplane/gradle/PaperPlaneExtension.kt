@@ -4,8 +4,9 @@ import org.gradle.api.NamedDomainObjectContainer
 import org.gradle.api.Project
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
+import javax.inject.Inject
 
-abstract class PaperPlaneExtension(project: Project) {
+abstract class PaperPlaneExtension @Inject constructor(project: Project) {
     abstract val mainClass: Property<String>
     abstract val apiVersion: Property<String>
     abstract val pluginName: Property<String>
@@ -30,14 +31,14 @@ abstract class PaperPlaneExtension(project: Project) {
     }
 }
 
-abstract class CommandDefinition(val name: String) {
+abstract class CommandDefinition @Inject constructor(val name: String) {
     abstract val description: Property<String>
     abstract val usage: Property<String>
     abstract val aliases: ListProperty<String>
     abstract val permission: Property<String>
 }
 
-abstract class PermissionDefinition(val name: String) {
+abstract class PermissionDefinition @Inject constructor(val name: String) {
     abstract val default: Property<String>
     abstract val description: Property<String>
     abstract val children: ListProperty<String>
