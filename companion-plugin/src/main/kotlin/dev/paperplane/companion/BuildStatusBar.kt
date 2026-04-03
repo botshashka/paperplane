@@ -61,9 +61,12 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
                 "reloading" -> {
                     val pluginName = json.get("pluginName")?.asString ?: return
                     val jarFileName = json.get("jarFileName")?.asString ?: return
-                    performReload(pluginName, jarFileName)
-                    // Reset so the next "reloading" write isn't deduplicated
-                    lastState = null
+                    val pendingJar = json.get("pendingJar")?.asString
+                    performReload(pluginName, jarFileName, pendingJar)
+                    // Don't reset lastState — the CLI always writes "building" before
+                    // "reloading", so the next reload will naturally pass dedup.
+                    // Resetting to null causes double-processing when the next poll
+                    // fires before the CLI updates status to "ready".
                 }
             }
         } catch (_: Exception) {
@@ -71,9 +74,12 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
         }
     }
 
-    private fun performReload(pluginName: String, jarFileName: String) {
-        val pluginsDir = plugin.dataFolder.parentFile // this IS the server's plugins/ dir
-        val jarFile = File(pluginsDir, jarFileName)
+    private fun performReload(pluginName: String, jarFileName: String, pendingJarName: String?) {
+        val pluginsDir = plugin.dataFolder.parentFile.absoluteFile // server's plugins/ dir
+        val currentJar = File(pluginsDir, jarFileName)
+        // pendingJar is an absolute path (staged in .paperplane/, not plugins/)
+        val pendingJar = pendingJarName?.let { File(it) }
+        val loadJar = pendingJar ?: currentJar
         val ppDir = File(plugin.dataFolder.parentFile.parentFile, ".paperplane")
         ppDir.mkdirs()
 
@@ -83,18 +89,42 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
             reloader = PluginReloader(plugin.server, plugin.logger)
         }
 
-        val result = reloader!!.reload(pluginName, jarFile)
+        // Pass the original jar as rollback target (only meaningful when staging)
+        val rollbackJar = if (pendingJar != null) currentJar else null
+        val outcome = reloader!!.reload(pluginName, loadJar, rollbackJar)
+        val timingInfo = "teardown=${outcome.teardownMs},load=${outcome.loadMs},total=${outcome.totalMs}"
 
-        if (result == ReloadResult.SUCCESS) {
-            File(ppDir, "reload-complete").writeText(System.currentTimeMillis().toString())
-            broadcast(Component.text("$pluginName reloaded!", NamedTextColor.GREEN))
-        } else {
-            File(ppDir, "reload-failed").writeText(result.name)
-            broadcast(Component.text("Reload failed: $result", NamedTextColor.RED))
+        when (outcome.result) {
+            ReloadResult.SUCCESS -> {
+                // Finalize: replace original jar with the staged .new jar
+                if (pendingJar != null && pendingJar.exists()) {
+                    try {
+                        java.nio.file.Files.move(
+                            pendingJar.toPath(), currentJar.toPath(),
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                        )
+                    } catch (e: Exception) {
+                        plugin.logger.warning("Failed to finalize staged jar: ${e.message}")
+                    }
+                }
+                File(ppDir, "reload-complete").writeText(timingInfo)
+                broadcast(Component.text("$pluginName reloaded!", NamedTextColor.GREEN))
+            }
+            ReloadResult.ROLLBACK_SUCCESS -> {
+                // New jar failed but old plugin was restored — clean up staged jar
+                pendingJar?.delete()
+                File(ppDir, "reload-failed").writeText("ROLLBACK_SUCCESS")
+                broadcast(Component.text("Reload failed, reverted to previous version", NamedTextColor.YELLOW))
+            }
+            else -> {
+                // Total failure — clean up staged jar
+                pendingJar?.delete()
+                File(ppDir, "reload-failed").writeText(outcome.result.name)
+                broadcast(Component.text("Reload failed: ${outcome.result}", NamedTextColor.RED))
 
-            // If reloader says we should stop trying, include that in the failure message
-            if (reloader!!.shouldForceBlueGreen) {
-                broadcast(Component.text("Switching to blue/green mode", NamedTextColor.YELLOW))
+                if (reloader!!.shouldForceBlueGreen) {
+                    broadcast(Component.text("Switching to blue/green mode", NamedTextColor.YELLOW))
+                }
             }
         }
     }

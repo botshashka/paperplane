@@ -120,7 +120,35 @@ class PaperServerManager(
 
     fun copyPlugin(jarPath: File) {
         val target = File(pluginsDir, jarPath.name)
-        jarPath.copyTo(target, overwrite = true)
+        val temp = File(pluginsDir, ".${jarPath.name}.tmp")
+        jarPath.copyTo(temp, overwrite = true)
+        try {
+            java.nio.file.Files.move(
+                temp.toPath(), target.toPath(),
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING
+            )
+        } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+            temp.renameTo(target)
+        }
+    }
+
+    /**
+     * Stages a plugin jar as a .new file without overwriting the currently-loaded jar.
+     * Used in hot-reload mode so the companion can roll back to the original on failure.
+     * Returns the staged filename (e.g., "myplugin.jar.new").
+     */
+    /**
+     * Stages a plugin jar in .paperplane/ (not plugins/) so Paper doesn't delete it.
+     * Used in hot-reload mode so the companion can roll back to the original on failure.
+     * Returns the absolute path to the staged file.
+     */
+    fun stagePlugin(jarPath: File): String {
+        val stageDir = File(serverDir, ".paperplane")
+        stageDir.mkdirs()
+        val staged = File(stageDir, "${jarPath.name}.new")
+        jarPath.copyTo(staged, overwrite = true)
+        return staged.absolutePath
     }
 
     fun copyCompanion() {

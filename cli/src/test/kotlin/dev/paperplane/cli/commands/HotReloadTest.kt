@@ -132,6 +132,26 @@ class HotReloadTest {
         assertFalse(File(ppDir, "reload-failed").exists())
     }
 
+    @Test
+    fun `ROLLBACK_SUCCESS in reload-failed flag is detected as failure`() {
+        File(ppDir, "reload-failed").writeText("ROLLBACK_SUCCESS")
+
+        val result = waitForReloadResult(ppDir, timeoutMs = 1000)
+
+        assertFalse(result, "ROLLBACK_SUCCESS should still be detected as a failure")
+        assertFalse(File(ppDir, "reload-failed").exists(), "Flag file should be deleted")
+    }
+
+    @Test
+    fun `reload-complete with timing content is still detected as success`() {
+        File(ppDir, "reload-complete").writeText("teardown=45,load=120,total=165")
+
+        val result = waitForReloadResult(ppDir, timeoutMs = 1000)
+
+        assertTrue(result, "Flag with timing content should still be detected as success")
+        assertFalse(File(ppDir, "reload-complete").exists(), "Flag file should be deleted")
+    }
+
     // ── Config parsing with hot-reload ─────────────────────────────────
 
     @Test

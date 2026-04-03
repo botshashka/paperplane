@@ -178,6 +178,83 @@ class PaperServerManagerTest {
         assertFalse(result)
     }
 
+    // ── copyPlugin / stagePlugin tests ──────────────────────────────────
+
+    @Test
+    fun `copyPlugin creates target with correct content`() {
+        val manager = createManager()
+        manager.configure()
+        val sourceJar = File(tempDir, "myplugin.jar")
+        sourceJar.writeText("jar-content-v1")
+
+        manager.copyPlugin(sourceJar)
+
+        val target = File(manager.serverDir, "plugins/myplugin.jar")
+        assertTrue(target.exists())
+        assertEquals("jar-content-v1", target.readText())
+    }
+
+    @Test
+    fun `copyPlugin overwrites existing target`() {
+        val manager = createManager()
+        manager.configure()
+        val pluginsDir = File(manager.serverDir, "plugins")
+        File(pluginsDir, "myplugin.jar").writeText("old-content")
+
+        val sourceJar = File(tempDir, "myplugin.jar")
+        sourceJar.writeText("new-content")
+        manager.copyPlugin(sourceJar)
+
+        assertEquals("new-content", File(pluginsDir, "myplugin.jar").readText())
+    }
+
+    @Test
+    fun `copyPlugin leaves no temp file`() {
+        val manager = createManager()
+        manager.configure()
+        val sourceJar = File(tempDir, "myplugin.jar")
+        sourceJar.writeText("jar-content")
+
+        manager.copyPlugin(sourceJar)
+
+        val pluginsDir = File(manager.serverDir, "plugins")
+        val tempFiles = pluginsDir.listFiles()?.filter { it.name.endsWith(".tmp") } ?: emptyList()
+        assertTrue(tempFiles.isEmpty(), "No .tmp files should remain, found: ${tempFiles.map { it.name }}")
+    }
+
+    @Test
+    fun `stagePlugin creates new file without overwriting original`() {
+        val manager = createManager()
+        manager.configure()
+        val pluginsDir = File(manager.serverDir, "plugins")
+        File(pluginsDir, "myplugin.jar").writeText("original-content")
+
+        val sourceJar = File(tempDir, "myplugin.jar")
+        sourceJar.writeText("new-content")
+        val stagedPath = manager.stagePlugin(sourceJar)
+
+        assertEquals("original-content", File(pluginsDir, "myplugin.jar").readText(), "Original jar should be unchanged")
+        val stagedFile = File(stagedPath)
+        assertTrue(stagedFile.exists(), "Staged file should exist at $stagedPath")
+        assertEquals("new-content", stagedFile.readText())
+    }
+
+    @Test
+    fun `stagePlugin returns absolute path to staged file`() {
+        val manager = createManager()
+        manager.configure()
+        val sourceJar = File(tempDir, "myplugin-1.0.jar")
+        sourceJar.writeText("content")
+
+        val stagedPath = manager.stagePlugin(sourceJar)
+
+        assertTrue(File(stagedPath).isAbsolute, "Staged path should be absolute")
+        assertTrue(stagedPath.endsWith("myplugin-1.0.jar.new"), "Should end with .new suffix")
+        assertTrue(File(stagedPath).exists(), "Staged file should exist")
+    }
+
+    // ── waitForReady tests ──────────────────────────────────────────────
+
     @Test
     fun `waitForReady detects flag file from companion`() {
         val manager = createManager()

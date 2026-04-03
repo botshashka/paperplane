@@ -367,9 +367,9 @@ class DevCommand : CliktCommand(name = "dev") {
         }
         TerminalUI.success("Build succeeded", buildDuration)
 
-        // 2. Copy new jar to active server's plugins directory
+        // 2. Stage new jar (don't overwrite current — allows companion to roll back)
         val builtJar = File(projectDir, metadata.jarPath)
-        server.copyPlugin(builtJar)
+        val stagedName = server.stagePlugin(builtJar)
 
         // 3. Clear flag files and signal companion to reload
         val ppDir = File(server.serverDir, ".paperplane")
@@ -379,7 +379,8 @@ class DevCommand : CliktCommand(name = "dev") {
 
         server.writeOverlayStatus("reloading", mapOf(
             "pluginName" to metadata.pluginName,
-            "jarFileName" to builtJar.name
+            "jarFileName" to builtJar.name,
+            "pendingJar" to stagedName
         ))
 
         // 4. Wait for confirmation from companion plugin
