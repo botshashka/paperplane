@@ -12,6 +12,7 @@ class PaperServerManager(
     private var process: Process? = null
     private var processStdin: java.io.OutputStream? = null
     private val pluginsDir = File(serverDir, "plugins")
+    private val gson = com.google.gson.Gson()
 
     /**
      * Cleans up stale state from a previous run that wasn't shut down cleanly.
@@ -152,19 +153,32 @@ class PaperServerManager(
     }
 
     fun copyCompanion() {
-        val companionStream = javaClass.classLoader.getResourceAsStream("paperplane-companion.bin")
-        if (companionStream != null) {
-            val target = File(pluginsDir, "paperplane-companion.jar")
-            companionStream.use { input ->
-                target.outputStream().use { output ->
-                    input.copyTo(output)
-                }
+        extractResource("paperplane-companion.bin", File(pluginsDir, "paperplane-companion.jar"))
+    }
+
+    /**
+     * Extracts the PaperPlane Java agent JAR from CLI resources.
+     * Used for HMR Level 2 (instrumentation-based hot-swap).
+     */
+    fun extractAgent(): File {
+        val agentJar = File(serverDir, ".paperplane/paperplane-agent.jar")
+        if (agentJar.exists()) return agentJar
+        agentJar.parentFile.mkdirs()
+        extractResource("paperplane-agent.bin", agentJar)
+        return agentJar
+    }
+
+    private fun extractResource(resourceName: String, target: File) {
+        val stream = javaClass.classLoader.getResourceAsStream(resourceName) ?: return
+        stream.use { input ->
+            target.outputStream().use { output ->
+                input.copyTo(output)
             }
         }
     }
 
-    fun start(paperJar: File, jvmArgs: List<String>): Process {
-        val cmd = mutableListOf("java")
+    fun start(paperJar: File, jvmArgs: List<String>, hotReload: Boolean = false, javaBin: String = "java"): Process {
+        val cmd = mutableListOf(javaBin)
         // Fast startup flags
         cmd.addAll(listOf(
             "--enable-native-access=ALL-UNNAMED",
@@ -174,6 +188,12 @@ class PaperServerManager(
             "-XX:+DisableExplicitGC",
             "-XX:InitiatingHeapOccupancyPercent=75"
         ))
+
+        if (hotReload) {
+            val agentJar = extractAgent()
+            cmd.add("-javaagent:${agentJar.absolutePath}")
+        }
+
         cmd.addAll(jvmArgs)
         cmd.addAll(listOf("-jar", paperJar.absolutePath, "--nogui"))
 
@@ -265,17 +285,16 @@ class PaperServerManager(
         return false
     }
 
-    fun writeCompanionStatus(state: String, extra: Map<String, String> = emptyMap()) {
-        val statusFile = File(serverDir, ".paperplane/companion-status.json")
-        statusFile.parentFile.mkdirs()
-        val json = buildString {
-            append("{\"state\":\"$state\"")
-            for ((k, v) in extra) {
-                append(",\"$k\":\"$v\"")
-            }
-            append("}")
-        }
-        statusFile.writeText(json)
+    fun writeCompanionStatus(state: String, extra: Map<String, Any> = emptyMap()) {
+        val statusDir = File(serverDir, ".paperplane")
+        statusDir.mkdirs()
+        val statusFile = File(statusDir, "companion-status.json")
+        val map = mutableMapOf<String, Any>("state" to state, "protocolVersion" to 2)
+        map.putAll(extra)
+        val json = gson.toJson(map)
+        val tmpFile = File(statusDir, ".companion-status.tmp")
+        tmpFile.writeText(json)
+        tmpFile.renameTo(statusFile)
     }
 
     private fun shouldShowLine(line: String): Boolean {

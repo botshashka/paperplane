@@ -271,8 +271,9 @@ class InitCommand : CliktCommand(name = "init") {
             - "-Xmx2G"
 
         dev:
-          companion: true
+          mode: hot-reload      # hot-reload | blue-green | restart
           verbose-server: false  # set to true to show all server output
+          # jbr: auto           # auto | on | off | /path/to/jbr
     """.trimIndent() + "\n"
 
     private fun gitignore() = """

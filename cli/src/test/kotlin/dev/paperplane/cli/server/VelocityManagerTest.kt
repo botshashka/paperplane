@@ -13,13 +13,13 @@ class VelocityManagerTest {
     @Test
     fun `configure creates velocity toml with both backends`() {
         val manager = VelocityManager(tempDir)
-        manager.configure(bluePort = 25566, greenPort = 25567, proxyPort = 25565)
+        manager.configure(serverPort = 25566, swapPort = 25567, proxyPort = 25565)
 
         val toml = File(tempDir, "velocity.toml").readText()
-        assertTrue(toml.contains("blue = \"127.0.0.1:25566\""))
-        assertTrue(toml.contains("green = \"127.0.0.1:25567\""))
+        assertTrue(toml.contains("server = \"127.0.0.1:25566\""))
+        assertTrue(toml.contains("swap = \"127.0.0.1:25567\""))
         assertTrue(toml.contains("bind = \"0.0.0.0:25565\""))
-        assertTrue(toml.contains("try = [\"blue\", \"green\"]"))
+        assertTrue(toml.contains("try = [\"server\", \"swap\"]"))
         assertTrue(toml.contains("player-info-forwarding-mode = \"modern\""))
     }
 

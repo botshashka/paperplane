@@ -3,8 +3,11 @@ package dev.paperplane.cli.commands
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
+import dev.paperplane.cli.config.DevMode
 import dev.paperplane.cli.config.PaperPlaneConfig
+import dev.paperplane.cli.gradle.BuildSnapshot
 import dev.paperplane.cli.gradle.GradleBridge
+import dev.paperplane.cli.server.JbrDownloader
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.server.ServerSync
@@ -16,37 +19,56 @@ import java.io.File
 
 class DevCommand : CliktCommand(name = "dev") {
     private val verbose by option("--verbose", "-v", help = "Show all server output").flag()
-    private val hotReload by option("--hot-reload", "-r", help = "Hot-reload plugin without server restart").flag()
+    private val modeFlag by option("--mode", "-m", help = "Dev mode: hot-reload, blue-green, restart")
     private val projectDir = File(System.getProperty("user.dir"))
 
     private enum class Slot(val serverName: String, val port: Int) {
-        BLUE("blue", 25566),
-        GREEN("green", 25567);
-        fun other() = if (this == BLUE) GREEN else BLUE
+        SERVER("server", 25566),
+        SWAP("swap", 25567);
+        fun other() = if (this == SERVER) SWAP else SERVER
     }
 
     override fun run() {
         val version = javaClass.`package`?.implementationVersion ?: "0.1.0"
         TerminalUI.header(version)
 
-        val baseConfig = PaperPlaneConfig.load(projectDir)
-        // CLI flag overrides config
-        val config = if (hotReload) baseConfig.copy(dev = baseConfig.dev.copy(hotReload = true)) else baseConfig
+        val config = PaperPlaneConfig.load(projectDir)
         val ppDir = File(projectDir, ".paperplane")
         ppDir.mkdirs()
+
+        // Migrate old blue/green directory layout
+        migrateOldLayout(ppDir)
 
         val gradle = GradleBridge(projectDir)
         val downloader = PaperDownloader(File(ppDir, "cache"))
 
-        if (config.dev.hotReload) {
-            if (config.dev.proxy) {
-                TerminalUI.info("Note:", "hot-reload mode ignores proxy setting (single server only)")
+        // CLI --mode flag overrides config
+        val resolvedMode = modeFlag?.let {
+            try { DevMode.valueOf(it.uppercase().replace("-", "_")) }
+            catch (_: Exception) {
+                TerminalUI.error("Unknown mode: $it (expected: hot-reload, blue-green, restart)")
+                return
             }
-            runSingleServer(config, ppDir, gradle, downloader)
-        } else if (config.dev.proxy) {
-            runBlueGreen(config, ppDir, gradle, downloader)
-        } else {
-            runSingleServer(config, ppDir, gradle, downloader)
+        } ?: config.dev.mode
+
+        when (resolvedMode) {
+            DevMode.HOT_RELOAD -> runHotReload(config, ppDir, gradle, downloader)
+            DevMode.BLUE_GREEN -> runBlueGreen(config, ppDir, gradle, downloader)
+            DevMode.RESTART -> runRestart(config, ppDir, gradle, downloader)
+        }
+    }
+
+    private fun migrateOldLayout(ppDir: File) {
+        val oldBlue = File(ppDir, "server-blue")
+        val newServer = File(ppDir, "server")
+        if (oldBlue.exists() && !newServer.exists()) {
+            oldBlue.renameTo(newServer)
+            TerminalUI.info("Migrated:", "server-blue/ → server/")
+        }
+        val oldGreen = File(ppDir, "server-green")
+        if (oldGreen.exists()) {
+            oldGreen.deleteRecursively()
+            TerminalUI.info("Cleaned up:", "server-green/ (no longer needed)")
         }
     }
 
@@ -58,18 +80,11 @@ class DevCommand : CliktCommand(name = "dev") {
         gradle: GradleBridge,
         downloader: PaperDownloader
     ) {
-        // Migrate old single-server directory to blue
-        val oldServerDir = File(ppDir, "server")
-        val blueServerDir = File(ppDir, "server-blue")
-        if (oldServerDir.exists() && !blueServerDir.exists()) {
-            oldServerDir.renameTo(blueServerDir)
-        }
-
         val servers = mapOf(
-            Slot.BLUE to PaperServerManager(File(ppDir, "server-blue"), downloader, config.dev.verboseServer, Slot.BLUE.port),
-            Slot.GREEN to PaperServerManager(File(ppDir, "server-green"), downloader, config.dev.verboseServer, Slot.GREEN.port)
+            Slot.SERVER to PaperServerManager(File(ppDir, "server"), downloader, config.dev.verboseServer, Slot.SERVER.port),
+            Slot.SWAP to PaperServerManager(File(ppDir, "server-swap"), downloader, config.dev.verboseServer, Slot.SWAP.port)
         )
-        var activeSlot = Slot.BLUE
+        var activeSlot = Slot.SERVER
 
         val velocityDownloader = VelocityDownloader(File(ppDir, "cache"))
         val velocityManager = VelocityManager(File(ppDir, "proxy"))
@@ -122,7 +137,7 @@ class DevCommand : CliktCommand(name = "dev") {
         }
 
         // Step 4: Start Velocity proxy with both backends
-        velocityManager.configure(bluePort = Slot.BLUE.port, greenPort = Slot.GREEN.port)
+        velocityManager.configure(serverPort = Slot.SERVER.port, swapPort = Slot.SWAP.port)
 
         val proxyStart = System.currentTimeMillis()
         velocityManager.start(velocityJar)
@@ -166,15 +181,13 @@ class DevCommand : CliktCommand(name = "dev") {
         TerminalUI.blank()
         TerminalUI.info("Server:", "localhost:25565 (via proxy)")
         TerminalUI.info("Plugin:", "${metadata.pluginName} v${metadata.version}")
-        if (config.dev.companion) TerminalUI.info("Companion:", "enabled")
-        TerminalUI.info("Mode:", if (config.dev.hotReload) "hot-reload" else "blue/green (zero-downtime)")
+        TerminalUI.info("Companion:", "enabled")
+        TerminalUI.info("Mode:", "blue-green (zero-downtime)")
         TerminalUI.blank()
         TerminalUI.status("Watching for changes...")
 
-        // Step 6: Pre-warm standby server in background (skip in hot-reload mode)
-        if (!config.dev.hotReload) {
-            preWarmStandby(servers[Slot.GREEN]!!, active, Slot.GREEN.port, builtJar, config, paperJar, velocityManager)
-        }
+        // Step 6: Pre-warm standby server in background
+        preWarmStandby(servers[Slot.SWAP]!!, active, Slot.SWAP.port, builtJar, config, paperJar, velocityManager)
 
         // Step 7: Watch and rebuild loop
         val srcDir = File(projectDir, "src")
@@ -183,13 +196,9 @@ class DevCommand : CliktCommand(name = "dev") {
             val extra = if (changedFiles.size > 1) " (+${changedFiles.size - 1} more)" else ""
             TerminalUI.change("Change detected: $shortName$extra")
 
-            if (config.dev.hotReload && config.dev.companion) {
-                hotReloadRebuild(gradle, servers[activeSlot]!!, config, metadata, projectDir)
-            } else {
-                activeSlot = blueGreenRebuild(
-                    gradle, servers, activeSlot, velocityManager, config, metadata, paperJar, projectDir
-                )
-            }
+            activeSlot = blueGreenRebuild(
+                gradle, servers, activeSlot, velocityManager, config, metadata, paperJar, projectDir
+            )
         }
 
         watcher.start()
@@ -343,6 +352,10 @@ class DevCommand : CliktCommand(name = "dev") {
 
     // ── Hot-reload mode ──────────────────────────────────────────────────
 
+    private var buildSnapshot: BuildSnapshot? = null
+    private var cachedFastMeta: dev.paperplane.cli.gradle.ProjectMetadata? = null
+    private var lastPostBuildSnapshot: Map<String, Long>? = null
+
     private fun hotReloadRebuild(
         gradle: GradleBridge,
         server: PaperServerManager,
@@ -352,10 +365,23 @@ class DevCommand : CliktCommand(name = "dev") {
     ) {
         val totalStart = System.currentTimeMillis()
 
-        // 1. Build — no world save needed, server stays running
+        // 1. Resolve metadata (cached — classesDir/resourcesDir don't change between rebuilds)
+        if (cachedFastMeta == null) cachedFastMeta = gradle.metadataFast()
+        val fastMeta = cachedFastMeta
+
+        // 2. Snapshot .class files BEFORE build (for change detection)
+        val classesDir = if (fastMeta != null && fastMeta.classesDir.isNotEmpty()) {
+            File(fastMeta.classesDir)
+        } else {
+            File(projectDir, "build/classes/kotlin/main")
+        }
+        if (buildSnapshot == null) buildSnapshot = BuildSnapshot(classesDir)
+        val preBuildSnapshot = lastPostBuildSnapshot ?: buildSnapshot!!.take()
+
+        // 3. Compile only — skip JAR packaging for faster rebuilds
         server.writeCompanionStatus("building")
         val buildStart = System.currentTimeMillis()
-        val buildSuccess = gradle.build()
+        val buildSuccess = gradle.compileOnly()
         val buildDuration = formatDuration(System.currentTimeMillis() - buildStart)
 
         if (!buildSuccess) {
@@ -367,23 +393,48 @@ class DevCommand : CliktCommand(name = "dev") {
         }
         TerminalUI.success("Build succeeded", buildDuration)
 
-        // 2. Stage new jar (don't overwrite current — allows companion to roll back)
-        val builtJar = File(projectDir, metadata.jarPath)
-        val stagedName = server.stagePlugin(builtJar)
+        // 4. Diff .class files to determine change type
+        val postBuildSnapshot = buildSnapshot!!.take()
+        lastPostBuildSnapshot = postBuildSnapshot
+        val changes = BuildSnapshot.diff(preBuildSnapshot, postBuildSnapshot)
 
-        // 3. Clear flag files and signal companion to reload
+        // 5. Clear flag files and signal companion to reload
         val ppDir = File(server.serverDir, ".paperplane")
         ppDir.mkdirs()
         File(ppDir, "reload-complete").delete()
         File(ppDir, "reload-failed").delete()
 
-        server.writeCompanionStatus("reloading", mapOf(
-            "pluginName" to metadata.pluginName,
-            "jarFileName" to builtJar.name,
-            "pendingJar" to stagedName
-        ))
+        if (fastMeta != null && fastMeta.classesDir.isNotEmpty()) {
+            val allDirs: List<String> = listOf(fastMeta.classesDir, fastMeta.resourcesDir) + fastMeta.runtimeClasspath
 
-        // 4. Wait for confirmation from companion plugin
+            // Choose strategy based on change type
+            val strategy = if (changes.noNewOrRemovedClasses && changes.modified.isNotEmpty()) "hotswap" else "directory"
+            TerminalUI.info("Strategy:", if (strategy == "hotswap") "hotswap (${changes.modified.size} modified)" else "directory reload")
+
+            val statusExtra = mutableMapOf<String, Any>(
+                "pluginName" to metadata.pluginName,
+                "jarFileName" to File(metadata.jarPath).name,
+                "reloadStrategy" to strategy,
+                "buildOutputDirs" to allDirs
+            )
+            if (strategy == "hotswap") {
+                statusExtra["changedClasses"] = changes.modified
+            }
+            server.writeCompanionStatus("reloading", statusExtra)
+        } else {
+            // Fallback: stage JAR and use traditional reload
+            TerminalUI.info("Strategy:", "jar (fallback)")
+            val builtJar = File(projectDir, metadata.jarPath)
+            if (!builtJar.exists()) gradle.build()
+            val stagedName = server.stagePlugin(builtJar)
+            server.writeCompanionStatus("reloading", mapOf(
+                "pluginName" to metadata.pluginName,
+                "jarFileName" to builtJar.name,
+                "pendingJar" to stagedName
+            ))
+        }
+
+        // 6. Wait for confirmation from companion plugin
         val reloadStart = System.currentTimeMillis()
         val success = TerminalUI.spin("Reloading ${metadata.pluginName}...") {
             waitForReloadResult(ppDir, timeoutMs = 10_000)
@@ -424,9 +475,9 @@ class DevCommand : CliktCommand(name = "dev") {
         return false
     }
 
-    // ── Single-server mode (proxy=false) ────────────────────────────────
+    // ── Hot-reload mode ───────────────────────────────────────────────
 
-    private fun runSingleServer(
+    private fun runHotReload(
         config: PaperPlaneConfig,
         ppDir: File,
         gradle: GradleBridge,
@@ -435,14 +486,12 @@ class DevCommand : CliktCommand(name = "dev") {
         val serverManager = PaperServerManager(File(ppDir, "server"), downloader, config.dev.verboseServer)
 
         Runtime.getRuntime().addShutdownHook(Thread {
-            println() // Clear ^C line
+            println()
             serverManager.stop()
             gradle.close()
         })
 
-        val metadata = TerminalUI.spin("Reading project metadata...") {
-            gradle.metadata()
-        }
+        val metadata = TerminalUI.spin("Reading project metadata...") { gradle.metadata() }
         if (metadata == null) {
             TerminalUI.error("Failed to read project metadata. Is the PaperPlane Gradle plugin applied?")
             return
@@ -450,9 +499,7 @@ class DevCommand : CliktCommand(name = "dev") {
 
         val buildStart = System.currentTimeMillis()
         serverManager.writeCompanionStatus("building")
-        val buildSuccess = TerminalUI.spin("Building...") {
-            gradle.build()
-        }
+        val buildSuccess = TerminalUI.spin("Building...") { gradle.build() }
         val buildDuration = formatDuration(System.currentTimeMillis() - buildStart)
 
         if (!buildSuccess) {
@@ -460,27 +507,31 @@ class DevCommand : CliktCommand(name = "dev") {
             serverManager.writeCompanionStatus("error", mapOf("message" to "Build failed"))
             TerminalUI.blank()
             TerminalUI.status("Waiting for changes...")
-            waitForFixSingleServer(gradle, serverManager, config, metadata.jarPath, ppDir)
+            waitForFixSingleServer(gradle, serverManager, config, downloader, useCompanion = true)
             return
         }
         TerminalUI.success("Build succeeded", buildDuration)
 
         val mcVersion = config.server.version ?: metadata.paperApiVersion
-        val paperJar = TerminalUI.spin("Downloading Paper $mcVersion...") {
-            downloader.download(mcVersion)
-        }
+        val paperJar = TerminalUI.spin("Downloading Paper $mcVersion...") { downloader.download(mcVersion) }
 
         serverManager.cleanupStale()
         serverManager.configure()
         val builtJar = File(projectDir, metadata.jarPath)
         serverManager.copyPlugin(builtJar)
-        if (config.dev.companion) serverManager.copyCompanion()
+        serverManager.copyCompanion()
+
+        // Resolve JBR for Level 3 HMR
+        val java = resolveJava(config, ppDir)
+        val jvmArgs = if (java.isJbr) {
+            config.server.jvmArgs + "-XX:+AllowEnhancedClassRedefinition"
+        } else {
+            config.server.jvmArgs
+        }
 
         val serverStart = System.currentTimeMillis()
-        serverManager.start(paperJar, config.server.jvmArgs)
-        val ready = TerminalUI.spin("Starting Paper $mcVersion server...") {
-            serverManager.waitForReady()
-        }
+        serverManager.start(paperJar, jvmArgs, hotReload = true, javaBin = java.bin)
+        val ready = TerminalUI.spin("Starting Paper $mcVersion server...") { serverManager.waitForReady() }
         val serverDuration = formatDuration(System.currentTimeMillis() - serverStart)
 
         if (ready) {
@@ -495,8 +546,8 @@ class DevCommand : CliktCommand(name = "dev") {
         TerminalUI.blank()
         TerminalUI.info("Server:", "localhost:25565")
         TerminalUI.info("Plugin:", "${metadata.pluginName} v${metadata.version}")
-        if (config.dev.companion) TerminalUI.info("Companion:", "enabled")
-        if (config.dev.hotReload) TerminalUI.info("Mode:", "hot-reload")
+        TerminalUI.info("Companion:", "enabled")
+        TerminalUI.info("Mode:", if (java.isJbr) "hot-reload (enhanced — JBR)" else "hot-reload")
         TerminalUI.blank()
         TerminalUI.status("Watching for changes...")
 
@@ -505,12 +556,7 @@ class DevCommand : CliktCommand(name = "dev") {
             val shortName = changedFiles.firstOrNull()?.substringAfterLast("/") ?: "files"
             val extra = if (changedFiles.size > 1) " (+${changedFiles.size - 1} more)" else ""
             TerminalUI.change("Change detected: $shortName$extra")
-
-            if (config.dev.hotReload && config.dev.companion) {
-                hotReloadRebuild(gradle, serverManager, config, metadata, projectDir)
-            } else {
-                singleServerRebuild(gradle, serverManager, config, metadata, paperJar, projectDir)
-            }
+            hotReloadRebuild(gradle, serverManager, config, metadata, projectDir)
         }
 
         watcher.start()
@@ -533,7 +579,97 @@ class DevCommand : CliktCommand(name = "dev") {
         }
     }
 
-    private fun singleServerRebuild(
+    // ── Restart mode (simple stop/build/start) ────────────────────────
+
+    private fun runRestart(
+        config: PaperPlaneConfig,
+        ppDir: File,
+        gradle: GradleBridge,
+        downloader: PaperDownloader
+    ) {
+        val serverManager = PaperServerManager(File(ppDir, "server"), downloader, config.dev.verboseServer)
+
+        Runtime.getRuntime().addShutdownHook(Thread {
+            println()
+            serverManager.stop()
+            gradle.close()
+        })
+
+        val metadata = TerminalUI.spin("Reading project metadata...") { gradle.metadata() }
+        if (metadata == null) {
+            TerminalUI.error("Failed to read project metadata. Is the PaperPlane Gradle plugin applied?")
+            return
+        }
+
+        val buildStart = System.currentTimeMillis()
+        val buildSuccess = TerminalUI.spin("Building...") { gradle.build() }
+        val buildDuration = formatDuration(System.currentTimeMillis() - buildStart)
+
+        if (!buildSuccess) {
+            TerminalUI.error("Build failed", buildDuration)
+            TerminalUI.blank()
+            TerminalUI.status("Waiting for changes...")
+            waitForFixSingleServer(gradle, serverManager, config, downloader, useCompanion = false)
+            return
+        }
+        TerminalUI.success("Build succeeded", buildDuration)
+
+        val mcVersion = config.server.version ?: metadata.paperApiVersion
+        val paperJar = TerminalUI.spin("Downloading Paper $mcVersion...") { downloader.download(mcVersion) }
+
+        serverManager.cleanupStale()
+        serverManager.configure()
+        val builtJar = File(projectDir, metadata.jarPath)
+        serverManager.copyPlugin(builtJar)
+
+        val serverStart = System.currentTimeMillis()
+        serverManager.start(paperJar, config.server.jvmArgs)
+        val ready = TerminalUI.spin("Starting Paper $mcVersion server...") { serverManager.waitForReady() }
+        val serverDuration = formatDuration(System.currentTimeMillis() - serverStart)
+
+        if (ready) {
+            TerminalUI.success("Paper $mcVersion server ready", serverDuration)
+        } else {
+            TerminalUI.error("Server failed to start", serverDuration)
+            return
+        }
+
+        TerminalUI.blank()
+        TerminalUI.info("Server:", "localhost:25565")
+        TerminalUI.info("Plugin:", "${metadata.pluginName} v${metadata.version}")
+        TerminalUI.info("Mode:", "restart")
+        TerminalUI.blank()
+        TerminalUI.status("Watching for changes...")
+
+        val srcDir = File(projectDir, "src")
+        val watcher = FileWatcher(srcDir, config.dev.debounceMs) { changedFiles ->
+            val shortName = changedFiles.firstOrNull()?.substringAfterLast("/") ?: "files"
+            val extra = if (changedFiles.size > 1) " (+${changedFiles.size - 1} more)" else ""
+            TerminalUI.change("Change detected: $shortName$extra")
+            restartRebuild(gradle, serverManager, config, metadata, paperJar, projectDir)
+        }
+
+        watcher.start()
+
+        try {
+            while (true) {
+                Thread.sleep(1000)
+                if (!serverManager.isRunning()) {
+                    TerminalUI.error("Server process exited unexpectedly")
+                    break
+                }
+            }
+        } catch (_: InterruptedException) {
+        } finally {
+            watcher.stop()
+            serverManager.stop()
+            gradle.close()
+            TerminalUI.blank()
+            TerminalUI.status("Goodbye!")
+        }
+    }
+
+    private fun restartRebuild(
         gradle: GradleBridge,
         serverManager: PaperServerManager,
         config: PaperPlaneConfig,
@@ -543,7 +679,6 @@ class DevCommand : CliktCommand(name = "dev") {
     ) {
         val totalStart = System.currentTimeMillis()
         serverManager.stop()
-        serverManager.writeCompanionStatus("building")
 
         val buildStart = System.currentTimeMillis()
         val buildSuccess = gradle.build()
@@ -551,7 +686,6 @@ class DevCommand : CliktCommand(name = "dev") {
 
         if (!buildSuccess) {
             TerminalUI.error("Build failed", buildDuration)
-            serverManager.writeCompanionStatus("error", mapOf("message" to "Build failed"))
             TerminalUI.blank()
             TerminalUI.status("Waiting for changes...")
             return
@@ -570,11 +704,43 @@ class DevCommand : CliktCommand(name = "dev") {
             TerminalUI.success("Server ready", serverDuration)
             val totalDuration = formatDuration(System.currentTimeMillis() - totalStart)
             TerminalUI.totalTime(totalDuration)
-            serverManager.writeCompanionStatus("ready", mapOf("duration" to totalDuration))
         } else {
             TerminalUI.error("Server failed to start", serverDuration)
-            serverManager.writeCompanionStatus("error", mapOf("message" to "Server failed to start"))
         }
+    }
+
+    // ── JBR resolution ──────────────────────────────────────────────────
+
+    private data class JavaRuntime(val bin: String, val isJbr: Boolean)
+
+    private fun resolveJava(config: PaperPlaneConfig, ppDir: File): JavaRuntime {
+        return when (config.dev.jbr) {
+            "auto" -> {
+                if (checkIsJbr("java")) JavaRuntime("java", true)
+                else {
+                    val jbrDownloader = JbrDownloader(File(ppDir, "cache"))
+                    val javaBin = TerminalUI.spin("Downloading JBR...") { jbrDownloader.download() }
+                    JavaRuntime(javaBin.absolutePath, true)
+                }
+            }
+            "on" -> {
+                val jbrDownloader = JbrDownloader(File(ppDir, "cache"))
+                val javaBin = TerminalUI.spin("Downloading JBR...") { jbrDownloader.download() }
+                JavaRuntime(javaBin.absolutePath, true)
+            }
+            "off" -> JavaRuntime("java", false)
+            else -> JavaRuntime(config.dev.jbr, checkIsJbr(config.dev.jbr))
+        }
+    }
+
+    private fun checkIsJbr(javaBin: String): Boolean {
+        return try {
+            val proc = ProcessBuilder(javaBin, "-version")
+                .redirectErrorStream(true).start()
+            val output = proc.inputStream.bufferedReader().readText()
+            proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+            output.contains("JetBrains", ignoreCase = true) || output.contains("JBR", ignoreCase = true)
+        } catch (_: Exception) { false }
     }
 
     // ── Wait-for-fix flows ──────────────────────────────────────────────
@@ -606,13 +772,13 @@ class DevCommand : CliktCommand(name = "dev") {
                 // Start proxy if not already running
                 if (!velocityManager.isRunning()) {
                     val velocityJar = velocityDownloader.download()
-                    velocityManager.configure(bluePort = Slot.BLUE.port, greenPort = Slot.GREEN.port)
+                    velocityManager.configure(serverPort = Slot.SERVER.port, swapPort = Slot.SWAP.port)
                     velocityManager.start(velocityJar)
                     velocityManager.waitForReady(25565)
                 }
 
                 // Start blue server
-                val blue = servers[Slot.BLUE]!!
+                val blue = servers[Slot.SERVER]!!
                 blue.cleanupStale()
                 blue.configure()
                 blue.configureVelocityForwarding(velocityManager.forwardingSecret)
@@ -627,7 +793,7 @@ class DevCommand : CliktCommand(name = "dev") {
                 if (ready) {
                     TerminalUI.success("Server ready", serverDuration)
                     blue.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
-                    velocityManager.writeActiveServer("blue")
+                    velocityManager.writeActiveServer("server")
                 }
             } else {
                 TerminalUI.error("Build failed", buildDuration)
@@ -651,8 +817,8 @@ class DevCommand : CliktCommand(name = "dev") {
         gradle: GradleBridge,
         serverManager: PaperServerManager,
         config: PaperPlaneConfig,
-        jarPath: String,
-        ppDir: File
+        downloader: PaperDownloader,
+        useCompanion: Boolean
     ) {
         val srcDir = File(projectDir, "src")
         val watcher = FileWatcher(srcDir, config.dev.debounceMs) { changedFiles ->
@@ -660,7 +826,7 @@ class DevCommand : CliktCommand(name = "dev") {
             TerminalUI.change("Change detected: $shortName")
 
             val buildStart = System.currentTimeMillis()
-            serverManager.writeCompanionStatus("building")
+            if (useCompanion) serverManager.writeCompanionStatus("building")
             val buildSuccess = gradle.build()
             val buildDuration = formatDuration(System.currentTimeMillis() - buildStart)
 
@@ -668,13 +834,12 @@ class DevCommand : CliktCommand(name = "dev") {
                 TerminalUI.success("Build succeeded", buildDuration)
                 val metadata = gradle.metadata() ?: return@FileWatcher
                 val mcVersion = config.server.version ?: metadata.paperApiVersion
-                val downloader = PaperDownloader(File(ppDir, "cache"))
                 val paperJar = downloader.download(mcVersion)
                 serverManager.cleanupStale()
                 serverManager.configure()
                 val builtJar = File(projectDir, metadata.jarPath)
                 serverManager.copyPlugin(builtJar)
-                if (config.dev.companion) serverManager.copyCompanion()
+                if (useCompanion) serverManager.copyCompanion()
 
                 val serverStart = System.currentTimeMillis()
                 serverManager.start(paperJar, config.server.jvmArgs)
@@ -682,7 +847,7 @@ class DevCommand : CliktCommand(name = "dev") {
                 val serverDuration = formatDuration(System.currentTimeMillis() - serverStart)
                 if (ready) {
                     TerminalUI.success("Server ready", serverDuration)
-                    serverManager.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
+                    if (useCompanion) serverManager.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
                 }
             } else {
                 TerminalUI.error("Build failed", buildDuration)

@@ -12,7 +12,7 @@ class VelocityManager(
 
     val forwardingSecret: String = UUID.randomUUID().toString()
 
-    fun configure(bluePort: Int = 25566, greenPort: Int = 25567, proxyPort: Int = 25565) {
+    fun configure(serverPort: Int = 25566, swapPort: Int = 25567, proxyPort: Int = 25565) {
         proxyDir.mkdirs()
         pluginsDir.mkdirs()
 
@@ -27,9 +27,9 @@ class VelocityManager(
             announce-forge = false
 
             [servers]
-            blue = "127.0.0.1:$bluePort"
-            green = "127.0.0.1:$greenPort"
-            try = ["blue", "green"]
+            server = "127.0.0.1:$serverPort"
+            swap = "127.0.0.1:$swapPort"
+            try = ["server", "swap"]
 
             [forced-hosts]
 

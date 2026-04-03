@@ -14,7 +14,10 @@ data class ProjectMetadata(
     val mainClass: String,
     val pluginName: String,
     val projectDir: String,
-    val version: String
+    val version: String,
+    val classesDir: String = "",
+    val resourcesDir: String = "",
+    val runtimeClasspath: List<String> = emptyList()
 )
 
 class GradleBridge(private val projectDir: File) : AutoCloseable {
@@ -29,12 +32,16 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
         return connection!!
     }
 
-    fun build(): Boolean {
+    fun build(): Boolean = runTask("jar")
+
+    fun compileOnly(): Boolean = runTask("classes")
+
+    private fun runTask(taskName: String): Boolean {
         val stdout = ByteArrayOutputStream()
         val stderr = ByteArrayOutputStream()
         return try {
             connect().newBuild()
-                .forTasks("jar")
+                .forTasks(taskName)
                 .setStandardOutput(stdout)
                 .setStandardError(stderr)
                 .run()
@@ -69,12 +76,16 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
         }
     }
 
-    fun metadata(): ProjectMetadata? {
+    fun metadata(): ProjectMetadata? = runMetadataTask("ppMetadata")
+
+    fun metadataFast(): ProjectMetadata? = runMetadataTask("ppMetadataFast")
+
+    private fun runMetadataTask(taskName: String): ProjectMetadata? {
         val stdout = ByteArrayOutputStream()
         val stderr = ByteArrayOutputStream()
         return try {
             connect().newBuild()
-                .forTasks("ppMetadata")
+                .forTasks(taskName)
                 .setStandardOutput(stdout)
                 .setStandardError(stderr)
                 .run()
@@ -82,20 +93,27 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
             val metadataFile = File(projectDir, "build/paperplane/metadata.json")
             if (!metadataFile.exists()) return null
 
-            val type = object : TypeToken<Map<String, String>>() {}.type
-            val map: Map<String, String> = Gson().fromJson(metadataFile.readText(), type)
-            ProjectMetadata(
-                jarPath = map["jarPath"] ?: return null,
-                paperApiVersion = map["paperApiVersion"] ?: "unknown",
-                mainClass = map["mainClass"] ?: "unknown",
-                pluginName = map["pluginName"] ?: "unknown",
-                projectDir = map["projectDir"] ?: projectDir.absolutePath,
-                version = map["version"] ?: "unknown"
-            )
+            parseMetadataFile(metadataFile)
         } catch (e: Exception) {
             TerminalUI.error("Failed to read project metadata: ${e.message}")
             null
         }
+    }
+
+    private fun parseMetadataFile(metadataFile: File): ProjectMetadata? {
+        val type = object : TypeToken<Map<String, Any>>() {}.type
+        val map: Map<String, Any> = Gson().fromJson(metadataFile.readText(), type)
+        return ProjectMetadata(
+            jarPath = map["jarPath"] as? String ?: return null,
+            paperApiVersion = map["paperApiVersion"] as? String ?: "unknown",
+            mainClass = map["mainClass"] as? String ?: "unknown",
+            pluginName = map["pluginName"] as? String ?: "unknown",
+            projectDir = map["projectDir"] as? String ?: this.projectDir.absolutePath,
+            version = map["version"] as? String ?: "unknown",
+            classesDir = map["classesDir"] as? String ?: "",
+            resourcesDir = map["resourcesDir"] as? String ?: "",
+            runtimeClasspath = (map["runtimeClasspath"] as? List<*>)?.filterIsInstance<String>() ?: emptyList()
+        )
     }
 
     private fun parseBuildErrors(output: String) {

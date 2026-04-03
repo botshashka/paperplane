@@ -4,7 +4,6 @@ import com.google.gson.Gson
 import com.google.gson.JsonObject
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
-import net.kyori.adventure.text.format.TextDecoration
 import org.bukkit.plugin.java.JavaPlugin
 import org.bukkit.scheduler.BukkitTask
 import java.io.File
@@ -16,6 +15,7 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
     var isSaving: Boolean = false
         private set
     private var reloader: PluginReloader? = null
+    private var hotSwapper: HotSwapper? = null
 
     private val prefix: Component = Component.text()
         .append(Component.text("PaperPlane ", NamedTextColor.AQUA))
@@ -59,14 +59,7 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
                     broadcast(Component.text(message, NamedTextColor.RED))
                 }
                 "reloading" -> {
-                    val pluginName = json.get("pluginName")?.asString ?: return
-                    val jarFileName = json.get("jarFileName")?.asString ?: return
-                    val pendingJar = json.get("pendingJar")?.asString
-                    performReload(pluginName, jarFileName, pendingJar)
-                    // Don't reset lastState — the CLI always writes "building" before
-                    // "reloading", so the next reload will naturally pass dedup.
-                    // Resetting to null causes double-processing when the next poll
-                    // fires before the CLI updates status to "ready".
+                    performReload(json)
                 }
             }
         } catch (_: Exception) {
@@ -74,12 +67,14 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
         }
     }
 
-    private fun performReload(pluginName: String, jarFileName: String, pendingJarName: String?) {
-        val pluginsDir = plugin.dataFolder.parentFile.absoluteFile // server's plugins/ dir
+    private fun performReload(json: JsonObject) {
+        val pluginName = json.get("pluginName")?.asString ?: return
+        val jarFileName = json.get("jarFileName")?.asString ?: return
+
+        val pluginsDir = plugin.dataFolder.parentFile.absoluteFile
         val currentJar = File(pluginsDir, jarFileName)
-        // pendingJar is an absolute path (staged in .paperplane/, not plugins/)
+        val pendingJarName = json.get("pendingJar")?.asString
         val pendingJar = pendingJarName?.let { File(it) }
-        val loadJar = pendingJar ?: currentJar
         val ppDir = File(plugin.dataFolder.parentFile.parentFile, ".paperplane")
         ppDir.mkdirs()
 
@@ -89,14 +84,28 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
             reloader = PluginReloader(plugin.server, plugin.logger)
         }
 
-        // Pass the original jar as rollback target (only meaningful when staging)
-        val rollbackJar = if (pendingJar != null) currentJar else null
-        val outcome = reloader!!.reload(pluginName, loadJar, rollbackJar)
+        if (reloader!!.shouldForceBlueGreen) {
+            File(ppDir, "reload-failed").writeText("CLASSLOADER_LEAKS")
+            broadcast(Component.text("Switching to blue/green mode", NamedTextColor.YELLOW))
+            return
+        }
+
+        // Determine reload strategy from protocol
+        val strategy = json.get("reloadStrategy")?.asString ?: "jar"
+        val buildOutputDirs = try {
+            json.getAsJsonArray("buildOutputDirs")?.map { it.asString }
+        } catch (_: Exception) { null }
+
+        val changedClasses = try {
+            json.getAsJsonArray("changedClasses")?.map { it.asString }
+        } catch (_: Exception) { null }
+
+        val outcome = executeReloadStrategy(strategy, pluginName, buildOutputDirs, currentJar, pendingJar, changedClasses)
         val timingInfo = "teardown=${outcome.teardownMs},load=${outcome.loadMs},total=${outcome.totalMs}"
 
         when (outcome.result) {
             ReloadResult.SUCCESS -> {
-                // Finalize: replace original jar with the staged .new jar
+                // Finalize: replace original jar with the staged .new jar (if JAR-based)
                 if (pendingJar != null && pendingJar.exists()) {
                     try {
                         java.nio.file.Files.move(
@@ -108,16 +117,16 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
                     }
                 }
                 File(ppDir, "reload-complete").writeText(timingInfo)
-                broadcast(Component.text("$pluginName reloaded!", NamedTextColor.GREEN))
+                val msg = if (outcome.teardownMs == 0L && outcome.loadMs == 0L)
+                    "$pluginName hot-swapped!" else "$pluginName reloaded!"
+                broadcast(Component.text(msg, NamedTextColor.GREEN))
             }
             ReloadResult.ROLLBACK_SUCCESS -> {
-                // New jar failed but old plugin was restored — clean up staged jar
                 pendingJar?.delete()
                 File(ppDir, "reload-failed").writeText("ROLLBACK_SUCCESS")
                 broadcast(Component.text("Reload failed, reverted to previous version", NamedTextColor.YELLOW))
             }
             else -> {
-                // Total failure — clean up staged jar
                 pendingJar?.delete()
                 File(ppDir, "reload-failed").writeText(outcome.result.name)
                 broadcast(Component.text("Reload failed: ${outcome.result}", NamedTextColor.RED))
@@ -127,6 +136,60 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
                 }
             }
         }
+    }
+
+    /**
+     * Executes the tiered reload strategy with fallback cascade:
+     * 1. hotswap (Level 2) — if available and requested
+     * 2. directory (Level 1) — if buildOutputDirs provided
+     * 3. jar (existing) — ultimate fallback
+     */
+    private fun executeReloadStrategy(
+        strategy: String,
+        pluginName: String,
+        buildOutputDirs: List<String>?,
+        currentJar: File,
+        pendingJar: File?,
+        changedClasses: List<String>? = null
+    ): ReloadOutcome {
+        // Level 2: Hot-swap via instrumentation (method-body changes only)
+        if (strategy == "hotswap" && buildOutputDirs != null && !changedClasses.isNullOrEmpty()) {
+            if (hotSwapper == null) hotSwapper = HotSwapper(plugin.logger)
+            if (hotSwapper!!.isAvailable()) {
+                val targetPlugin = plugin.server.pluginManager.getPlugin(pluginName)
+                if (targetPlugin != null) {
+                    val result = hotSwapper!!.redefine(
+                        changedClasses,
+                        targetPlugin.javaClass.classLoader,
+                        buildOutputDirs
+                    )
+                    when (result) {
+                        HotSwapResult.SUCCESS -> {
+                            val level = if (hotSwapper!!.isEnhancedRedefinitionAvailable()) "Level 3" else "Level 2"
+                            plugin.logger.info("⚡ $level hotswap — ${changedClasses.size} class(es) redefined in-place")
+                            return ReloadOutcome(ReloadResult.SUCCESS, totalMs = 0)
+                        }
+                        else -> {
+                            plugin.logger.info("Hot-swap returned $result — falling back to classloader reload")
+                        }
+                    }
+                }
+            }
+        }
+
+        // Level 1: Directory reload
+        if (buildOutputDirs != null && buildOutputDirs.isNotEmpty() && strategy in listOf("directory", "hotswap")) {
+            val rollbackJar = if (currentJar.exists()) currentJar else null
+            plugin.logger.info("🔄 Level 1 directory reload — loading from build output dirs")
+            val outcome = reloader!!.reloadFromDirectory(pluginName, buildOutputDirs, rollbackJar)
+            if (outcome.result == ReloadResult.SUCCESS) return outcome
+            plugin.logger.warning("Directory reload failed (${outcome.result}), falling back to JAR reload")
+        }
+
+        // Level 0: JAR-based reload (existing behavior)
+        val loadJar = pendingJar ?: currentJar
+        val rollbackJar = if (pendingJar != null) currentJar else null
+        return reloader!!.reload(pluginName, loadJar, rollbackJar)
     }
 
     private fun performSave() {

@@ -27,7 +27,7 @@ class ReconnectPlugin @Inject constructor(
     private val logger: Logger
 ) {
     private val gson = Gson()
-    private var activeServer: String = "blue"
+    private var activeServer: String = "server"
     private val statusFile = File("active-server.json")
 
     @Subscribe

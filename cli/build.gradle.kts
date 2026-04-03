@@ -29,10 +29,18 @@ val copyVelocityPlugin = tasks.register<Copy>("copyVelocityPluginJar") {
     rename { "paperplane-velocity.bin" }
 }
 
+// Copy agent jar as .bin for HMR instrumentation support
+val copyAgent = tasks.register<Copy>("copyAgentJar") {
+    from(project(":agent").tasks.named("jar"))
+    into(layout.buildDirectory.dir("agent"))
+    rename { "paperplane-agent.bin" }
+}
+
 tasks.processResources {
-    dependsOn(copyCompanion, copyVelocityPlugin)
+    dependsOn(copyCompanion, copyVelocityPlugin, copyAgent)
     from(layout.buildDirectory.dir("companion"))
     from(layout.buildDirectory.dir("velocity"))
+    from(layout.buildDirectory.dir("agent"))
 }
 
 tasks.shadowJar {

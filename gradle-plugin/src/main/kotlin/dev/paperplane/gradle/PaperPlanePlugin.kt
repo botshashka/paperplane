@@ -50,9 +50,20 @@ class PaperPlanePlugin : Plugin<Project> {
             }
         }
 
+        project.tasks.register("ppMetadataFast", MetadataTask::class.java) { task ->
+            task.group = "paperplane"
+            task.description = "Writes project metadata for HMR (skips jar packaging)"
+            task.extension = extension
+            task.outputDir.set(project.layout.buildDirectory.dir("paperplane"))
+        }
+
         // Make ppMetadata run after compileJava/compileKotlin so jar path is known
         project.tasks.named("ppMetadata") { task ->
             task.dependsOn("jar")
+        }
+
+        project.tasks.named("ppMetadataFast") { task ->
+            task.dependsOn("classes")
         }
     }
 

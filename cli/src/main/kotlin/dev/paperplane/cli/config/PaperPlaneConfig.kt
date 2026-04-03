@@ -28,13 +28,19 @@ data class ServerConfig(
 )
 
 @Serializable
+enum class DevMode {
+    @SerialName("hot-reload") HOT_RELOAD,
+    @SerialName("blue-green") BLUE_GREEN,
+    @SerialName("restart") RESTART
+}
+
+@Serializable
 data class DevConfig(
     val companion: Boolean = true,
     @SerialName("verbose-server")
     val verboseServer: Boolean = false,
     @SerialName("debounce-ms")
     val debounceMs: Long = 2000,
-    val proxy: Boolean = true,
-    @SerialName("hot-reload")
-    val hotReload: Boolean = false
+    val mode: DevMode = DevMode.HOT_RELOAD,
+    val jbr: String = "auto"
 )
