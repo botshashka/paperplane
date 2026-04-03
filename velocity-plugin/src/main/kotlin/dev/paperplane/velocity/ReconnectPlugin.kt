@@ -13,6 +13,7 @@ import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import org.slf4j.Logger
 import java.io.File
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 
 @Plugin(
@@ -71,25 +72,53 @@ class ReconnectPlugin @Inject constructor(
             activeServer = newActive
 
             if (transfer) {
-                transferPlayers(newActive)
-                // Clear transfer flag
+                // Clear transfer flag BEFORE transferring — pollStatus runs on a thread pool,
+                // so a concurrent poll must not see transfer=true again while we're blocking
                 statusFile.writeText("""{"active":"$newActive","transfer":false}""")
-                // Write confirmation file for CLI to detect
-                File(statusFile.parentFile, "transfer-complete").writeText(
-                    System.currentTimeMillis().toString()
-                )
+                val success = transferPlayers(newActive)
+                if (success) {
+                    File(statusFile.parentFile, "transfer-complete").writeText(
+                        System.currentTimeMillis().toString()
+                    )
+                } else {
+                    logger.warn("Transfer to {} had failures", newActive)
+                }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            logger.warn("Failed to poll active-server.json: {}", e.message)
+        }
     }
 
-    private fun transferPlayers(targetName: String) {
-        val target = server.getServer(targetName).orElse(null) ?: return
+    private fun transferPlayers(targetName: String): Boolean {
+        val target = server.getServer(targetName).orElse(null)
+        if (target == null) {
+            logger.warn("Transfer target server '{}' not found", targetName)
+            return false
+        }
+
+        val futures = mutableListOf<CompletableFuture<*>>()
         for (player in server.allPlayers) {
             val currentServer = player.currentServer.orElse(null)?.serverInfo?.name
             if (currentServer != targetName) {
-                player.createConnectionRequest(target).connect()
-                logger.info("Transferring ${player.username} to $targetName")
+                logger.info("Transferring {} to {}", player.username, targetName)
+                val future = player.createConnectionRequest(target).connect().thenAccept { result ->
+                    if (!result.isSuccessful) {
+                        logger.warn("Transfer failed for {}: {}", player.username,
+                            result.reasonComponent.orElse(Component.text("unknown")))
+                    }
+                }
+                futures.add(future)
             }
+        }
+
+        if (futures.isEmpty()) return true
+
+        return try {
+            CompletableFuture.allOf(*futures.toTypedArray()).get(5, TimeUnit.SECONDS)
+            true
+        } catch (e: Exception) {
+            logger.warn("Some transfers did not complete in time: {}", e.message)
+            false
         }
     }
 }
