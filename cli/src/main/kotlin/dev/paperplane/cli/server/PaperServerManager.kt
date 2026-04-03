@@ -209,7 +209,7 @@ class PaperServerManager(
         Thread({
             proc.inputStream.bufferedReader().forEachLine { line ->
                 if (shouldShowLine(line)) {
-                    println("  ${formatServerLine(line)}")
+                    TerminalUI.serverLog("  ${formatServerLine(line)}")
                 }
             }
         }, "server-$port-output").apply { isDaemon = true }.start()
@@ -269,18 +269,11 @@ class PaperServerManager(
         val startTime = System.currentTimeMillis()
         val timeout = 60_000L
         while (proc.isAlive && System.currentTimeMillis() - startTime < timeout) {
-            // Prefer flag file (written by companion plugin after all plugins loaded)
             if (flagFile.exists()) {
                 flagFile.delete()
                 return true
             }
-            // Fallback: TCP port check (works even without companion)
-            try {
-                java.net.Socket("localhost", port).close()
-                return true
-            } catch (_: Exception) {
-                Thread.sleep(100)
-            }
+            Thread.sleep(100)
         }
         return false
     }

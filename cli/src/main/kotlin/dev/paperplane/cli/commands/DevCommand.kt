@@ -93,18 +93,21 @@ class DevCommand : CliktCommand(name = "dev") {
         val shuttingDown = java.util.concurrent.atomic.AtomicBoolean(false)
         Runtime.getRuntime().addShutdownHook(Thread {
             shuttingDown.set(true)
-            println() // Clear ^C line
+            TerminalUI.discardBlock()
+            println()
             servers.values.forEach { it.stop() }
             velocityManager.stop()
             gradle.close()
         })
 
         // Step 1: Get metadata
+        TerminalUI.beginBlock()
         val metadata = TerminalUI.spin("Reading project metadata...") {
             gradle.metadata()
         }
         if (metadata == null) {
             TerminalUI.error("Failed to read project metadata. Is the PaperPlane Gradle plugin applied?")
+            TerminalUI.endBlock()
             return
         }
 
@@ -120,8 +123,7 @@ class DevCommand : CliktCommand(name = "dev") {
         if (!buildSuccess) {
             TerminalUI.error("Build failed", buildDuration)
             active.writeCompanionStatus("error", mapOf("message" to "Build failed"))
-            TerminalUI.blank()
-            TerminalUI.status("Waiting for changes...")
+            TerminalUI.awaitChanges(watching = false)
             waitForFixAndRestart(gradle, servers, velocityManager, velocityDownloader, config, ppDir)
             return
         }
@@ -175,16 +177,17 @@ class DevCommand : CliktCommand(name = "dev") {
         } else {
             TerminalUI.error("Server failed to start", serverDuration)
             active.writeCompanionStatus("error", mapOf("message" to "Server failed to start"))
+            TerminalUI.endBlock()
             return
         }
+        TerminalUI.endBlock()
 
-        TerminalUI.blank()
+        TerminalUI.beginBlock()
         TerminalUI.info("Server:", "localhost:25565 (via proxy)")
         TerminalUI.info("Plugin:", "${metadata.pluginName} v${metadata.version}")
         TerminalUI.info("Companion:", "enabled")
         TerminalUI.info("Mode:", "blue-green (zero-downtime)")
-        TerminalUI.blank()
-        TerminalUI.status("Watching for changes...")
+        TerminalUI.awaitChanges()
 
         // Step 6: Pre-warm standby server in background
         preWarmStandby(servers[Slot.SWAP]!!, active, Slot.SWAP.port, builtJar, config, paperJar, velocityManager)
@@ -192,6 +195,8 @@ class DevCommand : CliktCommand(name = "dev") {
         // Step 7: Watch and rebuild loop
         val srcDir = File(projectDir, "src")
         val watcher = FileWatcher(srcDir, config.dev.debounceMs) { changedFiles ->
+            TerminalUI.discardBlock()
+            TerminalUI.beginBlock()
             val shortName = changedFiles.firstOrNull()?.substringAfterLast("/") ?: "files"
             val extra = if (changedFiles.size > 1) " (+${changedFiles.size - 1} more)" else ""
             TerminalUI.change("Change detected: $shortName$extra")
@@ -219,8 +224,7 @@ class DevCommand : CliktCommand(name = "dev") {
             servers.values.forEach { it.stop() }
             velocityManager.stop()
             gradle.close()
-            TerminalUI.blank()
-            TerminalUI.status("Goodbye!")
+            TerminalUI.discardBlock()
         }
     }
 
@@ -269,8 +273,7 @@ class DevCommand : CliktCommand(name = "dev") {
         if (!buildSuccess) {
             TerminalUI.error("Build failed", buildDuration)
             active.writeCompanionStatus("error", mapOf("message" to "Build failed"))
-            TerminalUI.blank()
-            TerminalUI.status("Waiting for changes...")
+            TerminalUI.awaitChanges(watching = false)
             return activeSlot
         }
         TerminalUI.success("Build succeeded", buildDuration)
@@ -291,6 +294,7 @@ class DevCommand : CliktCommand(name = "dev") {
             TerminalUI.error("Standby server failed to start", serverDuration)
             standby.stop()
             active.writeCompanionStatus("error", mapOf("message" to "Standby failed to start"))
+            TerminalUI.awaitChanges(watching = false)
             return activeSlot
         }
 
@@ -314,9 +318,7 @@ class DevCommand : CliktCommand(name = "dev") {
         // 9. Report success
         TerminalUI.success("Server ready (${standbySlot.serverName})", serverDuration)
         TerminalUI.totalTime(totalDuration)
-
-        TerminalUI.blank()
-        TerminalUI.status("Watching for changes...")
+        TerminalUI.awaitChanges()
 
         return standbySlot
     }
@@ -387,8 +389,7 @@ class DevCommand : CliktCommand(name = "dev") {
         if (!buildSuccess) {
             TerminalUI.error("Build failed", buildDuration)
             server.writeCompanionStatus("error", mapOf("message" to "Build failed"))
-            TerminalUI.blank()
-            TerminalUI.status("Watching for changes...")
+            TerminalUI.awaitChanges(watching = false)
             return
         }
         TerminalUI.success("Build succeeded", buildDuration)
@@ -451,8 +452,7 @@ class DevCommand : CliktCommand(name = "dev") {
             server.writeCompanionStatus("error", mapOf("message" to "Hot-reload failed"))
         }
 
-        TerminalUI.blank()
-        TerminalUI.status("Watching for changes...")
+        TerminalUI.awaitChanges()
     }
 
     private fun waitForReloadResult(ppDir: File, timeoutMs: Long): Boolean {
@@ -486,14 +486,17 @@ class DevCommand : CliktCommand(name = "dev") {
         val serverManager = PaperServerManager(File(ppDir, "server"), downloader, config.dev.verboseServer)
 
         Runtime.getRuntime().addShutdownHook(Thread {
+            TerminalUI.discardBlock()
             println()
             serverManager.stop()
             gradle.close()
         })
 
+        TerminalUI.beginBlock()
         val metadata = TerminalUI.spin("Reading project metadata...") { gradle.metadata() }
         if (metadata == null) {
             TerminalUI.error("Failed to read project metadata. Is the PaperPlane Gradle plugin applied?")
+            TerminalUI.endBlock()
             return
         }
 
@@ -505,8 +508,7 @@ class DevCommand : CliktCommand(name = "dev") {
         if (!buildSuccess) {
             TerminalUI.error("Build failed", buildDuration)
             serverManager.writeCompanionStatus("error", mapOf("message" to "Build failed"))
-            TerminalUI.blank()
-            TerminalUI.status("Waiting for changes...")
+            TerminalUI.awaitChanges(watching = false)
             waitForFixSingleServer(gradle, serverManager, config, downloader, useCompanion = true)
             return
         }
@@ -540,19 +542,22 @@ class DevCommand : CliktCommand(name = "dev") {
         } else {
             TerminalUI.error("Server failed to start", serverDuration)
             serverManager.writeCompanionStatus("error", mapOf("message" to "Server failed to start"))
+            TerminalUI.endBlock()
             return
         }
+        TerminalUI.endBlock()
 
-        TerminalUI.blank()
+        TerminalUI.beginBlock()
         TerminalUI.info("Server:", "localhost:25565")
         TerminalUI.info("Plugin:", "${metadata.pluginName} v${metadata.version}")
         TerminalUI.info("Companion:", "enabled")
         TerminalUI.info("Mode:", if (java.isJbr) "hot-reload (enhanced — JBR)" else "hot-reload")
-        TerminalUI.blank()
-        TerminalUI.status("Watching for changes...")
+        TerminalUI.awaitChanges()
 
         val srcDir = File(projectDir, "src")
         val watcher = FileWatcher(srcDir, config.dev.debounceMs) { changedFiles ->
+            TerminalUI.discardBlock()
+            TerminalUI.beginBlock()
             val shortName = changedFiles.firstOrNull()?.substringAfterLast("/") ?: "files"
             val extra = if (changedFiles.size > 1) " (+${changedFiles.size - 1} more)" else ""
             TerminalUI.change("Change detected: $shortName$extra")
@@ -574,8 +579,7 @@ class DevCommand : CliktCommand(name = "dev") {
             watcher.stop()
             serverManager.stop()
             gradle.close()
-            TerminalUI.blank()
-            TerminalUI.status("Goodbye!")
+            TerminalUI.discardBlock()
         }
     }
 
@@ -590,14 +594,17 @@ class DevCommand : CliktCommand(name = "dev") {
         val serverManager = PaperServerManager(File(ppDir, "server"), downloader, config.dev.verboseServer)
 
         Runtime.getRuntime().addShutdownHook(Thread {
+            TerminalUI.discardBlock()
             println()
             serverManager.stop()
             gradle.close()
         })
 
+        TerminalUI.beginBlock()
         val metadata = TerminalUI.spin("Reading project metadata...") { gradle.metadata() }
         if (metadata == null) {
             TerminalUI.error("Failed to read project metadata. Is the PaperPlane Gradle plugin applied?")
+            TerminalUI.endBlock()
             return
         }
 
@@ -607,8 +614,7 @@ class DevCommand : CliktCommand(name = "dev") {
 
         if (!buildSuccess) {
             TerminalUI.error("Build failed", buildDuration)
-            TerminalUI.blank()
-            TerminalUI.status("Waiting for changes...")
+            TerminalUI.awaitChanges(watching = false)
             waitForFixSingleServer(gradle, serverManager, config, downloader, useCompanion = false)
             return
         }
@@ -631,18 +637,21 @@ class DevCommand : CliktCommand(name = "dev") {
             TerminalUI.success("Paper $mcVersion server ready", serverDuration)
         } else {
             TerminalUI.error("Server failed to start", serverDuration)
+            TerminalUI.endBlock()
             return
         }
+        TerminalUI.endBlock()
 
-        TerminalUI.blank()
+        TerminalUI.beginBlock()
         TerminalUI.info("Server:", "localhost:25565")
         TerminalUI.info("Plugin:", "${metadata.pluginName} v${metadata.version}")
         TerminalUI.info("Mode:", "restart")
-        TerminalUI.blank()
-        TerminalUI.status("Watching for changes...")
+        TerminalUI.awaitChanges()
 
         val srcDir = File(projectDir, "src")
         val watcher = FileWatcher(srcDir, config.dev.debounceMs) { changedFiles ->
+            TerminalUI.discardBlock()
+            TerminalUI.beginBlock()
             val shortName = changedFiles.firstOrNull()?.substringAfterLast("/") ?: "files"
             val extra = if (changedFiles.size > 1) " (+${changedFiles.size - 1} more)" else ""
             TerminalUI.change("Change detected: $shortName$extra")
@@ -664,8 +673,7 @@ class DevCommand : CliktCommand(name = "dev") {
             watcher.stop()
             serverManager.stop()
             gradle.close()
-            TerminalUI.blank()
-            TerminalUI.status("Goodbye!")
+            TerminalUI.discardBlock()
         }
     }
 
@@ -686,8 +694,7 @@ class DevCommand : CliktCommand(name = "dev") {
 
         if (!buildSuccess) {
             TerminalUI.error("Build failed", buildDuration)
-            TerminalUI.blank()
-            TerminalUI.status("Waiting for changes...")
+            TerminalUI.awaitChanges(watching = false)
             return
         }
         TerminalUI.success("Build succeeded", buildDuration)
@@ -707,6 +714,8 @@ class DevCommand : CliktCommand(name = "dev") {
         } else {
             TerminalUI.error("Server failed to start", serverDuration)
         }
+
+        TerminalUI.awaitChanges()
     }
 
     // ── JBR resolution ──────────────────────────────────────────────────
@@ -743,7 +752,7 @@ class DevCommand : CliktCommand(name = "dev") {
         } catch (_: Exception) { false }
     }
 
-    // ── Wait-for-fix flows ──────────────────────────────────────────────
+    // ── Wait-for-fix flows ────────────────────────────────────────────
 
     private fun waitForFixAndRestart(
         gradle: GradleBridge,
@@ -755,6 +764,8 @@ class DevCommand : CliktCommand(name = "dev") {
     ) {
         val srcDir = File(projectDir, "src")
         val watcher = FileWatcher(srcDir, config.dev.debounceMs) { changedFiles ->
+            TerminalUI.discardBlock()
+            TerminalUI.beginBlock()
             val shortName = changedFiles.firstOrNull()?.substringAfterLast("/") ?: "files"
             TerminalUI.change("Change detected: $shortName")
 
@@ -795,10 +806,10 @@ class DevCommand : CliktCommand(name = "dev") {
                     blue.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
                     velocityManager.writeActiveServer("server")
                 }
+                TerminalUI.awaitChanges()
             } else {
                 TerminalUI.error("Build failed", buildDuration)
-                TerminalUI.blank()
-                TerminalUI.status("Waiting for changes...")
+                TerminalUI.awaitChanges(watching = false)
             }
         }
         watcher.start()
@@ -822,6 +833,8 @@ class DevCommand : CliktCommand(name = "dev") {
     ) {
         val srcDir = File(projectDir, "src")
         val watcher = FileWatcher(srcDir, config.dev.debounceMs) { changedFiles ->
+            TerminalUI.discardBlock()
+            TerminalUI.beginBlock()
             val shortName = changedFiles.firstOrNull()?.substringAfterLast("/") ?: "files"
             TerminalUI.change("Change detected: $shortName")
 
@@ -849,10 +862,10 @@ class DevCommand : CliktCommand(name = "dev") {
                     TerminalUI.success("Server ready", serverDuration)
                     if (useCompanion) serverManager.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
                 }
+                TerminalUI.awaitChanges()
             } else {
                 TerminalUI.error("Build failed", buildDuration)
-                TerminalUI.blank()
-                TerminalUI.status("Waiting for changes...")
+                TerminalUI.awaitChanges(watching = false)
             }
         }
         watcher.start()

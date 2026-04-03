@@ -1,5 +1,6 @@
 package dev.paperplane.cli.server
 
+import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import java.util.UUID
 
@@ -105,7 +106,7 @@ class VelocityManager(
         Thread({
             proc.inputStream.bufferedReader().forEachLine { line ->
                 if (shouldShowLine(line)) {
-                    println("  ${formatProxyLine(line)}")
+                    TerminalUI.serverLog("  ${formatProxyLine(line)}")
                 }
             }
         }, "proxy-output").apply { isDaemon = true }.start()

@@ -45,7 +45,7 @@ class JbrDownloader(private val cacheDir: File) {
         val arch = detectArch()
         val downloadUrl = buildDownloadUrl(release, os, arch)
 
-        TerminalUI.status("Downloading JBR ${release.version} ($os-$arch)...")
+        TerminalUI.spinSubstatus("Downloading JBR ${release.version} ($os-$arch)...")
 
         // Download tarball to temp file
         val tarball = File(cacheDir, "jbr-$jdkMajorVersion.tar.gz")
@@ -60,7 +60,7 @@ class JbrDownloader(private val cacheDir: File) {
         }
 
         // Extract tarball
-        TerminalUI.status("Extracting JBR...")
+        TerminalUI.spinSubstatus("Extracting JBR...")
         jbrDir.mkdirs()
         extractTarGz(tarball, jbrDir)
         tarball.delete()
