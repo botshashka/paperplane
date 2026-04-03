@@ -160,8 +160,6 @@ class PaperServerManager(
                     input.copyTo(output)
                 }
             }
-            // Remove stale jar from before the overlay → companion rename
-            File(pluginsDir, "paperplane-overlay.jar").delete()
         }
     }
 
@@ -222,7 +220,7 @@ class PaperServerManager(
 
     /**
      * Waits for the companion plugin to complete a save.
-     * The CLI writes "saving" to overlay-status.json, the companion does the save
+     * The CLI writes "saving" to companion-status.json, the companion does the save
      * via Bukkit API (no broadcast), then writes a flag file.
      */
     fun waitForSave(timeoutMs: Long = 10_000): Boolean {
@@ -267,8 +265,8 @@ class PaperServerManager(
         return false
     }
 
-    fun writeOverlayStatus(state: String, extra: Map<String, String> = emptyMap()) {
-        val statusFile = File(serverDir, ".paperplane/overlay-status.json")
+    fun writeCompanionStatus(state: String, extra: Map<String, String> = emptyMap()) {
+        val statusFile = File(serverDir, ".paperplane/companion-status.json")
         statusFile.parentFile.mkdirs()
         val json = buildString {
             append("{\"state\":\"$state\"")

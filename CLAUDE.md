@@ -54,7 +54,7 @@ Configured via `paperplane.yml` in the user's project:
 
 The CLI and companion plugin coordinate through flag files in `.paperplane/` inside the server directory:
 - `server-ready` — companion writes after `ServerLoadEvent`
-- `overlay-status.json` — CLI writes build state, companion reads for action bar
+- `companion-status.json` — CLI writes build state, companion reads for action bar
 - `save-complete` — companion writes after world save
 - `reload-complete` / `reload-failed` — companion writes after hot-reload attempt
 

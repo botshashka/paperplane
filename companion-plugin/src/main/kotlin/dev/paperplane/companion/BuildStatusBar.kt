@@ -22,7 +22,7 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
         .build()
 
     fun start() {
-        // Poll overlay-status.json every 5 ticks (250ms)
+        // Poll companion-status.json every 5 ticks (250ms)
         pollTask = plugin.server.scheduler.runTaskTimer(plugin, Runnable { poll() }, 5L, 5L)
     }
 
@@ -31,7 +31,7 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
     }
 
     private fun poll() {
-        val statusFile = File(plugin.dataFolder.parentFile.parentFile, ".paperplane/overlay-status.json")
+        val statusFile = File(plugin.dataFolder.parentFile.parentFile, ".paperplane/companion-status.json")
         if (!statusFile.exists()) return
 
         try {

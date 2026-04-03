@@ -69,41 +69,28 @@ class PaperServerManagerTest {
     }
 
     @Test
-    fun `writeOverlayStatus creates json file`() {
+    fun `writeCompanionStatus creates json file`() {
         val manager = createManager()
         manager.serverDir.mkdirs()
-        manager.writeOverlayStatus("building")
+        manager.writeCompanionStatus("building")
 
-        val statusFile = File(manager.serverDir, ".paperplane/overlay-status.json")
+        val statusFile = File(manager.serverDir, ".paperplane/companion-status.json")
         assertTrue(statusFile.exists())
         val json = statusFile.readText()
         assertTrue(json.contains("\"state\":\"building\""))
     }
 
     @Test
-    fun `writeOverlayStatus includes extra fields`() {
+    fun `writeCompanionStatus includes extra fields`() {
         val manager = createManager()
         manager.serverDir.mkdirs()
-        manager.writeOverlayStatus("ready", mapOf("duration" to "2.5s"))
+        manager.writeCompanionStatus("ready", mapOf("duration" to "2.5s"))
 
-        val json = File(manager.serverDir, ".paperplane/overlay-status.json").readText()
+        val json = File(manager.serverDir, ".paperplane/companion-status.json").readText()
         assertTrue(json.contains("\"state\":\"ready\""))
         assertTrue(json.contains("\"duration\":\"2.5s\""))
     }
 
-    @Test
-    fun `copyCompanion removes stale overlay jar`() {
-        val manager = createManager()
-        manager.serverDir.mkdirs()
-        val pluginsDir = File(manager.serverDir, "plugins")
-        pluginsDir.mkdirs()
-        val staleJar = File(pluginsDir, "paperplane-overlay.jar")
-        staleJar.writeText("old-overlay")
-
-        manager.copyCompanion()
-
-        assertFalse(staleJar.exists(), "stale paperplane-overlay.jar should be deleted")
-    }
 
     @Test
     fun `isRunning returns false when not started`() {

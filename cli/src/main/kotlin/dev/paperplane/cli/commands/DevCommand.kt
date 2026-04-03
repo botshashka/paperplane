@@ -96,7 +96,7 @@ class DevCommand : CliktCommand(name = "dev") {
         // Step 2: Build
         val buildStart = System.currentTimeMillis()
         val active = servers[activeSlot]!!
-        active.writeOverlayStatus("building")
+        active.writeCompanionStatus("building")
         val buildSuccess = TerminalUI.spin("Building...") {
             gradle.build()
         }
@@ -104,7 +104,7 @@ class DevCommand : CliktCommand(name = "dev") {
 
         if (!buildSuccess) {
             TerminalUI.error("Build failed", buildDuration)
-            active.writeOverlayStatus("error", mapOf("message" to "Build failed"))
+            active.writeCompanionStatus("error", mapOf("message" to "Build failed"))
             TerminalUI.blank()
             TerminalUI.status("Waiting for changes...")
             waitForFixAndRestart(gradle, servers, velocityManager, velocityDownloader, config, ppDir)
@@ -156,10 +156,10 @@ class DevCommand : CliktCommand(name = "dev") {
 
         if (ready) {
             TerminalUI.success("Paper $mcVersion server ready", serverDuration)
-            active.writeOverlayStatus("ready", mapOf("duration" to serverDuration))
+            active.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
         } else {
             TerminalUI.error("Server failed to start", serverDuration)
-            active.writeOverlayStatus("error", mapOf("message" to "Server failed to start"))
+            active.writeCompanionStatus("error", mapOf("message" to "Server failed to start"))
             return
         }
 
@@ -232,7 +232,7 @@ class DevCommand : CliktCommand(name = "dev") {
         val builtJar = File(projectDir, metadata.jarPath)
 
         // 1. Save world first — must complete before sync can start
-        active.writeOverlayStatus("saving")
+        active.writeCompanionStatus("saving")
         TerminalUI.spin("Saving world...") {
             active.waitForSave()
         }
@@ -243,7 +243,7 @@ class DevCommand : CliktCommand(name = "dev") {
         }
 
         // 3. Build + sync in parallel (sync uses saved state, build produces new jar)
-        active.writeOverlayStatus("building")
+        active.writeCompanionStatus("building")
         val buildStart = System.currentTimeMillis()
 
         val syncThread = Thread({
@@ -259,7 +259,7 @@ class DevCommand : CliktCommand(name = "dev") {
 
         if (!buildSuccess) {
             TerminalUI.error("Build failed", buildDuration)
-            active.writeOverlayStatus("error", mapOf("message" to "Build failed"))
+            active.writeCompanionStatus("error", mapOf("message" to "Build failed"))
             TerminalUI.blank()
             TerminalUI.status("Waiting for changes...")
             return activeSlot
@@ -281,7 +281,7 @@ class DevCommand : CliktCommand(name = "dev") {
         if (!ready) {
             TerminalUI.error("Standby server failed to start", serverDuration)
             standby.stop()
-            active.writeOverlayStatus("error", mapOf("message" to "Standby failed to start"))
+            active.writeCompanionStatus("error", mapOf("message" to "Standby failed to start"))
             return activeSlot
         }
 
@@ -293,7 +293,7 @@ class DevCommand : CliktCommand(name = "dev") {
 
         // 7. Write "ready" to new server's companion before stopping old
         val totalDuration = formatDuration(System.currentTimeMillis() - totalStart)
-        standby.writeOverlayStatus("ready", mapOf("duration" to totalDuration))
+        standby.writeCompanionStatus("ready", mapOf("duration" to totalDuration))
 
         // 8. Stop old server + pre-warm it as next standby (async)
         Thread({
@@ -353,14 +353,14 @@ class DevCommand : CliktCommand(name = "dev") {
         val totalStart = System.currentTimeMillis()
 
         // 1. Build — no world save needed, server stays running
-        server.writeOverlayStatus("building")
+        server.writeCompanionStatus("building")
         val buildStart = System.currentTimeMillis()
         val buildSuccess = gradle.build()
         val buildDuration = formatDuration(System.currentTimeMillis() - buildStart)
 
         if (!buildSuccess) {
             TerminalUI.error("Build failed", buildDuration)
-            server.writeOverlayStatus("error", mapOf("message" to "Build failed"))
+            server.writeCompanionStatus("error", mapOf("message" to "Build failed"))
             TerminalUI.blank()
             TerminalUI.status("Watching for changes...")
             return
@@ -377,7 +377,7 @@ class DevCommand : CliktCommand(name = "dev") {
         File(ppDir, "reload-complete").delete()
         File(ppDir, "reload-failed").delete()
 
-        server.writeOverlayStatus("reloading", mapOf(
+        server.writeCompanionStatus("reloading", mapOf(
             "pluginName" to metadata.pluginName,
             "jarFileName" to builtJar.name,
             "pendingJar" to stagedName
@@ -394,10 +394,10 @@ class DevCommand : CliktCommand(name = "dev") {
             val totalDuration = formatDuration(System.currentTimeMillis() - totalStart)
             TerminalUI.success("Plugin reloaded", reloadDuration)
             TerminalUI.totalTime(totalDuration)
-            server.writeOverlayStatus("ready", mapOf("duration" to totalDuration))
+            server.writeCompanionStatus("ready", mapOf("duration" to totalDuration))
         } else {
             TerminalUI.error("Hot-reload failed (server still running with old plugin)", reloadDuration)
-            server.writeOverlayStatus("error", mapOf("message" to "Hot-reload failed"))
+            server.writeCompanionStatus("error", mapOf("message" to "Hot-reload failed"))
         }
 
         TerminalUI.blank()
@@ -449,7 +449,7 @@ class DevCommand : CliktCommand(name = "dev") {
         }
 
         val buildStart = System.currentTimeMillis()
-        serverManager.writeOverlayStatus("building")
+        serverManager.writeCompanionStatus("building")
         val buildSuccess = TerminalUI.spin("Building...") {
             gradle.build()
         }
@@ -457,7 +457,7 @@ class DevCommand : CliktCommand(name = "dev") {
 
         if (!buildSuccess) {
             TerminalUI.error("Build failed", buildDuration)
-            serverManager.writeOverlayStatus("error", mapOf("message" to "Build failed"))
+            serverManager.writeCompanionStatus("error", mapOf("message" to "Build failed"))
             TerminalUI.blank()
             TerminalUI.status("Waiting for changes...")
             waitForFixSingleServer(gradle, serverManager, config, metadata.jarPath, ppDir)
@@ -485,10 +485,10 @@ class DevCommand : CliktCommand(name = "dev") {
 
         if (ready) {
             TerminalUI.success("Paper $mcVersion server ready", serverDuration)
-            serverManager.writeOverlayStatus("ready", mapOf("duration" to serverDuration))
+            serverManager.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
         } else {
             TerminalUI.error("Server failed to start", serverDuration)
-            serverManager.writeOverlayStatus("error", mapOf("message" to "Server failed to start"))
+            serverManager.writeCompanionStatus("error", mapOf("message" to "Server failed to start"))
             return
         }
 
@@ -543,7 +543,7 @@ class DevCommand : CliktCommand(name = "dev") {
     ) {
         val totalStart = System.currentTimeMillis()
         serverManager.stop()
-        serverManager.writeOverlayStatus("building")
+        serverManager.writeCompanionStatus("building")
 
         val buildStart = System.currentTimeMillis()
         val buildSuccess = gradle.build()
@@ -551,7 +551,7 @@ class DevCommand : CliktCommand(name = "dev") {
 
         if (!buildSuccess) {
             TerminalUI.error("Build failed", buildDuration)
-            serverManager.writeOverlayStatus("error", mapOf("message" to "Build failed"))
+            serverManager.writeCompanionStatus("error", mapOf("message" to "Build failed"))
             TerminalUI.blank()
             TerminalUI.status("Waiting for changes...")
             return
@@ -570,10 +570,10 @@ class DevCommand : CliktCommand(name = "dev") {
             TerminalUI.success("Server ready", serverDuration)
             val totalDuration = formatDuration(System.currentTimeMillis() - totalStart)
             TerminalUI.totalTime(totalDuration)
-            serverManager.writeOverlayStatus("ready", mapOf("duration" to totalDuration))
+            serverManager.writeCompanionStatus("ready", mapOf("duration" to totalDuration))
         } else {
             TerminalUI.error("Server failed to start", serverDuration)
-            serverManager.writeOverlayStatus("error", mapOf("message" to "Server failed to start"))
+            serverManager.writeCompanionStatus("error", mapOf("message" to "Server failed to start"))
         }
     }
 
@@ -626,7 +626,7 @@ class DevCommand : CliktCommand(name = "dev") {
                 val serverDuration = formatDuration(System.currentTimeMillis() - serverStart)
                 if (ready) {
                     TerminalUI.success("Server ready", serverDuration)
-                    blue.writeOverlayStatus("ready", mapOf("duration" to serverDuration))
+                    blue.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
                     velocityManager.writeActiveServer("blue")
                 }
             } else {
@@ -660,7 +660,7 @@ class DevCommand : CliktCommand(name = "dev") {
             TerminalUI.change("Change detected: $shortName")
 
             val buildStart = System.currentTimeMillis()
-            serverManager.writeOverlayStatus("building")
+            serverManager.writeCompanionStatus("building")
             val buildSuccess = gradle.build()
             val buildDuration = formatDuration(System.currentTimeMillis() - buildStart)
 
@@ -682,7 +682,7 @@ class DevCommand : CliktCommand(name = "dev") {
                 val serverDuration = formatDuration(System.currentTimeMillis() - serverStart)
                 if (ready) {
                     TerminalUI.success("Server ready", serverDuration)
-                    serverManager.writeOverlayStatus("ready", mapOf("duration" to serverDuration))
+                    serverManager.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
                 }
             } else {
                 TerminalUI.error("Build failed", buildDuration)
