@@ -267,7 +267,7 @@ class PaperServerManager(
         val flagFile = File(serverDir, ".paperplane/server-ready")
         flagFile.delete() // Clear stale flag
         val startTime = System.currentTimeMillis()
-        val timeout = 60_000L
+        val timeout = 120_000L
         while (proc.isAlive && System.currentTimeMillis() - startTime < timeout) {
             if (flagFile.exists()) {
                 flagFile.delete()
