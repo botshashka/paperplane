@@ -428,7 +428,6 @@ object PaperInternals {
                             if (idx >= 0) {
                                 @Suppress("UNCHECKED_CAST")
                                 (value as MutableList<Any>)[idx] = newPlugin
-                                logger.info("Updated plugin in list: ${cls.simpleName}.${field.name}")
                                 updated = true
                             }
                         }
@@ -438,7 +437,6 @@ object PaperInternals {
                                 if (existing is Plugin && existing.name == pluginName) {
                                     @Suppress("UNCHECKED_CAST")
                                     (value as MutableMap<String, Any>)[key] = newPlugin
-                                    logger.info("Updated plugin in map: ${cls.simpleName}.${field.name}[$key]")
                                     updated = true
                                 }
                             }

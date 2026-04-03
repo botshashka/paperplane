@@ -165,12 +165,10 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
                     )
                     when (result) {
                         HotSwapResult.SUCCESS -> {
-                            val level = if (hotSwapper!!.isEnhancedRedefinitionAvailable()) "Level 3" else "Level 2"
-                            plugin.logger.info("⚡ $level hotswap — ${changedClasses.size} class(es) redefined in-place")
                             return ReloadOutcome(ReloadResult.SUCCESS, totalMs = 0)
                         }
                         else -> {
-                            plugin.logger.info("Hot-swap returned $result — falling back to classloader reload")
+                            plugin.logger.warning("Hot-swap returned $result — falling back to classloader reload")
                         }
                     }
                 }
@@ -180,7 +178,6 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
         // Level 1: Directory reload
         if (buildOutputDirs != null && buildOutputDirs.isNotEmpty() && strategy in listOf("directory", "hotswap")) {
             val rollbackJar = if (currentJar.exists()) currentJar else null
-            plugin.logger.info("🔄 Level 1 directory reload — loading from build output dirs")
             val outcome = reloader!!.reloadFromDirectory(pluginName, buildOutputDirs, rollbackJar)
             if (outcome.result == ReloadResult.SUCCESS) return outcome
             plugin.logger.warning("Directory reload failed (${outcome.result}), falling back to JAR reload")

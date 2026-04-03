@@ -60,7 +60,6 @@ class HotSwapper(private val logger: Logger) {
             val loadedClass = try {
                 pluginClassLoader.loadClass(fqcn)
             } catch (_: ClassNotFoundException) {
-                logger.info("Class $fqcn not loaded — can't hotswap (new class?)")
                 return HotSwapResult.NEW_CLASS
             }
 
@@ -76,7 +75,6 @@ class HotSwapper(private val logger: Logger) {
             if (!isEnhancedRedefinitionAvailable()) {
                 val oldBytes = readOldClassBytes(fqcn, pluginClassLoader)
                 if (oldBytes != null && !detector.isMethodBodyOnly(oldBytes, newBytes)) {
-                    logger.info("Structural change detected in $fqcn (pre-check) — falling back")
                     return HotSwapResult.STRUCTURAL_CHANGE
                 }
             }
@@ -86,10 +84,8 @@ class HotSwapper(private val logger: Logger) {
 
         return try {
             inst.redefineClasses(*definitions.toTypedArray())
-            logger.info("Hot-swapped ${definitions.size} class(es) in-place")
             HotSwapResult.SUCCESS
         } catch (_: UnsupportedOperationException) {
-            logger.info("JVM rejected redefinition (structural change) — falling back")
             HotSwapResult.STRUCTURAL_CHANGE
         } catch (e: Exception) {
             logger.warning("Hot-swap failed: ${e.message}")

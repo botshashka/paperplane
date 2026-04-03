@@ -201,7 +201,6 @@ class PluginReloader(
         checkForLeaks()
 
         val totalMs = System.currentTimeMillis() - totalStart
-        logger.info("Successfully hot-reloaded '$pluginName'")
         return ReloadOutcome(ReloadResult.SUCCESS, teardownMs, loadMs, totalMs)
     }
 
@@ -294,7 +293,7 @@ class PluginReloader(
             thread.interrupt()
         }
         if (pluginThreads.isNotEmpty()) {
-            logger.info("Interrupted ${pluginThreads.size} orphan thread(s) from old plugin")
+            logger.warning("Interrupted ${pluginThreads.size} orphan thread(s) from old plugin")
         }
 
         for (thread in pluginThreads) {
