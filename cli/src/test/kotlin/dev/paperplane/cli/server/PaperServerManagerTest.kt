@@ -78,6 +78,20 @@ class PaperServerManagerTest {
     }
 
     @Test
+    fun `copyCompanion removes stale overlay jar`() {
+        val manager = createManager()
+        manager.serverDir.mkdirs()
+        val pluginsDir = File(manager.serverDir, "plugins")
+        pluginsDir.mkdirs()
+        val staleJar = File(pluginsDir, "paperplane-overlay.jar")
+        staleJar.writeText("old-overlay")
+
+        manager.copyCompanion()
+
+        assertFalse(staleJar.exists(), "stale paperplane-overlay.jar should be deleted")
+    }
+
+    @Test
     fun `isRunning returns false when not started`() {
         val manager = createManager()
         assertFalse(manager.isRunning())
@@ -103,7 +117,7 @@ class PaperServerManagerTest {
         manager.serverDir.mkdirs()
         File(manager.serverDir, ".paperplane").mkdirs()
 
-        // Simulate overlay writing the flag after a short delay
+        // Simulate companion writing the flag after a short delay
         Thread {
             Thread.sleep(100)
             File(manager.serverDir, ".paperplane/save-complete").writeText("done")
@@ -151,7 +165,7 @@ class PaperServerManagerTest {
     }
 
     @Test
-    fun `waitForReady detects flag file from overlay`() {
+    fun `waitForReady detects flag file from companion`() {
         val manager = createManager()
         manager.serverDir.mkdirs()
         File(manager.serverDir, ".paperplane").mkdirs()

@@ -1,4 +1,4 @@
-package dev.paperplane.overlay
+package dev.paperplane.companion
 
 import com.google.gson.Gson
 import com.google.gson.JsonObject
@@ -15,6 +15,7 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
     private var lastState: String? = null
     var isSaving: Boolean = false
         private set
+    private var reloader: PluginReloader? = null
 
     private val prefix: Component = Component.text()
         .append(Component.text("PaperPlane ", NamedTextColor.AQUA))
@@ -57,9 +58,44 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
                     val message = json.get("message")?.asString ?: "Build error"
                     broadcast(Component.text(message, NamedTextColor.RED))
                 }
+                "reloading" -> {
+                    val pluginName = json.get("pluginName")?.asString ?: return
+                    val jarFileName = json.get("jarFileName")?.asString ?: return
+                    performReload(pluginName, jarFileName)
+                    // Reset so the next "reloading" write isn't deduplicated
+                    lastState = null
+                }
             }
         } catch (_: Exception) {
             // Ignore parse errors from partially-written files
+        }
+    }
+
+    private fun performReload(pluginName: String, jarFileName: String) {
+        val pluginsDir = plugin.dataFolder.parentFile // this IS the server's plugins/ dir
+        val jarFile = File(pluginsDir, jarFileName)
+        val ppDir = File(plugin.dataFolder.parentFile.parentFile, ".paperplane")
+        ppDir.mkdirs()
+
+        broadcast(Component.text("Reloading $pluginName...", NamedTextColor.GOLD))
+
+        if (reloader == null) {
+            reloader = PluginReloader(plugin.server, plugin.logger)
+        }
+
+        val result = reloader!!.reload(pluginName, jarFile)
+
+        if (result == ReloadResult.SUCCESS) {
+            File(ppDir, "reload-complete").writeText(System.currentTimeMillis().toString())
+            broadcast(Component.text("$pluginName reloaded!", NamedTextColor.GREEN))
+        } else {
+            File(ppDir, "reload-failed").writeText(result.name)
+            broadcast(Component.text("Reload failed: $result", NamedTextColor.RED))
+
+            // If reloader says we should stop trying, include that in the failure message
+            if (reloader!!.shouldForceBlueGreen) {
+                broadcast(Component.text("Switching to blue/green mode", NamedTextColor.YELLOW))
+            }
         }
     }
 

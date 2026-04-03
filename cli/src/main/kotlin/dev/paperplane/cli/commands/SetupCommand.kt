@@ -104,7 +104,7 @@ class SetupCommand : CliktCommand(name = "setup") {
                     - "-Xmx2G"
 
                 dev:
-                  overlay: true
+                  companion: true
             """.trimIndent() + "\n")
             TerminalUI.fileCreated("paperplane.yml")
         } else {

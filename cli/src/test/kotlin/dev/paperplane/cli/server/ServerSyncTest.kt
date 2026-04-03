@@ -79,16 +79,18 @@ class ServerSyncTest {
     }
 
     @Test
-    fun `skips dev plugin jar and overlay jar`() {
+    fun `skips dev plugin jar and companion jar`() {
         File(sourceDir, "plugins").mkdirs()
         File(sourceDir, "plugins/my-plugin.jar").writeText("old-plugin")
-        File(sourceDir, "plugins/paperplane-overlay.jar").writeText("old-overlay")
+        File(sourceDir, "plugins/paperplane-companion.jar").writeText("old-companion")
+        File(sourceDir, "plugins/paperplane-overlay.jar").writeText("stale-overlay")
         File(sourceDir, "plugins/WorldEdit.jar").writeText("worldedit")
 
         ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
 
         assertFalse(File(targetDir, "plugins/my-plugin.jar").exists())
-        assertFalse(File(targetDir, "plugins/paperplane-overlay.jar").exists())
+        assertFalse(File(targetDir, "plugins/paperplane-companion.jar").exists())
+        assertFalse(File(targetDir, "plugins/paperplane-overlay.jar").exists(), "stale overlay jar should be skipped")
         assertTrue(File(targetDir, "plugins/WorldEdit.jar").exists())
         assertEquals("worldedit", File(targetDir, "plugins/WorldEdit.jar").readText())
     }

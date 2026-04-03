@@ -16,6 +16,7 @@ import java.io.File
 
 class DevCommand : CliktCommand(name = "dev") {
     private val verbose by option("--verbose", "-v", help = "Show all server output").flag()
+    private val hotReload by option("--hot-reload", "-r", help = "Hot-reload plugin without server restart").flag()
     private val projectDir = File(System.getProperty("user.dir"))
 
     private enum class Slot(val serverName: String, val port: Int) {
@@ -28,15 +29,21 @@ class DevCommand : CliktCommand(name = "dev") {
         val version = javaClass.`package`?.implementationVersion ?: "0.1.0"
         TerminalUI.header(version)
 
-        val config = PaperPlaneConfig.load(projectDir)
+        val baseConfig = PaperPlaneConfig.load(projectDir)
+        // CLI flag overrides config
+        val config = if (hotReload) baseConfig.copy(dev = baseConfig.dev.copy(hotReload = true)) else baseConfig
         val ppDir = File(projectDir, ".paperplane")
         ppDir.mkdirs()
 
-        val useProxy = config.dev.proxy
         val gradle = GradleBridge(projectDir)
         val downloader = PaperDownloader(File(ppDir, "cache"))
 
-        if (useProxy) {
+        if (config.dev.hotReload) {
+            if (config.dev.proxy) {
+                TerminalUI.info("Note:", "hot-reload mode ignores proxy setting (single server only)")
+            }
+            runSingleServer(config, ppDir, gradle, downloader)
+        } else if (config.dev.proxy) {
             runBlueGreen(config, ppDir, gradle, downloader)
         } else {
             runSingleServer(config, ppDir, gradle, downloader)
@@ -137,7 +144,7 @@ class DevCommand : CliktCommand(name = "dev") {
 
         val builtJar = File(projectDir, metadata.jarPath)
         active.copyPlugin(builtJar)
-        if (config.dev.overlay) active.copyOverlay()
+        if (config.dev.companion) active.copyCompanion()
 
         val serverStart = System.currentTimeMillis()
         active.start(paperJar, config.server.jvmArgs)
@@ -158,13 +165,15 @@ class DevCommand : CliktCommand(name = "dev") {
         TerminalUI.blank()
         TerminalUI.info("Server:", "localhost:25565 (via proxy)")
         TerminalUI.info("Plugin:", "${metadata.pluginName} v${metadata.version}")
-        if (config.dev.overlay) TerminalUI.info("Overlay:", "enabled")
-        TerminalUI.info("Mode:", "blue/green (zero-downtime)")
+        if (config.dev.companion) TerminalUI.info("Companion:", "enabled")
+        TerminalUI.info("Mode:", if (config.dev.hotReload) "hot-reload" else "blue/green (zero-downtime)")
         TerminalUI.blank()
         TerminalUI.status("Watching for changes...")
 
-        // Step 6: Pre-warm standby server in background
-        preWarmStandby(servers[Slot.GREEN]!!, active, Slot.GREEN.port, builtJar, config, paperJar, velocityManager)
+        // Step 6: Pre-warm standby server in background (skip in hot-reload mode)
+        if (!config.dev.hotReload) {
+            preWarmStandby(servers[Slot.GREEN]!!, active, Slot.GREEN.port, builtJar, config, paperJar, velocityManager)
+        }
 
         // Step 7: Watch and rebuild loop
         val srcDir = File(projectDir, "src")
@@ -173,9 +182,13 @@ class DevCommand : CliktCommand(name = "dev") {
             val extra = if (changedFiles.size > 1) " (+${changedFiles.size - 1} more)" else ""
             TerminalUI.change("Change detected: $shortName$extra")
 
-            activeSlot = blueGreenRebuild(
-                gradle, servers, activeSlot, velocityManager, config, metadata, paperJar, projectDir
-            )
+            if (config.dev.hotReload && config.dev.companion) {
+                hotReloadRebuild(gradle, servers[activeSlot]!!, config, metadata, projectDir)
+            } else {
+                activeSlot = blueGreenRebuild(
+                    gradle, servers, activeSlot, velocityManager, config, metadata, paperJar, projectDir
+                )
+            }
         }
 
         watcher.start()
@@ -252,9 +265,9 @@ class DevCommand : CliktCommand(name = "dev") {
         }
         TerminalUI.success("Build succeeded", buildDuration)
 
-        // 4. Deploy new plugin + overlay to standby (sync already done)
+        // 4. Deploy new plugin + companion to standby (sync already done)
         standby.copyPlugin(builtJar)
-        if (config.dev.overlay) standby.copyOverlay()
+        if (config.dev.companion) standby.copyCompanion()
 
         // 5. Start standby
         val serverStart = System.currentTimeMillis()
@@ -277,7 +290,7 @@ class DevCommand : CliktCommand(name = "dev") {
         velocityManager.waitForTransferComplete()
         Thread.sleep(200) // Brief safety margin for connection establishment
 
-        // 7. Write "ready" to new server's overlay before stopping old
+        // 7. Write "ready" to new server's companion before stopping old
         val totalDuration = formatDuration(System.currentTimeMillis() - totalStart)
         standby.writeOverlayStatus("ready", mapOf("duration" to totalDuration))
 
@@ -318,12 +331,94 @@ class DevCommand : CliktCommand(name = "dev") {
             standby.configureVelocityForwarding(velocityManager.forwardingSecret)
             ServerSync.syncServerState(source.serverDir, standby.serverDir, standbyPort, pluginJar.name)
             standby.copyPlugin(pluginJar)
-            if (config.dev.overlay) standby.copyOverlay()
+            if (config.dev.companion) standby.copyCompanion()
             standby.start(paperJar, config.server.jvmArgs)
             standby.waitForReady()
         } catch (_: Exception) {
             // Pre-warm is best-effort; failure here doesn't affect the active server
         }
+    }
+
+    // ── Hot-reload mode ──────────────────────────────────────────────────
+
+    private fun hotReloadRebuild(
+        gradle: GradleBridge,
+        server: PaperServerManager,
+        config: PaperPlaneConfig,
+        metadata: dev.paperplane.cli.gradle.ProjectMetadata,
+        projectDir: File
+    ) {
+        val totalStart = System.currentTimeMillis()
+
+        // 1. Build — no world save needed, server stays running
+        server.writeOverlayStatus("building")
+        val buildStart = System.currentTimeMillis()
+        val buildSuccess = gradle.build()
+        val buildDuration = formatDuration(System.currentTimeMillis() - buildStart)
+
+        if (!buildSuccess) {
+            TerminalUI.error("Build failed", buildDuration)
+            server.writeOverlayStatus("error", mapOf("message" to "Build failed"))
+            TerminalUI.blank()
+            TerminalUI.status("Watching for changes...")
+            return
+        }
+        TerminalUI.success("Build succeeded", buildDuration)
+
+        // 2. Copy new jar to active server's plugins directory
+        val builtJar = File(projectDir, metadata.jarPath)
+        server.copyPlugin(builtJar)
+
+        // 3. Clear flag files and signal companion to reload
+        val ppDir = File(server.serverDir, ".paperplane")
+        ppDir.mkdirs()
+        File(ppDir, "reload-complete").delete()
+        File(ppDir, "reload-failed").delete()
+
+        server.writeOverlayStatus("reloading", mapOf(
+            "pluginName" to metadata.pluginName,
+            "jarFileName" to builtJar.name
+        ))
+
+        // 4. Wait for confirmation from companion plugin
+        val reloadStart = System.currentTimeMillis()
+        val success = TerminalUI.spin("Reloading ${metadata.pluginName}...") {
+            waitForReloadResult(ppDir, timeoutMs = 10_000)
+        }
+        val reloadDuration = formatDuration(System.currentTimeMillis() - reloadStart)
+
+        if (success) {
+            val totalDuration = formatDuration(System.currentTimeMillis() - totalStart)
+            TerminalUI.success("Plugin reloaded", reloadDuration)
+            TerminalUI.totalTime(totalDuration)
+            server.writeOverlayStatus("ready", mapOf("duration" to totalDuration))
+        } else {
+            TerminalUI.error("Hot-reload failed (server still running with old plugin)", reloadDuration)
+            server.writeOverlayStatus("error", mapOf("message" to "Hot-reload failed"))
+        }
+
+        TerminalUI.blank()
+        TerminalUI.status("Watching for changes...")
+    }
+
+    private fun waitForReloadResult(ppDir: File, timeoutMs: Long): Boolean {
+        val completeFlag = File(ppDir, "reload-complete")
+        val failedFlag = File(ppDir, "reload-failed")
+        val start = System.currentTimeMillis()
+        while (System.currentTimeMillis() - start < timeoutMs) {
+            if (completeFlag.exists()) {
+                completeFlag.delete()
+                return true
+            }
+            if (failedFlag.exists()) {
+                val reason = failedFlag.readText()
+                failedFlag.delete()
+                TerminalUI.error("Reload failed: $reason")
+                return false
+            }
+            Thread.sleep(100)
+        }
+        return false
     }
 
     // ── Single-server mode (proxy=false) ────────────────────────────────
@@ -375,7 +470,7 @@ class DevCommand : CliktCommand(name = "dev") {
         serverManager.configure()
         val builtJar = File(projectDir, metadata.jarPath)
         serverManager.copyPlugin(builtJar)
-        if (config.dev.overlay) serverManager.copyOverlay()
+        if (config.dev.companion) serverManager.copyCompanion()
 
         val serverStart = System.currentTimeMillis()
         serverManager.start(paperJar, config.server.jvmArgs)
@@ -396,7 +491,8 @@ class DevCommand : CliktCommand(name = "dev") {
         TerminalUI.blank()
         TerminalUI.info("Server:", "localhost:25565")
         TerminalUI.info("Plugin:", "${metadata.pluginName} v${metadata.version}")
-        if (config.dev.overlay) TerminalUI.info("Overlay:", "enabled")
+        if (config.dev.companion) TerminalUI.info("Companion:", "enabled")
+        if (config.dev.hotReload) TerminalUI.info("Mode:", "hot-reload")
         TerminalUI.blank()
         TerminalUI.status("Watching for changes...")
 
@@ -405,7 +501,12 @@ class DevCommand : CliktCommand(name = "dev") {
             val shortName = changedFiles.firstOrNull()?.substringAfterLast("/") ?: "files"
             val extra = if (changedFiles.size > 1) " (+${changedFiles.size - 1} more)" else ""
             TerminalUI.change("Change detected: $shortName$extra")
-            singleServerRebuild(gradle, serverManager, config, metadata, paperJar, projectDir)
+
+            if (config.dev.hotReload && config.dev.companion) {
+                hotReloadRebuild(gradle, serverManager, config, metadata, projectDir)
+            } else {
+                singleServerRebuild(gradle, serverManager, config, metadata, paperJar, projectDir)
+            }
         }
 
         watcher.start()
@@ -512,7 +613,7 @@ class DevCommand : CliktCommand(name = "dev") {
                 blue.configureVelocityForwarding(velocityManager.forwardingSecret)
                 val builtJar = File(projectDir, metadata.jarPath)
                 blue.copyPlugin(builtJar)
-                if (config.dev.overlay) blue.copyOverlay()
+                if (config.dev.companion) blue.copyCompanion()
 
                 val serverStart = System.currentTimeMillis()
                 blue.start(paperJar, config.server.jvmArgs)
@@ -567,7 +668,7 @@ class DevCommand : CliktCommand(name = "dev") {
                 serverManager.configure()
                 val builtJar = File(projectDir, metadata.jarPath)
                 serverManager.copyPlugin(builtJar)
-                if (config.dev.overlay) serverManager.copyOverlay()
+                if (config.dev.companion) serverManager.copyCompanion()
 
                 val serverStart = System.currentTimeMillis()
                 serverManager.start(paperJar, config.server.jvmArgs)

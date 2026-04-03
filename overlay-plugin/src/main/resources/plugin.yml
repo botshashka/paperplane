@@ -1,6 +1,0 @@
-name: PaperPlane-Overlay
-main: dev.paperplane.overlay.DevOverlayPlugin
-version: 0.1.0
-api-version: 1.21
-description: PaperPlane dev overlay - in-game build status and error reporting
-load: POSTWORLD

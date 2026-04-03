@@ -1,4 +1,4 @@
-package dev.paperplane.overlay
+package dev.paperplane.companion
 
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
@@ -9,7 +9,7 @@ import org.bukkit.event.server.PluginEnableEvent
 import org.bukkit.plugin.java.JavaPlugin
 
 class ErrorCatcher(private val plugin: JavaPlugin) : Listener {
-    private val overlayPackage = "dev.paperplane.overlay"
+    private val companionPackage = "dev.paperplane.companion"
 
     @EventHandler
     fun onPluginEnable(event: PluginEnableEvent) {
@@ -19,7 +19,7 @@ class ErrorCatcher(private val plugin: JavaPlugin) : Listener {
 
     fun broadcastError(throwable: Throwable) {
         val frames = throwable.stackTrace
-            .filter { !it.className.startsWith(overlayPackage) }
+            .filter { !it.className.startsWith(companionPackage) }
             .take(5)
 
         val header = Component.text("  Exception: ", NamedTextColor.RED, TextDecoration.BOLD)

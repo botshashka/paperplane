@@ -11,7 +11,7 @@ object ServerSync {
      * Syncs all runtime state from source server to target server.
      * Uses incremental sync (timestamp + size) to skip unchanged files.
      * Copies everything except lock files and CLI state, then patches the port in server.properties.
-     * The dev plugin jar and overlay jar are skipped (deployed fresh after sync).
+     * The dev plugin jar and companion jar are skipped (deployed fresh after sync).
      */
     fun syncServerState(sourceDir: File, targetDir: File, targetPort: Int, devPluginJarName: String) {
         targetDir.mkdirs()
@@ -52,14 +52,14 @@ object ServerSync {
 
         // Remove files in target that don't exist in source (respecting skip rules)
         for ((name, dstChild) in dstChildren) {
-            if (name == devPluginJarName || name == "paperplane-overlay.jar") continue
+            if (name == devPluginJarName || name == "paperplane-companion.jar" || name == "paperplane-overlay.jar") continue
             if (name !in srcChildren) {
                 if (dstChild.isDirectory) deleteDir(dstChild) else dstChild.delete()
             }
         }
 
         for ((name, child) in srcChildren) {
-            if (child.isFile && (child.name == devPluginJarName || child.name == "paperplane-overlay.jar")) continue
+            if (child.isFile && (child.name == devPluginJarName || child.name == "paperplane-companion.jar" || child.name == "paperplane-overlay.jar")) continue
             val dst = File(dstPlugins, name)
             if (child.isDirectory) {
                 incrementalSyncDir(child, dst)

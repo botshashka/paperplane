@@ -1,4 +1,4 @@
-package dev.paperplane.overlay
+package dev.paperplane.companion
 
 import org.bukkit.event.EventHandler
 import org.bukkit.event.Listener

@@ -15,11 +15,11 @@ dependencies {
     testRuntimeOnly(libs.junit.platform.launcher)
 }
 
-// Copy overlay jar as .bin so Shadow doesn't unpack it
-val copyOverlay = tasks.register<Copy>("copyOverlayJar") {
-    from(project(":overlay-plugin").tasks.named("shadowJar"))
-    into(layout.buildDirectory.dir("overlay"))
-    rename { "paperplane-overlay.bin" }
+// Copy companion jar as .bin so Shadow doesn't unpack it
+val copyCompanion = tasks.register<Copy>("copyCompanionJar") {
+    from(project(":companion-plugin").tasks.named("shadowJar"))
+    into(layout.buildDirectory.dir("companion"))
+    rename { "paperplane-companion.bin" }
 }
 
 // Copy velocity plugin jar as .bin so Shadow doesn't unpack it
@@ -30,8 +30,8 @@ val copyVelocityPlugin = tasks.register<Copy>("copyVelocityPluginJar") {
 }
 
 tasks.processResources {
-    dependsOn(copyOverlay, copyVelocityPlugin)
-    from(layout.buildDirectory.dir("overlay"))
+    dependsOn(copyCompanion, copyVelocityPlugin)
+    from(layout.buildDirectory.dir("companion"))
     from(layout.buildDirectory.dir("velocity"))
 }
 

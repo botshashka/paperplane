@@ -12,14 +12,14 @@ dependencies {
 }
 
 tasks.shadowJar {
-    archiveBaseName.set("paperplane-overlay")
+    archiveBaseName.set("paperplane-companion")
     archiveClassifier.set("")
     archiveVersion.set("")
 }
 
 // Make 'jar' point to shadowJar so downstream tasks get the fat jar
 tasks.jar {
-    archiveBaseName.set("paperplane-overlay")
+    archiveBaseName.set("paperplane-companion")
     enabled = false
 }
 

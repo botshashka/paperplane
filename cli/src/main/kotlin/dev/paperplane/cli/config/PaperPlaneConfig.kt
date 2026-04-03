@@ -29,10 +29,12 @@ data class ServerConfig(
 
 @Serializable
 data class DevConfig(
-    val overlay: Boolean = true,
+    val companion: Boolean = true,
     @SerialName("verbose-server")
     val verboseServer: Boolean = false,
     @SerialName("debounce-ms")
     val debounceMs: Long = 2000,
-    val proxy: Boolean = true
+    val proxy: Boolean = true,
+    @SerialName("hot-reload")
+    val hotReload: Boolean = false
 )

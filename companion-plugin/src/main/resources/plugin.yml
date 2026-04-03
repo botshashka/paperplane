@@ -1,0 +1,6 @@
+name: PaperPlane
+main: dev.paperplane.companion.CompanionPlugin
+version: 0.1.0
+api-version: 1.21
+description: PaperPlane dev companion - in-game build status, save coordination, and plugin reload
+load: POSTWORLD

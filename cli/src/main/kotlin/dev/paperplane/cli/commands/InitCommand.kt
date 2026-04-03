@@ -271,7 +271,7 @@ class InitCommand : CliktCommand(name = "init") {
             - "-Xmx2G"
 
         dev:
-          overlay: true
+          companion: true
           verbose-server: false  # set to true to show all server output
     """.trimIndent() + "\n"
 

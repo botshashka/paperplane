@@ -89,15 +89,17 @@ class PaperServerManager(
         jarPath.copyTo(target, overwrite = true)
     }
 
-    fun copyOverlay() {
-        val overlayStream = javaClass.classLoader.getResourceAsStream("paperplane-overlay.bin")
-        if (overlayStream != null) {
-            val target = File(pluginsDir, "paperplane-overlay.jar")
-            overlayStream.use { input ->
+    fun copyCompanion() {
+        val companionStream = javaClass.classLoader.getResourceAsStream("paperplane-companion.bin")
+        if (companionStream != null) {
+            val target = File(pluginsDir, "paperplane-companion.jar")
+            companionStream.use { input ->
                 target.outputStream().use { output ->
                     input.copyTo(output)
                 }
             }
+            // Remove stale jar from before the overlay → companion rename
+            File(pluginsDir, "paperplane-overlay.jar").delete()
         }
     }
 
@@ -157,15 +159,15 @@ class PaperServerManager(
     }
 
     /**
-     * Waits for the overlay plugin to complete a save.
-     * The CLI writes "saving" to overlay-status.json, the overlay does the save
+     * Waits for the companion plugin to complete a save.
+     * The CLI writes "saving" to overlay-status.json, the companion does the save
      * via Bukkit API (no broadcast), then writes a flag file.
      */
     fun waitForSave(timeoutMs: Long = 10_000): Boolean {
         val flagFile = File(serverDir, ".paperplane/save-complete")
         flagFile.delete() // Clear any stale flag
 
-        // The overlay plugin polls every 1s and saves when it sees "saving" state.
+        // The companion plugin polls every 1s and saves when it sees "saving" state.
         // We poll for the flag file it writes on completion.
         val startTime = System.currentTimeMillis()
         while (System.currentTimeMillis() - startTime < timeoutMs) {
@@ -187,12 +189,12 @@ class PaperServerManager(
         val startTime = System.currentTimeMillis()
         val timeout = 60_000L
         while (proc.isAlive && System.currentTimeMillis() - startTime < timeout) {
-            // Prefer flag file (written by overlay plugin after all plugins loaded)
+            // Prefer flag file (written by companion plugin after all plugins loaded)
             if (flagFile.exists()) {
                 flagFile.delete()
                 return true
             }
-            // Fallback: TCP port check (works even without overlay)
+            // Fallback: TCP port check (works even without companion)
             try {
                 java.net.Socket("localhost", port).close()
                 return true
