@@ -138,7 +138,8 @@ class DevCommand : CliktCommand(name = "dev") {
             return
         }
 
-        // Step 5: Configure and start Blue
+        // Step 5: Clean up stale state from previous runs, configure and start Blue
+        servers.values.forEach { it.cleanupStale() }
         active.configure()
         active.configureVelocityForwarding(velocityManager.forwardingSecret)
 
@@ -327,6 +328,7 @@ class DevCommand : CliktCommand(name = "dev") {
         try {
             if (standby.isRunning()) return
             standby.serverDir.mkdirs()
+            standby.cleanupStale()
             standby.configure()
             standby.configureVelocityForwarding(velocityManager.forwardingSecret)
             ServerSync.syncServerState(source.serverDir, standby.serverDir, standbyPort, pluginJar.name)
@@ -467,6 +469,7 @@ class DevCommand : CliktCommand(name = "dev") {
             downloader.download(mcVersion)
         }
 
+        serverManager.cleanupStale()
         serverManager.configure()
         val builtJar = File(projectDir, metadata.jarPath)
         serverManager.copyPlugin(builtJar)
@@ -609,6 +612,7 @@ class DevCommand : CliktCommand(name = "dev") {
 
                 // Start blue server
                 val blue = servers[Slot.BLUE]!!
+                blue.cleanupStale()
                 blue.configure()
                 blue.configureVelocityForwarding(velocityManager.forwardingSecret)
                 val builtJar = File(projectDir, metadata.jarPath)
@@ -665,6 +669,7 @@ class DevCommand : CliktCommand(name = "dev") {
                 val mcVersion = config.server.version ?: metadata.paperApiVersion
                 val downloader = PaperDownloader(File(ppDir, "cache"))
                 val paperJar = downloader.download(mcVersion)
+                serverManager.cleanupStale()
                 serverManager.configure()
                 val builtJar = File(projectDir, metadata.jarPath)
                 serverManager.copyPlugin(builtJar)

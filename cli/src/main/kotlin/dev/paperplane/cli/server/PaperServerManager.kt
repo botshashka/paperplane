@@ -13,13 +13,46 @@ class PaperServerManager(
     private var processStdin: java.io.OutputStream? = null
     private val pluginsDir = File(serverDir, "plugins")
 
+    /**
+     * Cleans up stale state from a previous run that wasn't shut down cleanly.
+     * Kills any process occupying the server port and removes world lock files.
+     */
+    fun cleanupStale() {
+        // Kill any process still bound to our port (zombie from previous run)
+        try {
+            val lsof = ProcessBuilder("lsof", "-ti", "tcp:$port")
+                .redirectErrorStream(true)
+                .start()
+            val pids = lsof.inputStream.bufferedReader().readText().trim()
+            lsof.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+            if (pids.isNotEmpty()) {
+                for (pid in pids.lines().filter { it.isNotBlank() }) {
+                    ProcessBuilder("kill", "-9", pid).start().waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+                }
+                Thread.sleep(500) // Brief wait for port release
+            }
+        } catch (_: Exception) {
+            // Best-effort; lsof may not be available on all systems
+        }
+
+        // Remove stale session.lock files from world directories
+        if (serverDir.exists()) {
+            serverDir.listFiles()?.filter { it.isDirectory }?.forEach { dir ->
+                val lock = File(dir, "session.lock")
+                if (lock.exists()) lock.delete()
+            }
+        }
+    }
+
     fun configure() {
         serverDir.mkdirs()
         pluginsDir.mkdirs()
 
         writeIfMissing("eula.txt", "eula=true\n")
 
-        writeIfMissing("server.properties", """
+        // Always overwrite — PaperPlane manages these settings, and Paper rewrites
+        // the file on first boot (making writeIfMissing a no-op for new properties)
+        File(serverDir, "server.properties").writeText("""
             online-mode=false
             view-distance=4
             simulation-distance=4
@@ -30,6 +63,7 @@ class PaperServerManager(
             server-port=$port
             motd=PaperPlane Dev Server
             generate-structures=false
+            accepts-transfers=true
         """.trimIndent() + "\n")
 
         writeIfMissing("bukkit.yml", """

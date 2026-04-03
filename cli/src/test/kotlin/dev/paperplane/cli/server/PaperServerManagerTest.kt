@@ -25,9 +25,23 @@ class PaperServerManagerTest {
         val props = File(manager.serverDir, "server.properties").readText()
         assertTrue(props.contains("server-port=25566"))
         assertTrue(props.contains("online-mode=false"))
+        assertTrue(props.contains("accepts-transfers=true"))
         assertTrue(File(manager.serverDir, "eula.txt").exists())
         assertTrue(File(manager.serverDir, "bukkit.yml").exists())
         assertTrue(File(manager.serverDir, "spigot.yml").exists())
+    }
+
+    @Test
+    fun `configure overwrites existing server properties`() {
+        val manager = createManager(25566)
+        manager.serverDir.mkdirs()
+        // Simulate Paper having rewritten server.properties without accepts-transfers
+        File(manager.serverDir, "server.properties").writeText("server-port=25566\nonline-mode=false\n")
+
+        manager.configure()
+
+        val props = File(manager.serverDir, "server.properties").readText()
+        assertTrue(props.contains("accepts-transfers=true"), "should overwrite with new properties")
     }
 
     @Test
