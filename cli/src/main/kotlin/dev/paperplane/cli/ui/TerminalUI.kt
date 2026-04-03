@@ -73,6 +73,13 @@ object TerminalUI {
         }
     }
 
+    fun testFailure(errorText: String) {
+        val lines = errorText.lines().filter { it.isNotBlank() }
+        for (errLine in lines) {
+            println("       ${red(errLine)}")
+        }
+    }
+
     fun blank() {
         println()
     }

@@ -11,6 +11,8 @@ import javax.xml.parsers.DocumentBuilderFactory
 
 class TestCommand : CliktCommand(name = "test") {
     private val watch by option("--watch", "-w", help = "Re-run tests on file changes").flag()
+    private val verbose by option("--verbose", "-v", help = "Show full error messages").flag()
+    private val filter by option("--filter", "-f", help = "Filter tests by name (e.g. 'blockBreak')")
     private val projectDir = File(System.getProperty("user.dir"))
 
     override fun run() {
@@ -44,11 +46,19 @@ class TestCommand : CliktCommand(name = "test") {
         val gradle = GradleBridge(projectDir)
 
         val buildStart = System.currentTimeMillis()
-        val success = gradle.test()
+        // Clean stale results so filtered runs don't show old tests
+        val resultsDir = File(projectDir, "build/test-results/test")
+        if (resultsDir.exists()) {
+            resultsDir.listFiles { _, name -> name.endsWith(".xml") }?.forEach { it.delete() }
+        }
+
+        val spinMessage = if (filter != null) "Running tests matching \"$filter\"..." else "Running tests..."
+        val success = TerminalUI.spin(spinMessage) {
+            gradle.test(quiet = true, filter = filter)
+        }
         val totalDuration = System.currentTimeMillis() - buildStart
 
         // Parse JUnit XML results
-        val resultsDir = File(projectDir, "build/test-results/test")
         if (resultsDir.exists()) {
             val results = parseTestResults(resultsDir)
             displayResults(results)
@@ -60,6 +70,9 @@ class TestCommand : CliktCommand(name = "test") {
             val testTime = formatDuration(results.sumOf { it.timeMs }.toLong())
 
             TerminalUI.testSummary(passed, failed, total, totalTime, testTime)
+            if (failed > 0 && !verbose) {
+                TerminalUI.status("Run with --verbose for full stack traces")
+            }
         } else if (!success) {
             TerminalUI.error("Tests failed (no results found)", formatDuration(totalDuration))
         }
@@ -86,11 +99,12 @@ class TestCommand : CliktCommand(name = "test") {
                     val time = testElement.attributes.getNamedItem("time")?.nodeValue?.toDoubleOrNull() ?: 0.0
                     val failures = (testElement as org.w3c.dom.Element).getElementsByTagName("failure")
                     val errors = testElement.getElementsByTagName("error")
-                    val failureMessage = if (failures.length > 0) {
-                        failures.item(0).textContent?.take(200)
+                    val rawMessage = if (failures.length > 0) {
+                        failures.item(0).textContent
                     } else if (errors.length > 0) {
-                        errors.item(0).textContent?.take(200)
+                        errors.item(0).textContent
                     } else null
+                    val failureMessage = if (verbose) rawMessage else rawMessage?.lines()?.firstOrNull { it.isNotBlank() }
 
                     testCases.add(TestCaseResult(name, time * 1000, failureMessage))
                 }
@@ -109,7 +123,7 @@ class TestCommand : CliktCommand(name = "test") {
                 val passed = case.failure == null
                 TerminalUI.testCase(case.name, passed, formatDuration(case.timeMs.toLong()))
                 if (case.failure != null) {
-                    TerminalUI.buildError("", null, case.failure)
+                    TerminalUI.testFailure(case.failure)
                 }
             }
         }

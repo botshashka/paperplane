@@ -46,19 +46,25 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
         }
     }
 
-    fun test(): Boolean {
+    fun test(quiet: Boolean = false, filter: String? = null): Boolean {
         val stdout = ByteArrayOutputStream()
         val stderr = ByteArrayOutputStream()
         return try {
+            val args = mutableListOf("test")
+            if (filter != null) {
+                args.addAll(listOf("--tests", "*$filter*"))
+            }
             connect().newBuild()
-                .forTasks("test")
+                .withArguments(args)
                 .setStandardOutput(stdout)
                 .setStandardError(stderr)
                 .run()
             true
         } catch (e: Exception) {
-            val output = stderr.toString() + stdout.toString()
-            parseBuildErrors(output)
+            if (!quiet) {
+                val output = stderr.toString() + stdout.toString()
+                parseBuildErrors(output)
+            }
             false
         }
     }
