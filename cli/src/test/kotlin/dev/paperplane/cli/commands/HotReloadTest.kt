@@ -176,7 +176,7 @@ class HotReloadTest {
     fun `config without mode field defaults to HOT_RELOAD`() {
         val yaml = """
             dev:
-              companion: true
+              debounce-ms: 2000
         """.trimIndent()
 
         val config = Yaml.default.decodeFromString<PaperPlaneConfig>(yaml)
@@ -198,8 +198,6 @@ class HotReloadTest {
     fun `empty config has all defaults`() {
         val config = PaperPlaneConfig()
         assertEquals(DevMode.HOT_RELOAD, config.dev.mode)
-        assertTrue(config.dev.companion)
-        assertFalse(config.dev.verboseServer)
         assertEquals(2000, config.dev.debounceMs)
     }
 
@@ -212,8 +210,6 @@ class HotReloadTest {
                 - "-Xmx4G"
                 - "-Xms1G"
             dev:
-              companion: false
-              verbose-server: true
               debounce-ms: 5000
               mode: hot-reload
         """.trimIndent()
@@ -221,8 +217,6 @@ class HotReloadTest {
         val config = Yaml.default.decodeFromString<PaperPlaneConfig>(yaml)
         assertEquals("1.21.4", config.server.version)
         assertEquals(listOf("-Xmx4G", "-Xms1G"), config.server.jvmArgs)
-        assertFalse(config.dev.companion)
-        assertTrue(config.dev.verboseServer)
         assertEquals(5000, config.dev.debounceMs)
         assertEquals(DevMode.HOT_RELOAD, config.dev.mode)
     }
@@ -260,8 +254,6 @@ class HotReloadTest {
 
         assertEquals(DevMode.RESTART, config.dev.mode)
         // Other fields remain unchanged
-        assertTrue(config.dev.companion)
-        assertFalse(config.dev.verboseServer)
         assertEquals(2000, config.dev.debounceMs)
     }
 
@@ -286,8 +278,6 @@ class HotReloadTest {
     fun `CLI flag override does not affect other dev config fields`() {
         val baseConfig = PaperPlaneConfig(
             dev = DevConfig(
-                companion = false,
-                verboseServer = true,
                 debounceMs = 5000,
                 mode = DevMode.RESTART
             )
@@ -296,8 +286,6 @@ class HotReloadTest {
         val config = baseConfig.copy(dev = baseConfig.dev.copy(mode = DevMode.HOT_RELOAD))
 
         assertEquals(DevMode.HOT_RELOAD, config.dev.mode)
-        assertFalse(config.dev.companion, "companion should remain false")
-        assertTrue(config.dev.verboseServer, "verboseServer should remain true")
         assertEquals(5000, config.dev.debounceMs, "debounceMs should remain 5000")
     }
 

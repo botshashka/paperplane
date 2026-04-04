@@ -2,10 +2,12 @@ package dev.paperplane.gradle
 
 import com.google.gson.GsonBuilder
 import org.gradle.api.DefaultTask
+import org.gradle.api.plugins.JavaPluginExtension
 import org.gradle.work.DisableCachingByDefault
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.SourceSet
 import org.gradle.api.tasks.TaskAction
 import java.io.File
 
@@ -22,8 +24,18 @@ abstract class MetadataTask : DefaultTask() {
         val jarTask = project.tasks.named("jar").get() as org.gradle.jvm.tasks.Jar
         val jarPath = jarTask.archiveFile.get().asFile.relativeTo(project.projectDir).path
 
-        val classesDir = project.layout.buildDirectory.dir("classes/kotlin/main").get().asFile.absolutePath
-        val resourcesDir = project.layout.buildDirectory.dir("resources/main").get().asFile.absolutePath
+        // Use Gradle's source set API to find actual class output directories.
+        // This works for Java, Kotlin, and mixed projects — each language plugin
+        // adds its output directory to the main source set's classesDirs.
+        val mainSourceSet = project.extensions.getByType(JavaPluginExtension::class.java)
+            .sourceSets.getByName(SourceSet.MAIN_SOURCE_SET_NAME)
+        val classesDirs = mainSourceSet.output.classesDirs.files
+            .filter { it.exists() }
+            .map { it.absolutePath }
+        val classesDir = classesDirs.firstOrNull()
+            ?: project.layout.buildDirectory.dir("classes/java/main").get().asFile.absolutePath
+        val resourcesDir = mainSourceSet.output.resourcesDir?.absolutePath
+            ?: project.layout.buildDirectory.dir("resources/main").get().asFile.absolutePath
         val runtimeJars = try {
             project.configurations.getByName("runtimeClasspath")
                 .resolve().map { it.absolutePath }
@@ -37,6 +49,7 @@ abstract class MetadataTask : DefaultTask() {
             "projectDir" to project.projectDir.absolutePath,
             "version" to project.version.toString(),
             "classesDir" to classesDir,
+            "classesDirs" to classesDirs,
             "resourcesDir" to resourcesDir,
             "runtimeClasspath" to runtimeJars
         )

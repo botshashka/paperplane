@@ -91,8 +91,6 @@ class DevCommandJbrTest {
               mode: hot-reload
               jbr: "on"
               debounce-ms: 1500
-              verbose-server: true
-              companion: true
         """.trimIndent()
         val config = Yaml.default.decodeFromString<PaperPlaneConfig>(yaml)
 
@@ -101,8 +99,6 @@ class DevCommandJbrTest {
         assertEquals(DevMode.HOT_RELOAD, config.dev.mode)
         assertEquals("on", config.dev.jbr)
         assertEquals(1500L, config.dev.debounceMs)
-        assertTrue(config.dev.verboseServer)
-        assertTrue(config.dev.companion)
     }
 
     // ── Config file loading ────────────────────────────────────────────

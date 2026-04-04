@@ -16,6 +16,7 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
         private set
     private var reloader: PluginReloader? = null
     private var hotSwapper: HotSwapper? = null
+    private var isReloading = false
 
     private val prefix: Component = Component.text()
         .append(Component.text("PaperPlane ", NamedTextColor.AQUA))
@@ -62,12 +63,25 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
                     performReload(json)
                 }
             }
-        } catch (_: Exception) {
-            // Ignore parse errors from partially-written files
+        } catch (e: Exception) {
+            plugin.logger.fine("Status file poll error: ${e.message}")
         }
     }
 
     private fun performReload(json: JsonObject) {
+        if (isReloading) {
+            plugin.logger.fine("Reload already in progress, skipping")
+            return
+        }
+        isReloading = true
+        try {
+            doReload(json)
+        } finally {
+            isReloading = false
+        }
+    }
+
+    private fun doReload(json: JsonObject) {
         val pluginName = json.get("pluginName")?.asString ?: return
         val jarFileName = json.get("jarFileName")?.asString ?: return
 
@@ -125,6 +139,12 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
                 pendingJar?.delete()
                 File(ppDir, "reload-failed").writeText("ROLLBACK_SUCCESS")
                 broadcast(Component.text("Reload failed, reverted to previous version", NamedTextColor.YELLOW))
+            }
+            ReloadResult.ROLLBACK_FAILED -> {
+                pendingJar?.delete()
+                File(ppDir, "reload-failed").writeText("ROLLBACK_FAILED")
+                broadcast(Component.text("Reload failed and rollback failed — restart recommended", NamedTextColor.RED))
+                broadcast(Component.text("Switching to blue/green mode", NamedTextColor.YELLOW))
             }
             else -> {
                 pendingJar?.delete()

@@ -16,6 +16,7 @@ import java.util.logging.Logger
 enum class ReloadResult {
     SUCCESS,
     ROLLBACK_SUCCESS,
+    ROLLBACK_FAILED,
     PLUGIN_NOT_FOUND,
     LOAD_FAILED,
     ENABLE_FAILED,
@@ -131,6 +132,8 @@ class PluginReloader(
                 } catch (rollbackEx: Exception) {
                     logger.severe("Rollback also failed: ${rollbackEx.message}")
                     rollbackEx.printStackTrace()
+                    val totalMs = System.currentTimeMillis() - totalStart
+                    return ReloadOutcome(ReloadResult.ROLLBACK_FAILED, teardownMs, System.currentTimeMillis() - loadStart, totalMs)
                 }
             }
 
@@ -242,15 +245,20 @@ class PluginReloader(
         // 3. Create classloader with cross-plugin visibility
         val classLoader = DevPluginClassLoader(urls, server.javaClass.classLoader, server.pluginManager)
 
-        // 4. Instantiate plugin WITHOUT calling constructor
-        //    JavaPlugin's constructor checks (classLoader instanceof PluginClassLoader)
-        //    which fails for our DevPluginClassLoader. Use Unsafe.allocateInstance()
-        //    to bypass the constructor entirely, then initialize via field injection.
+        // 4. Instantiate plugin
+        //    If the agent patched JavaPlugin's constructor, we can use normal newInstance()
+        //    which correctly runs all constructors and field initializers.
+        //    Otherwise, fall back to Unsafe.allocateInstance() (skips field initializers — risky).
         val mainClass = classLoader.loadClass(description.main)
-        val unsafeClass = Class.forName("sun.misc.Unsafe")
-        val unsafe = unsafeClass.getDeclaredField("theUnsafe").apply { isAccessible = true }.get(null)
-        val allocateInstance = unsafeClass.getMethod("allocateInstance", Class::class.java)
-        val pluginInstance = allocateInstance.invoke(unsafe, mainClass) as JavaPlugin
+        val pluginInstance: JavaPlugin = if (JavaPluginPatcher.isPatched) {
+            mainClass.getDeclaredConstructor().newInstance() as JavaPlugin
+        } else {
+            logger.warning("JavaPlugin not patched — using Unsafe.allocateInstance() (field initializers will be skipped)")
+            val unsafeClass = Class.forName("sun.misc.Unsafe")
+            val unsafe = unsafeClass.getDeclaredField("theUnsafe").apply { isAccessible = true }.get(null)
+            val allocateInstance = unsafeClass.getMethod("allocateInstance", Class::class.java)
+            allocateInstance.invoke(unsafe, mainClass) as JavaPlugin
+        }
 
         // 5. Initialize via PaperInternals (field injection — sets server, description, classLoader, etc.)
         val dataFolder = File(server.pluginsFolder, description.name)
@@ -307,8 +315,16 @@ class PluginReloader(
 
     // ── Classloader leak detection ─────────────────────────────────────
 
+    private fun nudgeGc() {
+        System.gc()
+        try { Thread.sleep(100) } catch (_: InterruptedException) {}
+    }
+
     private fun checkForLeaks() {
         if (leakedClassLoaders.size <= 1) return
+
+        // Give GC a chance to collect old classloaders before checking
+        nudgeGc()
 
         val toCheck = leakedClassLoaders.dropLast(1)
         val stillLeaking = toCheck.count { it.get() != null }
@@ -316,10 +332,19 @@ class PluginReloader(
         leakedClassLoaders.removeAll { ref -> ref != leakedClassLoaders.last() && ref.get() == null }
 
         if (stillLeaking > 0) {
-            consecutiveLeaks++
-            logger.warning("$stillLeaking classloader(s) not collected after full reload cycle (leak #$consecutiveLeaks)")
-            if (consecutiveLeaks >= 3) {
-                logger.warning("Too many classloader leaks — hot-reload will be disabled for this session")
+            // Retry once — GC is non-deterministic, avoid false positives
+            nudgeGc()
+            val confirmedLeaking = leakedClassLoaders.dropLast(1).count { it.get() != null }
+            leakedClassLoaders.removeAll { ref -> ref != leakedClassLoaders.last() && ref.get() == null }
+
+            if (confirmedLeaking > 0) {
+                consecutiveLeaks++
+                logger.warning("$confirmedLeaking classloader(s) not collected after full reload cycle (leak #$consecutiveLeaks)")
+                if (consecutiveLeaks >= 3) {
+                    logger.warning("Too many classloader leaks — hot-reload will be disabled for this session")
+                }
+            } else {
+                consecutiveLeaks = 0
             }
         } else {
             consecutiveLeaks = 0

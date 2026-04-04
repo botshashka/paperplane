@@ -12,6 +12,10 @@ class CompanionPlugin : JavaPlugin() {
 
     override fun onEnable() {
         try {
+            // Patch JavaPlugin constructor for dev-mode class loading.
+            // Must happen before any directory-based reloads.
+            JavaPluginPatcher.patchIfNeeded()
+
             errorCatcher = ErrorCatcher(this)
             buildStatusBar = BuildStatusBar(this)
 

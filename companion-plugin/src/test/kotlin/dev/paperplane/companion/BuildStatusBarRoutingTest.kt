@@ -105,6 +105,14 @@ class BuildStatusBarRoutingTest {
     }
 
     @Test
+    fun `ROLLBACK_FAILED is a recognized result name in the protocol`() {
+        // BuildStatusBar writes outcome.result.name to reload-failed flag file.
+        // ROLLBACK_FAILED must be a valid enum value for the CLI to parse.
+        val result = ReloadResult.valueOf("ROLLBACK_FAILED")
+        assertEquals(ReloadResult.ROLLBACK_FAILED, result)
+    }
+
+    @Test
     fun `JSON with extra unknown fields parses without error`() {
         val json = parse("""{"state":"ready","unknownField":"someValue","anotherField":42}""")
         assertEquals("ready", json.get("state").asString)

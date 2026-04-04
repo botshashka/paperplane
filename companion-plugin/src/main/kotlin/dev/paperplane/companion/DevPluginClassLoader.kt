@@ -12,10 +12,16 @@ import java.net.URLClassLoader
  * by falling back to other plugins' classloaders. This allows plugins with
  * `depend` or `softdepend` relationships to work correctly in HMR mode.
  *
+ * Uses **child-first** delegation: own URLs are checked before the parent.
+ * This is critical because Paper's parent classloader has shared visibility
+ * across all plugins — without child-first, the OLD plugin class (from the
+ * original PluginClassLoader) would be found instead of the NEW class from
+ * our build output directories.
+ *
  * Delegation order:
  * 1. Already loaded classes (JVM cache)
- * 2. Parent classloader (Paper API, JDK, Adventure)
- * 3. Own URLs (plugin classes from build dirs + dependency JARs)
+ * 2. Own URLs — child-first (plugin classes from build dirs + dependency JARs)
+ * 3. Parent classloader (Paper API, JDK, Adventure)
  * 4. Other plugins' classloaders (cross-plugin visibility)
  */
 class DevPluginClassLoader(
@@ -29,16 +35,17 @@ class DevPluginClassLoader(
             // 1. Check already loaded
             findLoadedClass(name)?.let { return it }
 
-            // 2. Try parent (Paper API, JDK, Adventure)
-            try {
-                return parent.loadClass(name)
-            } catch (_: ClassNotFoundException) {}
-
-            // 3. Try our own URLs (plugin classes + dependency JARs)
+            // 2. Try our own URLs first (child-first — ensures new plugin classes
+            //    take priority over stale classes in Paper's shared classloader pool)
             try {
                 val c = findClass(name)
                 if (resolve) resolveClass(c)
                 return c
+            } catch (_: ClassNotFoundException) {}
+
+            // 3. Try parent (Paper API, JDK, Adventure)
+            try {
+                return parent.loadClass(name)
             } catch (_: ClassNotFoundException) {}
 
             // 4. Try other plugins' classloaders (cross-plugin visibility)

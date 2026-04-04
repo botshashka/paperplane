@@ -16,9 +16,13 @@ data class ProjectMetadata(
     val projectDir: String,
     val version: String,
     val classesDir: String = "",
+    val classesDirs: List<String> = emptyList(),
     val resourcesDir: String = "",
     val runtimeClasspath: List<String> = emptyList()
-)
+) {
+    val effectiveClassesDirs: List<String>
+        get() = classesDirs.takeIf { it.isNotEmpty() } ?: listOfNotNull(classesDir.takeIf { it.isNotEmpty() })
+}
 
 class GradleBridge(private val projectDir: File) : AutoCloseable {
     private var connection: ProjectConnection? = null
@@ -111,6 +115,7 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
             projectDir = map["projectDir"] as? String ?: this.projectDir.absolutePath,
             version = map["version"] as? String ?: "unknown",
             classesDir = map["classesDir"] as? String ?: "",
+            classesDirs = (map["classesDirs"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
             resourcesDir = map["resourcesDir"] as? String ?: "",
             runtimeClasspath = (map["runtimeClasspath"] as? List<*>)?.filterIsInstance<String>() ?: emptyList()
         )

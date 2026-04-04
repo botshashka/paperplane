@@ -365,18 +365,24 @@ class DevCommand : CliktCommand(name = "dev") {
     ) {
         val totalStart = System.currentTimeMillis()
 
-        // 1. Resolve metadata (cached — classesDir/resourcesDir don't change between rebuilds)
+        // 1. Snapshot .class files BEFORE any compilation (for change detection).
+        //    On first call, use initial build metadata for classesDir since cachedFastMeta
+        //    isn't resolved yet — and resolving it triggers compilation via the `classes` task.
+        val snapshotDir = if (cachedFastMeta != null && cachedFastMeta!!.effectiveClassesDirs.isNotEmpty()) {
+            File(cachedFastMeta!!.effectiveClassesDirs.first())
+        } else if (metadata.effectiveClassesDirs.isNotEmpty()) {
+            metadata.effectiveClassesDirs.map { File(it) }.firstOrNull { it.exists() } ?: File(metadata.effectiveClassesDirs.first())
+        } else {
+            val javaDir = File(projectDir, "build/classes/java/main")
+            val kotlinDir = File(projectDir, "build/classes/kotlin/main")
+            if (javaDir.exists()) javaDir else kotlinDir
+        }
+        if (buildSnapshot == null) buildSnapshot = BuildSnapshot(snapshotDir)
+        val preBuildSnapshot = lastPostBuildSnapshot ?: buildSnapshot!!.take()
+
+        // 2. Resolve fast metadata (cached after first call)
         if (cachedFastMeta == null) cachedFastMeta = gradle.metadataFast()
         val fastMeta = cachedFastMeta
-
-        // 2. Snapshot .class files BEFORE build (for change detection)
-        val classesDir = if (fastMeta != null && fastMeta.classesDir.isNotEmpty()) {
-            File(fastMeta.classesDir)
-        } else {
-            File(projectDir, "build/classes/kotlin/main")
-        }
-        if (buildSnapshot == null) buildSnapshot = BuildSnapshot(classesDir)
-        val preBuildSnapshot = lastPostBuildSnapshot ?: buildSnapshot!!.take()
 
         // 3. Compile only — skip JAR packaging for faster rebuilds
         server.writeCompanionStatus("building")
@@ -404,7 +410,7 @@ class DevCommand : CliktCommand(name = "dev") {
         File(ppDir, "reload-failed").delete()
 
         if (fastMeta != null && fastMeta.classesDir.isNotEmpty()) {
-            val allDirs: List<String> = listOf(fastMeta.classesDir, fastMeta.resourcesDir) + fastMeta.runtimeClasspath
+            val allDirs: List<String> = fastMeta.effectiveClassesDirs + listOf(fastMeta.resourcesDir) + fastMeta.runtimeClasspath
 
             // Choose strategy based on change type
             val strategy = if (changes.noNewOrRemovedClasses && changes.modified.isNotEmpty()) "hotswap" else "directory"
