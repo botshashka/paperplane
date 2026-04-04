@@ -45,7 +45,9 @@ class DevCommand : CliktCommand(name = "dev") {
         val resolvedMode = modeFlag?.let {
             try { DevMode.valueOf(it.uppercase().replace("-", "_")) }
             catch (_: Exception) {
+                TerminalUI.beginBlock()
                 TerminalUI.error("Unknown mode: $it (expected: hot-reload, blue-green, restart)")
+                TerminalUI.endBlock()
                 return
             }
         } ?: config.dev.mode
@@ -60,15 +62,21 @@ class DevCommand : CliktCommand(name = "dev") {
     private fun migrateOldLayout(ppDir: File) {
         val oldBlue = File(ppDir, "server-blue")
         val newServer = File(ppDir, "server")
+        val oldGreen = File(ppDir, "server-green")
+
+        val needsMigration = (oldBlue.exists() && !newServer.exists()) || oldGreen.exists()
+        if (!needsMigration) return
+
+        TerminalUI.beginBlock()
         if (oldBlue.exists() && !newServer.exists()) {
             oldBlue.renameTo(newServer)
             TerminalUI.info("Migrated:", "server-blue/ → server/")
         }
-        val oldGreen = File(ppDir, "server-green")
         if (oldGreen.exists()) {
             oldGreen.deleteRecursively()
             TerminalUI.info("Cleaned up:", "server-green/ (no longer needed)")
         }
+        TerminalUI.endBlock()
     }
 
     // ── Blue/Green mode ─────────────────────────────────────────────────
@@ -91,9 +99,10 @@ class DevCommand : CliktCommand(name = "dev") {
         // Shutdown hook
         val shuttingDown = java.util.concurrent.atomic.AtomicBoolean(false)
         Runtime.getRuntime().addShutdownHook(Thread {
-            shuttingDown.set(true)
-            TerminalUI.discardBlock()
-            println()
+            if (!shuttingDown.get()) {
+                TerminalUI.discardBlock()
+                println()
+            }
             servers.values.forEach { it.stop() }
             velocityManager.stop()
             gradle.close()
@@ -105,8 +114,10 @@ class DevCommand : CliktCommand(name = "dev") {
             gradle.metadata()
         }
         if (metadata == null) {
-            TerminalUI.error("Failed to read project metadata. Is the PaperPlane Gradle plugin applied?")
+            pluginNotFoundError()
             TerminalUI.endBlock()
+            shuttingDown.set(true)
+            gradle.close()
             return
         }
 
@@ -489,9 +500,12 @@ class DevCommand : CliktCommand(name = "dev") {
     ) {
         val serverManager = PaperServerManager(File(ppDir, "server"), downloader)
 
+        val shuttingDown = java.util.concurrent.atomic.AtomicBoolean(false)
         Runtime.getRuntime().addShutdownHook(Thread {
-            TerminalUI.discardBlock()
-            println()
+            if (!shuttingDown.get()) {
+                TerminalUI.discardBlock()
+                println()
+            }
             serverManager.stop()
             gradle.close()
         })
@@ -499,8 +513,10 @@ class DevCommand : CliktCommand(name = "dev") {
         TerminalUI.beginBlock()
         val metadata = TerminalUI.spin("Reading project metadata...") { gradle.metadata() }
         if (metadata == null) {
-            TerminalUI.error("Failed to read project metadata. Is the PaperPlane Gradle plugin applied?")
+            pluginNotFoundError()
             TerminalUI.endBlock()
+            shuttingDown.set(true)
+            gradle.close()
             return
         }
 
@@ -596,9 +612,12 @@ class DevCommand : CliktCommand(name = "dev") {
     ) {
         val serverManager = PaperServerManager(File(ppDir, "server"), downloader)
 
+        val shuttingDown = java.util.concurrent.atomic.AtomicBoolean(false)
         Runtime.getRuntime().addShutdownHook(Thread {
-            TerminalUI.discardBlock()
-            println()
+            if (!shuttingDown.get()) {
+                TerminalUI.discardBlock()
+                println()
+            }
             serverManager.stop()
             gradle.close()
         })
@@ -606,8 +625,10 @@ class DevCommand : CliktCommand(name = "dev") {
         TerminalUI.beginBlock()
         val metadata = TerminalUI.spin("Reading project metadata...") { gradle.metadata() }
         if (metadata == null) {
-            TerminalUI.error("Failed to read project metadata. Is the PaperPlane Gradle plugin applied?")
+            pluginNotFoundError()
             TerminalUI.endBlock()
+            shuttingDown.set(true)
+            gradle.close()
             return
         }
 
@@ -886,6 +907,14 @@ class DevCommand : CliktCommand(name = "dev") {
             serverManager.stop()
             gradle.close()
         }
+    }
+
+    private fun pluginNotFoundError() {
+        TerminalUI.error("PaperPlane Gradle plugin not found.")
+        TerminalUI.endBlock()
+        TerminalUI.beginBlock()
+        TerminalUI.info("ppl setup", "add PaperPlane to this project")
+        TerminalUI.info("ppl init", "scaffold a new plugin")
     }
 
     private fun formatDuration(ms: Long): String {

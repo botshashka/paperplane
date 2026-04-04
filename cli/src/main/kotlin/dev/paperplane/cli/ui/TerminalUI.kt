@@ -35,7 +35,6 @@ object TerminalUI {
     private var spinnerSubstatus: String? = null
     private var spinnerFrameIndex = 0
     private var hasExternalOutput = false
-    private var lastOutputWasBlock = false // prevents double blanks between adjacent finalized blocks
 
     private val spinnerFrames = arrayOf("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
@@ -69,7 +68,7 @@ object TerminalUI {
         if (!isTty) return
         clearDisplay()
         // Blank separator only after server/proxy logs have appeared above
-        val sep = if (hasExternalOutput) { println(); 1 } else 0
+        val sep = if (currentBlockType == BlockType.TRANSIENT || hasExternalOutput) { println(); 1 } else 0
         for (line in blockLines) { println(line) }
         val extra = if (spinnerMessage != null) {
             val frame = if (noColor) spinnerFrames[spinnerFrameIndex] else "$CYAN${spinnerFrames[spinnerFrameIndex]}$RESET"
@@ -99,6 +98,7 @@ object TerminalUI {
      */
     fun beginBlock(type: BlockType = BlockType.PERSIST) {
         lock.withLock {
+            if (type == BlockType.PERSIST) println()
             blockActive = true
             currentBlockType = type
             hasExternalOutput = false
@@ -107,7 +107,7 @@ object TerminalUI {
 
     /**
      * Ends the current block. PERSIST blocks are printed to scroll with
-     * exactly one blank line of separation from surrounding content.
+     * a blank line before (not after) for separation from previous content.
      * TRANSIENT blocks are silently erased.
      */
     fun endBlock() {
@@ -115,10 +115,8 @@ object TerminalUI {
             if (!blockActive && blockLines.isEmpty()) return
             if (isTty) clearDisplay()
             if (currentBlockType == BlockType.PERSIST && blockLines.isNotEmpty()) {
-                if (!lastOutputWasBlock) println()
+                if (hasExternalOutput) println()
                 for (line in blockLines) { println(line) }
-                println()
-                lastOutputWasBlock = true
             }
             resetBlock()
         }
@@ -167,12 +165,10 @@ object TerminalUI {
         lock.withLock {
             if (blockActive && isTty && displayedLineCount > 0) {
                 hasExternalOutput = true
-                lastOutputWasBlock = false
                 clearDisplay()
                 println(line)
                 redraw()
             } else {
-                lastOutputWasBlock = false
                 println(line)
             }
         }
@@ -183,7 +179,6 @@ object TerminalUI {
     fun header(version: String) {
         println()
         println("  ${cyan("✈")}  ${bold(cyan("PaperPlane"))} ${dim("v$version")}")
-        println()
     }
 
     fun success(message: String, duration: String? = null) {
@@ -231,7 +226,7 @@ object TerminalUI {
     fun testFailure(errorText: String) {
         val lines = errorText.lines().filter { it.isNotBlank() }
         for (errLine in lines) {
-            println("       ${red(errLine)}")
+            emit("       ${red(errLine)}")
         }
     }
 
@@ -240,26 +235,26 @@ object TerminalUI {
     }
 
     fun fileCreated(path: String) {
-        println("  ${green("✓")} $path")
+        emit("  ${green("✓")} $path")
     }
 
     // Test output (Vitest-style)
     fun testClass(name: String, passed: Boolean, duration: String) {
         val icon = if (passed) green("✓") else red("✗")
-        println("  $icon  $name ${dim(duration)}")
+        emit("  $icon  $name ${dim(duration)}")
     }
 
     fun testCase(name: String, passed: Boolean, duration: String) {
         val icon = if (passed) green("✓") else red("✗")
-        println("     $icon $name ${dim(duration)}")
+        emit("     $icon $name ${dim(duration)}")
     }
 
     fun testSummary(passed: Int, failed: Int, total: Int, buildTime: String, testTime: String) {
-        println()
+        emit("")
         val passedText = green("$passed passed")
         val failedText = if (failed > 0) "  ${red("$failed failed")}" else ""
-        println("  Tests   $passedText$failedText  ${dim("($total)")}")
-        println("  Time    ${buildTime} ${dim("(build ${buildTime}, tests ${testTime})")}")
+        emit("  Tests   $passedText$failedText  ${dim("($total)")}")
+        emit("  Time    ${buildTime} ${dim("(build ${buildTime}, tests ${testTime})")}")
     }
 
     // ── Spinner ────────────────────────────────────────────────────────

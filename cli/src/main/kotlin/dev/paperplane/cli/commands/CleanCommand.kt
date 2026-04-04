@@ -38,7 +38,7 @@ class CleanCommand : CliktCommand(name = "clean") {
 
         val totalSize = dirsToDelete.sumOf { dirSize(it) }
 
-        TerminalUI.blank()
+        TerminalUI.beginBlock()
         TerminalUI.status("This will delete:")
         for (dir in dirsToDelete) {
             TerminalUI.info("${dir.name}/", formatSize(dirSize(dir)))
@@ -49,25 +49,26 @@ class CleanCommand : CliktCommand(name = "clean") {
         }
         TerminalUI.blank()
         TerminalUI.status("Total: ${formatSize(totalSize)}")
-        TerminalUI.blank()
+        TerminalUI.endBlock()
 
         if (!force) {
+            println()
             print("  Are you sure? (y/N): ")
             val answer = readlnOrNull()?.trim()?.lowercase()
             if (answer != "y" && answer != "yes") {
                 TerminalUI.status("Cancelled")
                 return
             }
-            println()
         }
 
+        TerminalUI.beginBlock()
         for (dir in dirsToDelete) {
             dir.deleteRecursively()
             TerminalUI.success("Deleted ${dir.name}/")
         }
-
         TerminalUI.blank()
         TerminalUI.success("Clean complete — next 'ppl dev' will set up a fresh server")
+        TerminalUI.endBlock()
     }
 
     private fun dirSize(dir: File): Long {

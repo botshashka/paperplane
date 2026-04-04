@@ -20,15 +20,21 @@ class TestCommand : CliktCommand(name = "test") {
         TerminalUI.header(version)
 
         if (watch) {
-            runTests()
-            TerminalUI.blank()
+            TerminalUI.beginBlock()
+            runTestsInBlock()
+            TerminalUI.endBlock()
+
+            TerminalUI.beginBlock(TerminalUI.BlockType.TRANSIENT)
             TerminalUI.status("Watching for changes...")
 
             val watcher = FileWatcher(File(projectDir, "src")) {
-                TerminalUI.blank()
+                TerminalUI.discardBlock()
+                TerminalUI.beginBlock()
                 TerminalUI.change("Re-running tests...")
-                runTests()
-                TerminalUI.blank()
+                runTestsInBlock()
+                TerminalUI.endBlock()
+
+                TerminalUI.beginBlock(TerminalUI.BlockType.TRANSIENT)
                 TerminalUI.status("Watching for changes...")
             }
             watcher.start()
@@ -38,11 +44,13 @@ class TestCommand : CliktCommand(name = "test") {
                 watcher.stop()
             }
         } else {
-            runTests()
+            TerminalUI.beginBlock()
+            runTestsInBlock()
+            TerminalUI.endBlock()
         }
     }
 
-    private fun runTests() {
+    private fun runTestsInBlock() {
         val gradle = GradleBridge(projectDir)
 
         val buildStart = System.currentTimeMillis()

@@ -99,7 +99,6 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
 
             parseMetadataFile(metadataFile)
         } catch (e: Exception) {
-            TerminalUI.error("Failed to read project metadata: ${e.message}")
             null
         }
     }

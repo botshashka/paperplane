@@ -58,6 +58,24 @@ The CLI and companion plugin coordinate through flag files in `.paperplane/` ins
 - `save-complete` — companion writes after world save
 - `reload-complete` / `reload-failed` — companion writes after hot-reload attempt
 
+### TerminalUI Block System
+
+All CLI output goes through `TerminalUI` (`cli/.../ui/TerminalUI.kt`). Spacing between sections is handled by **blocks**, not manual `blank()` or `println()` calls.
+
+**Rules:**
+- Wrap output in `beginBlock()` / `endBlock()`. Every block automatically gets 1 blank line above it.
+- PERSIST blocks (default) commit content to scroll. TRANSIENT blocks live in the footer and are erased on discard.
+- Use `awaitChanges()` to end the current block and start a transient "Watching..." footer.
+- To add a blank line between two groups of output, **split them into two blocks** — don't insert `blank()` between them.
+- `blank()` is only for intra-block spacing (visual grouping within a single block).
+- Never add manual `println()` for spacing. The block system handles it.
+
+**How spacing works (no cross-block state):**
+- `beginBlock(PERSIST)` prints a blank line to scroll (permanent separator).
+- `beginBlock(TRANSIENT)` renders the separator in the footer via `redraw()` (erased with the block).
+- `hasExternalOutput` (block-scoped) handles the gap between server logs and block content.
+- `endBlock()` prints content with no trailing blank line — the *next* `beginBlock` provides the separator.
+
 ## Commit Convention
 
 Use [Conventional Commits](https://www.conventionalcommits.org/). Format: `<type>: <description>`

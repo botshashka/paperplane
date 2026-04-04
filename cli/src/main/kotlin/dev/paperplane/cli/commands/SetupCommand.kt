@@ -19,12 +19,16 @@ class SetupCommand : CliktCommand(name = "setup") {
             buildFileKts.exists() -> buildFileKts
             buildFileGroovy.exists() -> buildFileGroovy
             else -> {
+                TerminalUI.beginBlock()
                 TerminalUI.error("No build.gradle or build.gradle.kts found in current directory")
+                TerminalUI.endBlock()
                 return
             }
         }
 
         val isKts = buildFile.name.endsWith(".kts")
+
+        TerminalUI.beginBlock()
         TerminalUI.status("Found ${buildFile.name}")
 
         // Add plugin to build file if not already present
@@ -119,9 +123,11 @@ class SetupCommand : CliktCommand(name = "setup") {
             }
         }
 
-        TerminalUI.blank()
+        TerminalUI.endBlock()
+
+        TerminalUI.beginBlock()
         TerminalUI.success("PaperPlane setup complete")
-        TerminalUI.blank()
         TerminalUI.status("Run 'ppl dev' to start developing!")
+        TerminalUI.endBlock()
     }
 }

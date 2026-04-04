@@ -33,6 +33,8 @@ class InitCommand : CliktCommand(name = "init") {
         val useKotlin = kotlin == "true"
 
         TerminalUI.header(version())
+
+        TerminalUI.beginBlock()
         TerminalUI.status("Creating $name/...")
         TerminalUI.blank()
 
@@ -89,13 +91,15 @@ class InitCommand : CliktCommand(name = "init") {
         } else {
             TerminalUI.error("Failed to generate Gradle wrapper — run 'gradle wrapper' manually")
         }
+        TerminalUI.endBlock()
 
-        TerminalUI.blank()
+        TerminalUI.beginBlock()
         TerminalUI.success("Project created")
         TerminalUI.blank()
         TerminalUI.status("Next steps:")
         TerminalUI.info("cd", name)
         TerminalUI.info("ppl", "dev")
+        TerminalUI.endBlock()
     }
 
     private fun promptOrDefault(label: String, default: String): String {
