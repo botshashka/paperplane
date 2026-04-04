@@ -102,9 +102,6 @@ class SetupCommand : CliktCommand(name = "setup") {
                   version: "$detectedVersion"
                   jvm-args:
                     - "-Xmx2G"
-
-                dev:
-                  companion: true
             """.trimIndent() + "\n")
             TerminalUI.fileCreated("paperplane.yml")
         } else {

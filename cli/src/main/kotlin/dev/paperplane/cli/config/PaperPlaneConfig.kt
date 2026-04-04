@@ -1,10 +1,14 @@
 package dev.paperplane.cli.config
 
+import com.charleskorn.kaml.InvalidPropertyValueException
+import com.charleskorn.kaml.UnknownPropertyException
 import com.charleskorn.kaml.Yaml
+import dev.paperplane.cli.ui.TerminalUI
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import java.io.File
+import kotlin.system.exitProcess
 
 @Serializable
 data class PaperPlaneConfig(
@@ -15,7 +19,26 @@ data class PaperPlaneConfig(
         fun load(projectDir: File): PaperPlaneConfig {
             val configFile = File(projectDir, "paperplane.yml")
             if (!configFile.exists()) return PaperPlaneConfig()
-            return Yaml.default.decodeFromString(configFile.readText())
+            return try {
+                Yaml.default.decodeFromString(configFile.readText())
+            } catch (e: InvalidPropertyValueException) {
+                val unknown = e.cause as? UnknownPropertyException
+                if (unknown != null) {
+                    reportUnknownKey(unknown)
+                } else {
+                    TerminalUI.error("Invalid paperplane.yml: ${e.message}")
+                }
+                exitProcess(1)
+            } catch (e: UnknownPropertyException) {
+                reportUnknownKey(e)
+                exitProcess(1)
+            }
+        }
+
+        private fun reportUnknownKey(e: UnknownPropertyException) {
+            TerminalUI.blank()
+            TerminalUI.error("Unknown key '${e.propertyName}' in paperplane.yml")
+            TerminalUI.status("Valid keys: ${e.validPropertyNames.sorted().joinToString(", ")}")
         }
     }
 }
@@ -36,9 +59,6 @@ enum class DevMode {
 
 @Serializable
 data class DevConfig(
-    val companion: Boolean = true,
-    @SerialName("verbose-server")
-    val verboseServer: Boolean = false,
     @SerialName("debounce-ms")
     val debounceMs: Long = 2000,
     val mode: DevMode = DevMode.HOT_RELOAD,

@@ -6,7 +6,6 @@ import java.io.File
 class PaperServerManager(
     val serverDir: File,
     private val downloader: PaperDownloader,
-    var verboseServer: Boolean = false,
     private val port: Int = 25565
 ) {
     private var process: Process? = null
@@ -135,11 +134,6 @@ class PaperServerManager(
     }
 
     /**
-     * Stages a plugin jar as a .new file without overwriting the currently-loaded jar.
-     * Used in hot-reload mode so the companion can roll back to the original on failure.
-     * Returns the staged filename (e.g., "myplugin.jar.new").
-     */
-    /**
      * Stages a plugin jar in .paperplane/ (not plugins/) so Paper doesn't delete it.
      * Used in hot-reload mode so the companion can roll back to the original on failure.
      * Returns the absolute path to the staged file.
@@ -169,7 +163,8 @@ class PaperServerManager(
     }
 
     private fun extractResource(resourceName: String, target: File) {
-        val stream = javaClass.classLoader.getResourceAsStream(resourceName) ?: return
+        val stream = javaClass.classLoader.getResourceAsStream(resourceName)
+            ?: throw RuntimeException("Resource '$resourceName' not found in CLI jar — corrupted build?")
         stream.use { input ->
             target.outputStream().use { output ->
                 input.copyTo(output)
@@ -205,12 +200,9 @@ class PaperServerManager(
         process = proc
         processStdin = proc.outputStream
 
-        // Stream server output, filtering for relevant lines
         Thread({
             proc.inputStream.bufferedReader().forEachLine { line ->
-                if (shouldShowLine(line)) {
-                    TerminalUI.serverLog("  ${formatServerLine(line)}")
-                }
+                TerminalUI.serverLog("  ${formatServerLine(line)}")
             }
         }, "server-$port-output").apply { isDaemon = true }.start()
 
@@ -290,21 +282,10 @@ class PaperServerManager(
         tmpFile.renameTo(statusFile)
     }
 
-    private fun shouldShowLine(line: String): Boolean {
-        if (verboseServer) return true
-        if (line.startsWith("WARNING:")) return false // JVM native access warnings
-
-        // Only show real errors — skip known harmless ones
-        if (line.contains("No key layers in MapLike")) return false
-        if (line.contains("ERROR")) return true
-        if (line.contains("WARN") && line.contains("plugin", ignoreCase = true)) return true
-
-        return false
-    }
+    private val serverLineRegex = Regex("""\[[\d:]+] \[([^]]+)] (.+)""")
 
     private fun formatServerLine(line: String): String {
-        // Dim the timestamp/thread prefix, keep the message
-        val match = Regex("""\[[\d:]+] \[([^]]+)] (.+)""").find(line)
+        val match = serverLineRegex.find(line)
         return if (match != null) {
             val (thread, message) = match.destructured
             "\u001b[2m[$thread]\u001b[0m $message"

@@ -5,8 +5,7 @@ import java.io.File
 import java.util.UUID
 
 class VelocityManager(
-    private val proxyDir: File,
-    var verboseProxy: Boolean = false
+    private val proxyDir: File
 ) {
     private var process: Process? = null
     private val pluginsDir = File(proxyDir, "plugins")
@@ -105,9 +104,7 @@ class VelocityManager(
 
         Thread({
             proc.inputStream.bufferedReader().forEachLine { line ->
-                if (shouldShowLine(line)) {
-                    TerminalUI.serverLog("  ${formatProxyLine(line)}")
-                }
+                TerminalUI.serverLog("  ${formatProxyLine(line)}")
             }
         }, "proxy-output").apply { isDaemon = true }.start()
 
@@ -156,15 +153,10 @@ class VelocityManager(
         }
     }
 
-    private fun shouldShowLine(line: String): Boolean {
-        if (verboseProxy) return true
-        if (line.startsWith("WARNING:")) return false
-        if (line.contains("[ERROR]")) return true
-        return false
-    }
+    private val proxyLineRegex = Regex("""\[[\d:]+] \[([^]]+)] (.+)""")
 
     private fun formatProxyLine(line: String): String {
-        val match = Regex("""\[[\d:]+] \[([^]]+)] (.+)""").find(line)
+        val match = proxyLineRegex.find(line)
         return if (match != null) {
             val (thread, message) = match.destructured
             "\u001b[2m[proxy/$thread]\u001b[0m $message"

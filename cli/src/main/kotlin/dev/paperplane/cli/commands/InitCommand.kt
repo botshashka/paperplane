@@ -272,7 +272,6 @@ class InitCommand : CliktCommand(name = "init") {
 
         dev:
           mode: hot-reload      # hot-reload | blue-green | restart
-          verbose-server: false  # set to true to show all server output
           # jbr: auto           # auto | on | off | /path/to/jbr
     """.trimIndent() + "\n"
 
