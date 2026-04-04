@@ -1,5 +1,7 @@
 plugins {
     alias(libs.plugins.kotlin.jvm) apply false
+    alias(libs.plugins.ktfmt) apply false
+    alias(libs.plugins.detekt) apply false
 }
 
 allprojects {
@@ -15,6 +17,8 @@ allprojects {
 
 subprojects {
     apply(plugin = "org.jetbrains.kotlin.jvm")
+    apply(plugin = "com.ncorti.ktfmt.gradle")
+    apply(plugin = "dev.detekt")
 
     configure<JavaPluginExtension> {
         toolchain {
@@ -22,7 +26,7 @@ subprojects {
         }
     }
 
-    tasks.withType<Test> {
+tasks.withType<Test> {
         useJUnitPlatform()
     }
 }

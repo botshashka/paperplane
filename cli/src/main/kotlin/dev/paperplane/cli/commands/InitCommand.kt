@@ -8,117 +8,141 @@ import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 
 class InitCommand : CliktCommand(name = "init") {
-    private val name by argument(help = "Project directory name")
-    private val pluginName by option("--name", "-n", help = "Plugin name").default("")
-    private val packageName by option("--package", "-p", help = "Java package").default("")
-    private val paperVersion by option("--paper", help = "Paper MC version").default("1.21.10")
-    private val author by option("--author", "-a", help = "Plugin author").default("")
-    private val kotlin by option("--kotlin", "-k", help = "Use Kotlin instead of Java").default("false")
+  private val name by argument(help = "Project directory name")
+  private val pluginName by option("--name", "-n", help = "Plugin name").default("")
+  private val packageName by option("--package", "-p", help = "Java package").default("")
+  private val paperVersion by option("--paper", help = "Paper MC version").default("1.21.10")
+  private val author by option("--author", "-a", help = "Plugin author").default("")
+  private val kotlin by
+      option("--kotlin", "-k", help = "Use Kotlin instead of Java").default("false")
 
-    override fun run() {
-        val projectDir = File(name)
-        if (projectDir.exists()) {
-            TerminalUI.error("Directory '$name' already exists")
-            return
-        }
+  override fun run() {
+    val projectDir = File(name)
+    if (projectDir.exists()) {
+      TerminalUI.error("Directory '$name' already exists")
+      return
+    }
 
-        // Use sensible defaults — no prompts unless explicitly empty
-        val defaultPluginName = name.split("-", "_").joinToString("") { it.replaceFirstChar { c -> c.uppercase() } }
-        val defaultPackage = "com.example.${name.lowercase().replace("-", "")}"
-        val defaultAuthor = System.getProperty("user.name") ?: "author"
+    // Use sensible defaults — no prompts unless explicitly empty
+    val defaultPluginName =
+        name.split("-", "_").joinToString("") { it.replaceFirstChar { c -> c.uppercase() } }
+    val defaultPackage = "com.example.${name.lowercase().replace("-", "")}"
+    val defaultAuthor = System.getProperty("user.name") ?: "author"
 
-        val resolvedPluginName = pluginName.ifEmpty { defaultPluginName }
-        val resolvedPackage = packageName.ifEmpty { defaultPackage }
-        val resolvedAuthor = author.ifEmpty { defaultAuthor }
-        val useKotlin = kotlin == "true"
+    val resolvedPluginName = pluginName.ifEmpty { defaultPluginName }
+    val resolvedPackage = packageName.ifEmpty { defaultPackage }
+    val resolvedAuthor = author.ifEmpty { defaultAuthor }
+    val useKotlin = kotlin == "true"
 
-        TerminalUI.header(version())
+    TerminalUI.header(version())
 
-        TerminalUI.beginBlock()
-        TerminalUI.status("Creating $name/...")
-        TerminalUI.blank()
+    TerminalUI.beginBlock()
+    TerminalUI.status("Creating $name/...")
+    TerminalUI.blank()
 
-        val packagePath = resolvedPackage.replace(".", "/")
+    val packagePath = resolvedPackage.replace(".", "/")
 
-        // Create directories
-        val srcMain = if (useKotlin) "src/main/kotlin/$packagePath" else "src/main/java/$packagePath"
-        val srcTest = if (useKotlin) "src/test/kotlin/$packagePath" else "src/test/java/$packagePath"
-        val srcResources = "src/main/resources"
+    // Create directories
+    val srcMain = if (useKotlin) "src/main/kotlin/$packagePath" else "src/main/java/$packagePath"
+    val srcTest = if (useKotlin) "src/test/kotlin/$packagePath" else "src/test/java/$packagePath"
+    val srcResources = "src/main/resources"
 
-        File(projectDir, srcMain).mkdirs()
-        File(projectDir, srcTest).mkdirs()
-        File(projectDir, srcResources).mkdirs()
-        File(projectDir, ".paperplane").mkdirs()
+    File(projectDir, srcMain).mkdirs()
+    File(projectDir, srcTest).mkdirs()
+    File(projectDir, srcResources).mkdirs()
+    File(projectDir, ".paperplane").mkdirs()
 
-        // Write files from templates
-        writeTemplate(projectDir, "build.gradle.kts", buildGradle(resolvedPluginName, resolvedPackage, paperVersion))
-        TerminalUI.fileCreated("build.gradle.kts")
+    // Write files from templates
+    writeTemplate(
+        projectDir,
+        "build.gradle.kts",
+        buildGradle(resolvedPluginName, resolvedPackage, paperVersion),
+    )
+    TerminalUI.fileCreated("build.gradle.kts")
 
-        writeTemplate(projectDir, "settings.gradle.kts", settingsGradle(name))
-        TerminalUI.fileCreated("settings.gradle.kts")
+    writeTemplate(projectDir, "settings.gradle.kts", settingsGradle(name))
+    TerminalUI.fileCreated("settings.gradle.kts")
 
-        if (useKotlin) {
-            writeTemplate(projectDir, "$srcMain/${resolvedPluginName}.kt", mainPluginKt(resolvedPackage, resolvedPluginName))
-            writeTemplate(projectDir, "$srcTest/${resolvedPluginName}Test.kt", testPluginKt(resolvedPackage, resolvedPluginName))
-            TerminalUI.fileCreated("$srcMain/${resolvedPluginName}.kt")
-            TerminalUI.fileCreated("$srcTest/${resolvedPluginName}Test.kt")
-        } else {
-            writeTemplate(projectDir, "$srcMain/${resolvedPluginName}.java", mainPluginJava(resolvedPackage, resolvedPluginName))
-            writeTemplate(projectDir, "$srcTest/${resolvedPluginName}Test.java", testPluginJava(resolvedPackage, resolvedPluginName))
-            TerminalUI.fileCreated("$srcMain/${resolvedPluginName}.java")
-            TerminalUI.fileCreated("$srcTest/${resolvedPluginName}Test.java")
-        }
+    if (useKotlin) {
+      writeTemplate(
+          projectDir,
+          "$srcMain/${resolvedPluginName}.kt",
+          mainPluginKt(resolvedPackage, resolvedPluginName),
+      )
+      writeTemplate(
+          projectDir,
+          "$srcTest/${resolvedPluginName}Test.kt",
+          testPluginKt(resolvedPackage, resolvedPluginName),
+      )
+      TerminalUI.fileCreated("$srcMain/${resolvedPluginName}.kt")
+      TerminalUI.fileCreated("$srcTest/${resolvedPluginName}Test.kt")
+    } else {
+      writeTemplate(
+          projectDir,
+          "$srcMain/${resolvedPluginName}.java",
+          mainPluginJava(resolvedPackage, resolvedPluginName),
+      )
+      writeTemplate(
+          projectDir,
+          "$srcTest/${resolvedPluginName}Test.java",
+          testPluginJava(resolvedPackage, resolvedPluginName),
+      )
+      TerminalUI.fileCreated("$srcMain/${resolvedPluginName}.java")
+      TerminalUI.fileCreated("$srcTest/${resolvedPluginName}Test.java")
+    }
 
-        writeTemplate(projectDir, "$srcResources/config.yml", "# ${resolvedPluginName} configuration\n")
-        TerminalUI.fileCreated("$srcResources/config.yml")
+    writeTemplate(projectDir, "$srcResources/config.yml", "# ${resolvedPluginName} configuration\n")
+    TerminalUI.fileCreated("$srcResources/config.yml")
 
-        writeTemplate(projectDir, "paperplane.yml", paperplaneYml(paperVersion))
-        TerminalUI.fileCreated("paperplane.yml")
+    writeTemplate(projectDir, "paperplane.yml", paperplaneYml(paperVersion))
+    TerminalUI.fileCreated("paperplane.yml")
 
-        writeTemplate(projectDir, ".gitignore", gitignore())
-        TerminalUI.fileCreated(".gitignore")
+    writeTemplate(projectDir, ".gitignore", gitignore())
+    TerminalUI.fileCreated(".gitignore")
 
-        TerminalUI.blank()
-        // Generate Gradle wrapper
-        TerminalUI.status("Generating Gradle wrapper...")
-        val wrapperProcess = ProcessBuilder("gradle", "wrapper", "--gradle-version", "9.4.1")
+    TerminalUI.blank()
+    // Generate Gradle wrapper
+    TerminalUI.status("Generating Gradle wrapper...")
+    val wrapperProcess =
+        ProcessBuilder("gradle", "wrapper", "--gradle-version", "9.4.1")
             .directory(projectDir)
             .redirectErrorStream(true)
             .start()
-        wrapperProcess.waitFor(60, java.util.concurrent.TimeUnit.SECONDS)
-        if (wrapperProcess.exitValue() == 0) {
-            TerminalUI.fileCreated("gradlew")
-        } else {
-            TerminalUI.error("Failed to generate Gradle wrapper — run 'gradle wrapper' manually")
-        }
-        TerminalUI.endBlock()
-
-        TerminalUI.beginBlock()
-        TerminalUI.success("Project created")
-        TerminalUI.blank()
-        TerminalUI.status("Next steps:")
-        TerminalUI.info("cd", name)
-        TerminalUI.info("ppl", "dev")
-        TerminalUI.endBlock()
+    wrapperProcess.waitFor(60, java.util.concurrent.TimeUnit.SECONDS)
+    if (wrapperProcess.exitValue() == 0) {
+      TerminalUI.fileCreated("gradlew")
+    } else {
+      TerminalUI.error("Failed to generate Gradle wrapper — run 'gradle wrapper' manually")
     }
+    TerminalUI.endBlock()
 
-    private fun promptOrDefault(label: String, default: String): String {
-        print("  $label [$default]: ")
-        val input = readlnOrNull()?.trim()
-        return if (input.isNullOrEmpty()) default else input
-    }
+    TerminalUI.beginBlock()
+    TerminalUI.success("Project created")
+    TerminalUI.blank()
+    TerminalUI.status("Next steps:")
+    TerminalUI.info("cd", name)
+    TerminalUI.info("ppl", "dev")
+    TerminalUI.endBlock()
+  }
 
-    private fun version(): String = javaClass.`package`?.implementationVersion ?: "0.1.0"
+  private fun promptOrDefault(label: String, default: String): String {
+    print("  $label [$default]: ")
+    val input = readlnOrNull()?.trim()
+    return if (input.isNullOrEmpty()) default else input
+  }
 
-    private fun writeTemplate(projectDir: File, path: String, content: String) {
-        val file = File(projectDir, path)
-        file.parentFile.mkdirs()
-        file.writeText(content)
-    }
+  private fun version(): String = javaClass.`package`?.implementationVersion ?: "0.1.0"
 
-    // --- Templates ---
+  private fun writeTemplate(projectDir: File, path: String, content: String) {
+    val file = File(projectDir, path)
+    file.parentFile.mkdirs()
+    file.writeText(content)
+  }
 
-    private fun buildGradle(pluginName: String, packageName: String, paperVersion: String) = """
+  // --- Templates ---
+
+  private fun buildGradle(pluginName: String, packageName: String, paperVersion: String) =
+      """
         plugins {
             java
             id("dev.paperplane") version "0.1.0"
@@ -156,9 +180,11 @@ class InitCommand : CliktCommand(name = "init") {
         tasks.withType<Test> {
             useJUnitPlatform()
         }
-    """.trimIndent() + "\n"
+    """
+          .trimIndent() + "\n"
 
-    private fun settingsGradle(projectName: String) = """
+  private fun settingsGradle(projectName: String) =
+      """
         pluginManagement {
             repositories {
                 mavenLocal()
@@ -167,9 +193,11 @@ class InitCommand : CliktCommand(name = "init") {
         }
 
         rootProject.name = "$projectName"
-    """.trimIndent() + "\n"
+    """
+          .trimIndent() + "\n"
 
-    private fun mainPluginJava(packageName: String, pluginName: String) = """
+  private fun mainPluginJava(packageName: String, pluginName: String) =
+      """
         package $packageName;
 
         import org.bukkit.plugin.java.JavaPlugin;
@@ -185,9 +213,11 @@ class InitCommand : CliktCommand(name = "init") {
                 getLogger().info("$pluginName disabled!");
             }
         }
-    """.trimIndent() + "\n"
+    """
+          .trimIndent() + "\n"
 
-    private fun mainPluginKt(packageName: String, pluginName: String) = """
+  private fun mainPluginKt(packageName: String, pluginName: String) =
+      """
         package $packageName
 
         import org.bukkit.plugin.java.JavaPlugin
@@ -201,9 +231,11 @@ class InitCommand : CliktCommand(name = "init") {
                 logger.info("$pluginName disabled!")
             }
         }
-    """.trimIndent() + "\n"
+    """
+          .trimIndent() + "\n"
 
-    private fun testPluginJava(packageName: String, pluginName: String) = """
+  private fun testPluginJava(packageName: String, pluginName: String) =
+      """
         package $packageName;
 
         import org.junit.jupiter.api.AfterEach;
@@ -234,9 +266,11 @@ class InitCommand : CliktCommand(name = "init") {
                 assertNotNull(plugin);
             }
         }
-    """.trimIndent() + "\n"
+    """
+          .trimIndent() + "\n"
 
-    private fun testPluginKt(packageName: String, pluginName: String) = """
+  private fun testPluginKt(packageName: String, pluginName: String) =
+      """
         package $packageName
 
         import org.junit.jupiter.api.AfterEach
@@ -266,9 +300,11 @@ class InitCommand : CliktCommand(name = "init") {
                 assertNotNull(plugin)
             }
         }
-    """.trimIndent() + "\n"
+    """
+          .trimIndent() + "\n"
 
-    private fun paperplaneYml(paperVersion: String) = """
+  private fun paperplaneYml(paperVersion: String) =
+      """
         server:
           version: "$paperVersion"
           jvm-args:
@@ -277,22 +313,25 @@ class InitCommand : CliktCommand(name = "init") {
         dev:
           mode: hot-reload      # hot-reload | blue-green | restart
           # jbr: auto           # auto | on | off | /path/to/jbr
-    """.trimIndent() + "\n"
+    """
+          .trimIndent() + "\n"
 
-    private fun gitignore() = """
-        # Build
-        build/
-        .gradle/
+  private fun gitignore() =
+      """
+      # Build
+      build/
+      .gradle/
 
-        # IDE
-        .idea/
-        *.iml
-        .vscode/
+      # IDE
+      .idea/
+      *.iml
+      .vscode/
 
-        # OS
-        .DS_Store
+      # OS
+      .DS_Store
 
-        # PaperPlane
-        .paperplane/
-    """.trimIndent() + "\n"
+      # PaperPlane
+      .paperplane/
+      """
+          .trimIndent() + "\n"
 }

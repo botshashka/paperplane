@@ -1,36 +1,30 @@
-plugins {
-    alias(libs.plugins.shadow)
-}
+plugins { alias(libs.plugins.shadow) }
 
-repositories {
-    maven("https://repo.papermc.io/repository/maven-public/")
-}
+repositories { maven("https://repo.papermc.io/repository/maven-public/") }
 
 dependencies {
-    compileOnly(libs.paper.api)
-    implementation(libs.gson)
-    implementation(libs.asm)
+  compileOnly(libs.paper.api)
+  implementation(libs.gson)
+  implementation(libs.asm)
 
-    testImplementation(libs.paper.api)
-    testImplementation(libs.junit.jupiter)
-    testRuntimeOnly(libs.junit.platform.launcher)
-    testImplementation(libs.mockbukkit)
+  testImplementation(libs.paper.api)
+  testImplementation(libs.junit.jupiter)
+  testRuntimeOnly(libs.junit.platform.launcher)
+  testImplementation(libs.mockbukkit)
 }
 
 tasks.shadowJar {
-    archiveBaseName.set("paperplane-companion")
-    archiveClassifier.set("")
-    archiveVersion.set("")
-    // ASM is shaded as-is (no relocation). Paper's internal ASM is already
-    // relocated to a different namespace, so no conflict.
+  archiveBaseName.set("paperplane-companion")
+  archiveClassifier.set("")
+  archiveVersion.set("")
+  // ASM is shaded as-is (no relocation). Paper's internal ASM is already
+  // relocated to a different namespace, so no conflict.
 }
 
 // Make 'jar' point to shadowJar so downstream tasks get the fat jar
 tasks.jar {
-    archiveBaseName.set("paperplane-companion")
-    enabled = false
+  archiveBaseName.set("paperplane-companion")
+  enabled = false
 }
 
-tasks.named("build") {
-    dependsOn(tasks.shadowJar)
-}
+tasks.named("build") { dependsOn(tasks.shadowJar) }

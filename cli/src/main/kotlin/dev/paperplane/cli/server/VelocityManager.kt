@@ -4,20 +4,20 @@ import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import java.util.UUID
 
-class VelocityManager(
-    private val proxyDir: File
-) {
-    private var process: Process? = null
-    private val pluginsDir = File(proxyDir, "plugins")
+class VelocityManager(private val proxyDir: File) {
+  private var process: Process? = null
+  private val pluginsDir = File(proxyDir, "plugins")
 
-    val forwardingSecret: String = UUID.randomUUID().toString()
+  val forwardingSecret: String = UUID.randomUUID().toString()
 
-    fun configure(serverPort: Int = 25566, swapPort: Int = 25567, proxyPort: Int = 25565) {
-        proxyDir.mkdirs()
-        pluginsDir.mkdirs()
+  fun configure(serverPort: Int = 25566, swapPort: Int = 25567, proxyPort: Int = 25565) {
+    proxyDir.mkdirs()
+    pluginsDir.mkdirs()
 
-        // Always overwrite — generated config, needs both backends registered
-        File(proxyDir, "velocity.toml").writeText("""
+    // Always overwrite — generated config, needs both backends registered
+    File(proxyDir, "velocity.toml")
+        .writeText(
+            """
             # PaperPlane Velocity proxy config
             bind = "0.0.0.0:$proxyPort"
             motd = "PaperPlane Dev Server"
@@ -48,120 +48,125 @@ class VelocityManager(
             [query]
             enabled = false
             port = 25577
-        """.trimIndent() + "\n")
-
-        // Write forwarding secret
-        File(proxyDir, "forwarding.secret").writeText(forwardingSecret)
-
-        // Write initial active server state
-        writeActiveServer("blue")
-
-        // Copy embedded transfer plugin
-        copyTransferPlugin()
-    }
-
-    fun clearTransferComplete() {
-        File(proxyDir, "transfer-complete").delete()
-    }
-
-    fun waitForTransferComplete(timeoutMs: Long = 5000): Boolean {
-        val file = File(proxyDir, "transfer-complete")
-        val start = System.currentTimeMillis()
-        while (System.currentTimeMillis() - start < timeoutMs) {
-            if (file.exists()) {
-                file.delete()
-                return true
-            }
-            Thread.sleep(100)
-        }
-        return false
-    }
-
-    fun writeActiveServer(serverName: String, transfer: Boolean = false) {
-        File(proxyDir, "active-server.json").writeText(
-            """{"active":"$serverName","transfer":$transfer}"""
+        """
+                .trimIndent() + "\n"
         )
-    }
 
-    fun start(velocityJar: File): Process {
-        val cmd = listOf(
+    // Write forwarding secret
+    File(proxyDir, "forwarding.secret").writeText(forwardingSecret)
+
+    // Write initial active server state
+    writeActiveServer("blue")
+
+    // Copy embedded transfer plugin
+    copyTransferPlugin()
+  }
+
+  fun clearTransferComplete() {
+    File(proxyDir, "transfer-complete").delete()
+  }
+
+  fun waitForTransferComplete(timeoutMs: Long = 5000): Boolean {
+    val file = File(proxyDir, "transfer-complete")
+    val start = System.currentTimeMillis()
+    while (System.currentTimeMillis() - start < timeoutMs) {
+      if (file.exists()) {
+        file.delete()
+        return true
+      }
+      Thread.sleep(100)
+    }
+    return false
+  }
+
+  fun writeActiveServer(serverName: String, transfer: Boolean = false) {
+    File(proxyDir, "active-server.json")
+        .writeText("""{"active":"$serverName","transfer":$transfer}""")
+  }
+
+  fun start(velocityJar: File): Process {
+    val cmd =
+        listOf(
             "java",
             "-Xmx256M",
             "-XX:+UseG1GC",
             "--enable-native-access=ALL-UNNAMED",
-            "--add-opens", "java.base/java.lang=ALL-UNNAMED",
-            "--add-opens", "java.base/sun.misc=ALL-UNNAMED",
-            "--add-opens", "java.base/java.io=ALL-UNNAMED",
-            "-jar", velocityJar.absolutePath
+            "--add-opens",
+            "java.base/java.lang=ALL-UNNAMED",
+            "--add-opens",
+            "java.base/sun.misc=ALL-UNNAMED",
+            "--add-opens",
+            "java.base/java.io=ALL-UNNAMED",
+            "-jar",
+            velocityJar.absolutePath,
         )
 
-        val pb = ProcessBuilder(cmd)
-            .directory(proxyDir)
-            .redirectErrorStream(true)
+    val pb = ProcessBuilder(cmd).directory(proxyDir).redirectErrorStream(true)
 
-        val proc = pb.start()
-        process = proc
+    val proc = pb.start()
+    process = proc
 
-        Thread({
-            proc.inputStream.bufferedReader().forEachLine { line ->
+    Thread(
+            {
+              proc.inputStream.bufferedReader().forEachLine { line ->
                 TerminalUI.serverLog("  ${formatProxyLine(line)}")
-            }
-        }, "proxy-output").apply { isDaemon = true }.start()
+              }
+            },
+            "proxy-output",
+        )
+        .apply { isDaemon = true }
+        .start()
 
-        return proc
+    return proc
+  }
+
+  fun stop() {
+    val proc = process ?: return
+    if (!proc.isAlive) return
+
+    proc.destroy()
+    val exited = proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+    if (!exited) {
+      proc.destroyForcibly()
+      proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
     }
+    process = null
+  }
 
-    fun stop() {
-        val proc = process ?: return
-        if (!proc.isAlive) return
+  fun isRunning(): Boolean = process?.isAlive == true
 
-        proc.destroy()
-        val exited = proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
-        if (!exited) {
-            proc.destroyForcibly()
-            proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
-        }
-        process = null
+  fun waitForReady(port: Int = 25565): Boolean {
+    val proc = process ?: return false
+    val startTime = System.currentTimeMillis()
+    val timeout = 30_000L
+    while (proc.isAlive && System.currentTimeMillis() - startTime < timeout) {
+      try {
+        java.net.Socket("localhost", port).close()
+        return true
+      } catch (_: Exception) {
+        Thread.sleep(500)
+      }
     }
+    return false
+  }
 
-    fun isRunning(): Boolean = process?.isAlive == true
-
-    fun waitForReady(port: Int = 25565): Boolean {
-        val proc = process ?: return false
-        val startTime = System.currentTimeMillis()
-        val timeout = 30_000L
-        while (proc.isAlive && System.currentTimeMillis() - startTime < timeout) {
-            try {
-                java.net.Socket("localhost", port).close()
-                return true
-            } catch (_: Exception) {
-                Thread.sleep(500)
-            }
-        }
-        return false
+  private fun copyTransferPlugin() {
+    val stream = javaClass.classLoader.getResourceAsStream("paperplane-velocity.bin")
+    if (stream != null) {
+      val target = File(pluginsDir, "paperplane-transfer.jar")
+      stream.use { input -> target.outputStream().use { output -> input.copyTo(output) } }
     }
+  }
 
-    private fun copyTransferPlugin() {
-        val stream = javaClass.classLoader.getResourceAsStream("paperplane-velocity.bin")
-        if (stream != null) {
-            val target = File(pluginsDir, "paperplane-transfer.jar")
-            stream.use { input ->
-                target.outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            }
-        }
+  private val proxyLineRegex = Regex("""\[[\d:]+] \[([^]]+)] (.+)""")
+
+  private fun formatProxyLine(line: String): String {
+    val match = proxyLineRegex.find(line)
+    return if (match != null) {
+      val (thread, message) = match.destructured
+      "\u001b[2m[proxy/$thread]\u001b[0m $message"
+    } else {
+      "\u001b[2m[proxy]\u001b[0m $line"
     }
-
-    private val proxyLineRegex = Regex("""\[[\d:]+] \[([^]]+)] (.+)""")
-
-    private fun formatProxyLine(line: String): String {
-        val match = proxyLineRegex.find(line)
-        return if (match != null) {
-            val (thread, message) = match.destructured
-            "\u001b[2m[proxy/$thread]\u001b[0m $message"
-        } else {
-            "\u001b[2m[proxy]\u001b[0m $line"
-        }
-    }
+  }
 }

@@ -13,6 +13,8 @@ asm = "9.7.1"
 adventure = "4.17.0"
 mockbukkit = "4.108.0"
 kotlinx-serialization = "1.7.3"
+ktfmt = "0.26.0"
+detekt = "2.0.0-alpha.2"
 
 [libraries]
 kotlinx-serialization-core = { module = "org.jetbrains.kotlinx:kotlinx-serialization-core", version.ref = "kotlinx-serialization" }
@@ -33,3 +35,5 @@ velocity-api = { module = "com.velocitypowered:velocity-api", version.ref = "vel
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 shadow = { id = "com.gradleup.shadow", version.ref = "shadow" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+ktfmt = { id = "com.ncorti.ktfmt.gradle", version.ref = "ktfmt" }
+detekt = { id = "dev.detekt", version.ref = "detekt" }

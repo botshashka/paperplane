@@ -1,27 +1,21 @@
-plugins {
-    alias(libs.plugins.shadow)
-}
+plugins { alias(libs.plugins.shadow) }
 
-repositories {
-    maven("https://repo.papermc.io/repository/maven-public/")
-}
+repositories { maven("https://repo.papermc.io/repository/maven-public/") }
 
 dependencies {
-    compileOnly(libs.velocity.api)
-    implementation(libs.gson)
+  compileOnly(libs.velocity.api)
+  implementation(libs.gson)
 }
 
 tasks.shadowJar {
-    archiveBaseName.set("paperplane-velocity")
-    archiveClassifier.set("")
-    archiveVersion.set("")
+  archiveBaseName.set("paperplane-velocity")
+  archiveClassifier.set("")
+  archiveVersion.set("")
 }
 
 tasks.jar {
-    archiveBaseName.set("paperplane-velocity")
-    enabled = false
+  archiveBaseName.set("paperplane-velocity")
+  enabled = false
 }
 
-tasks.named("build") {
-    dependsOn(tasks.shadowJar)
-}
+tasks.named("build") { dependsOn(tasks.shadowJar) }
