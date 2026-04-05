@@ -2,9 +2,15 @@ package dev.paperplane.companion
 
 import java.lang.instrument.ClassFileTransformer
 import java.lang.instrument.Instrumentation
+import java.lang.instrument.UnmodifiableClassException
 import java.security.ProtectionDomain
 import java.util.logging.Logger
-import org.objectweb.asm.*
+import org.objectweb.asm.ClassReader
+import org.objectweb.asm.ClassVisitor
+import org.objectweb.asm.ClassWriter
+import org.objectweb.asm.Label
+import org.objectweb.asm.MethodVisitor
+import org.objectweb.asm.Opcodes
 
 /**
  * Patches JavaPlugin's no-arg constructor so that it no longer throws IllegalStateException when
@@ -56,7 +62,7 @@ object JavaPluginPatcher {
       isPatched = true
       logger.info("JavaPlugin constructor patched for dev-mode class loading")
       true
-    } catch (e: Exception) {
+    } catch (e: UnmodifiableClassException) {
       logger.warning("Failed to patch JavaPlugin constructor: ${e.message}")
       false
     }
@@ -67,7 +73,7 @@ object JavaPluginPatcher {
       val agentClass =
           ClassLoader.getSystemClassLoader().loadClass("dev.paperplane.agent.PaperPlaneAgent")
       agentClass.getMethod("getInstrumentation").invoke(null) as? Instrumentation
-    } catch (_: Exception) {
+    } catch (_: ReflectiveOperationException) {
       null
     }
   }

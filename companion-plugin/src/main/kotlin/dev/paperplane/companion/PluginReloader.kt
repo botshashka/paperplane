@@ -35,12 +35,20 @@ data class ReloadOutcome(
     "DEPRECATION"
 ) // SimplePluginManager is deprecated in Paper but still used for Bukkit-style plugins
 class PluginReloader(private val server: Server, private val logger: Logger) {
+  companion object {
+    private const val MAX_CONSECUTIVE_LEAKS = 3
+    private const val SLOW_PHASE_THRESHOLD_MS = 3000L
+    private const val THREAD_JOIN_TIMEOUT_MS = 2000L
+    private const val MAX_THREAD_STACK_FRAMES = 5
+    private const val GC_NUDGE_DELAY_MS = 100L
+  }
+
   private val leakedClassLoaders = mutableListOf<WeakReference<ClassLoader>>()
   private var consecutiveLeaks = 0
 
   /** Whether hot-reload should be skipped due to repeated classloader leaks. */
   val shouldForceBlueGreen: Boolean
-    get() = consecutiveLeaks >= 3
+    get() = consecutiveLeaks >= MAX_CONSECUTIVE_LEAKS
 
   // ── JAR-based reload (existing path) ───────────────────────────────
 
@@ -108,13 +116,17 @@ class PluginReloader(private val server: Server, private val logger: Logger) {
     val oldClassLoader = oldPlugin.javaClass.classLoader
     try {
       teardown(oldPlugin, pluginName)
-    } catch (e: Exception) {
+    } catch (
+        @Suppress(
+            "TooGenericExceptionCaught"
+        ) // Teardown involves plugin callbacks and reflection into Paper internals
+        e: Exception) {
       logger.severe("Failed during plugin teardown: ${e.message}")
-      e.printStackTrace()
+      logger.severe(e.stackTraceToString())
       return ReloadOutcome(ReloadResult.REFLECTION_ERROR)
     }
     val teardownMs = System.currentTimeMillis() - teardownStart
-    if (teardownMs > 3000) {
+    if (teardownMs > SLOW_PHASE_THRESHOLD_MS) {
       logger.warning(
           "Plugin teardown took ${teardownMs}ms (>3s) — plugin's onDisable() may be slow"
       )
@@ -127,10 +139,14 @@ class PluginReloader(private val server: Server, private val logger: Logger) {
     val newPlugin: Plugin
     try {
       newPlugin = loadFn()
-    } catch (e: Exception) {
+    } catch (
+        @Suppress(
+            "TooGenericExceptionCaught"
+        ) // Plugin loading involves reflection, class loading, and plugin callbacks
+        e: Exception) {
       logger.severe("Failed to load plugin: ${e.message}")
       if (e.cause != null) logger.severe("Caused by: ${e.cause}")
-      e.printStackTrace()
+      logger.severe(e.stackTraceToString())
 
       if (rollbackFn != null) {
         logger.warning("Attempting rollback...")
@@ -144,7 +160,11 @@ class PluginReloader(private val server: Server, private val logger: Logger) {
               System.currentTimeMillis() - loadStart,
               totalMs,
           )
-        } catch (rollbackEx: Exception) {
+        } catch (
+            @Suppress(
+                "TooGenericExceptionCaught"
+            ) // Rollback involves same reflection/class-loading as load
+            rollbackEx: Exception) {
           logger.severe("Rollback also failed: ${rollbackEx.message}")
           rollbackEx.printStackTrace()
           val totalMs = System.currentTimeMillis() - totalStart
@@ -166,7 +186,7 @@ class PluginReloader(private val server: Server, private val logger: Logger) {
       )
     }
     val loadMs = System.currentTimeMillis() - loadStart
-    if (loadMs > 3000) {
+    if (loadMs > SLOW_PHASE_THRESHOLD_MS) {
       logger.warning("Plugin load+enable took ${loadMs}ms (>3s) — plugin's onEnable() may be slow")
     }
 
@@ -328,7 +348,7 @@ class PluginReloader(private val server: Server, private val logger: Logger) {
       return snapshot.any { clazz: Class<*> ->
         clazz.name.startsWith("net.minecraft.") || clazz.name.startsWith("org.bukkit.craftbukkit.")
       }
-    } catch (_: Exception) {
+    } catch (_: ReflectiveOperationException) {
       return false
     }
   }
@@ -349,9 +369,10 @@ class PluginReloader(private val server: Server, private val logger: Logger) {
     }
 
     for (thread in pluginThreads) {
-      thread.join(2000)
+      thread.join(THREAD_JOIN_TIMEOUT_MS)
       if (thread.isAlive) {
-        val stack = thread.stackTrace.take(5).joinToString("\n    ") { it.toString() }
+        val stack =
+            thread.stackTrace.take(MAX_THREAD_STACK_FRAMES).joinToString("\n    ") { it.toString() }
         logger.warning("Thread '${thread.name}' did not stop after interrupt:\n    $stack")
       }
     }
@@ -362,7 +383,7 @@ class PluginReloader(private val server: Server, private val logger: Logger) {
   private fun nudgeGc() {
     System.gc()
     try {
-      Thread.sleep(100)
+      Thread.sleep(GC_NUDGE_DELAY_MS)
     } catch (_: InterruptedException) {}
   }
 
@@ -388,7 +409,7 @@ class PluginReloader(private val server: Server, private val logger: Logger) {
         logger.warning(
             "$confirmedLeaking classloader(s) not collected after full reload cycle (leak #$consecutiveLeaks)"
         )
-        if (consecutiveLeaks >= 3) {
+        if (consecutiveLeaks >= MAX_CONSECUTIVE_LEAKS) {
           logger.warning(
               "Too many classloader leaks — hot-reload will be disabled for this session"
           )

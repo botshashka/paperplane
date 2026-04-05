@@ -4,6 +4,8 @@ import com.google.gson.Gson
 import com.google.gson.JsonArray
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
+import java.io.IOException
+import java.net.HttpURLConnection
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -33,7 +35,7 @@ class JbrDownloader(private val cacheDir: File) {
     // Find latest release for this JDK version from GitHub
     val release =
         findLatestRelease(jdkMajorVersion)
-            ?: throw RuntimeException("No JBR release found for JDK $jdkMajorVersion")
+            ?: throw IOException("No JBR release found for JDK $jdkMajorVersion")
 
     val os = detectOs()
     val arch = detectArch()
@@ -46,11 +48,9 @@ class JbrDownloader(private val cacheDir: File) {
     val request = HttpRequest.newBuilder().uri(URI.create(downloadUrl)).build()
     val response = client.send(request, HttpResponse.BodyHandlers.ofFile(tarball.toPath()))
 
-    if (response.statusCode() != 200) {
+    if (response.statusCode() != HttpURLConnection.HTTP_OK) {
       tarball.delete()
-      throw RuntimeException(
-          "Failed to download JBR: HTTP ${response.statusCode()} from $downloadUrl"
-      )
+      throw IOException("Failed to download JBR: HTTP ${response.statusCode()} from $downloadUrl")
     }
 
     // Extract tarball
@@ -59,7 +59,7 @@ class JbrDownloader(private val cacheDir: File) {
     tarball.delete()
 
     return findJavaBin(jbrDir)
-        ?: throw RuntimeException("JBR extracted but java binary not found in $jbrDir")
+        ?: throw IOException("JBR extracted but java binary not found in $jbrDir")
   }
 
   private fun findJavaBin(jbrDir: File): File? {
@@ -102,8 +102,8 @@ class JbrDownloader(private val cacheDir: File) {
             .header("Accept", "application/vnd.github+json")
             .build()
     val response = client.send(request, HttpResponse.BodyHandlers.ofString())
-    if (response.statusCode() != 200) {
-      throw RuntimeException("GitHub API request failed: HTTP ${response.statusCode()}")
+    if (response.statusCode() != HttpURLConnection.HTTP_OK) {
+      throw IOException("GitHub API request failed: HTTP ${response.statusCode()}")
     }
 
     val releases = gson.fromJson(response.body(), JsonArray::class.java)
@@ -132,7 +132,7 @@ class JbrDownloader(private val cacheDir: File) {
       osName.contains("mac") || osName.contains("darwin") -> "osx"
       osName.contains("linux") -> "linux"
       osName.contains("windows") -> "windows"
-      else -> throw RuntimeException("Unsupported OS: $osName")
+      else -> throw IOException("Unsupported OS: $osName")
     }
   }
 
@@ -141,7 +141,7 @@ class JbrDownloader(private val cacheDir: File) {
     return when {
       arch == "aarch64" || arch == "arm64" -> "aarch64"
       arch == "amd64" || arch == "x86_64" -> "x64"
-      else -> throw RuntimeException("Unsupported architecture: $arch")
+      else -> throw IOException("Unsupported architecture: $arch")
     }
   }
 
@@ -157,7 +157,7 @@ class JbrDownloader(private val cacheDir: File) {
     val output = proc.inputStream.bufferedReader().readText()
     val exitCode = proc.waitFor()
     if (exitCode != 0) {
-      throw RuntimeException("Failed to extract JBR tarball (exit code $exitCode): $output")
+      throw IOException("Failed to extract JBR tarball (exit code $exitCode): $output")
     }
   }
 }

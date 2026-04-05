@@ -2,13 +2,19 @@ package dev.paperplane.companion
 
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import com.google.gson.JsonParseException
 import java.io.File
+import java.io.IOException
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.plugin.java.JavaPlugin
 import org.bukkit.scheduler.BukkitTask
 
 class BuildStatusBar(private val plugin: JavaPlugin) {
+  companion object {
+    private const val POLL_INTERVAL_TICKS = 5L
+  }
+
   private val gson = Gson()
   private var pollTask: BukkitTask? = null
   private var lastState: String? = null
@@ -24,7 +30,13 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
 
   fun start() {
     // Poll companion-status.json every 5 ticks (250ms)
-    pollTask = plugin.server.scheduler.runTaskTimer(plugin, Runnable { poll() }, 5L, 5L)
+    pollTask =
+        plugin.server.scheduler.runTaskTimer(
+            plugin,
+            Runnable { poll() },
+            POLL_INTERVAL_TICKS,
+            POLL_INTERVAL_TICKS,
+        )
   }
 
   fun stop() {
@@ -64,7 +76,9 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
           performReload(json)
         }
       }
-    } catch (e: Exception) {
+    } catch (e: IOException) {
+      plugin.logger.fine("Status file poll error: ${e.message}")
+    } catch (e: JsonParseException) {
       plugin.logger.fine("Status file poll error: ${e.message}")
     }
   }
@@ -110,14 +124,14 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
     val buildOutputDirs =
         try {
           json.getAsJsonArray("buildOutputDirs")?.map { it.asString }
-        } catch (_: Exception) {
+        } catch (_: JsonParseException) {
           null
         }
 
     val changedClasses =
         try {
           json.getAsJsonArray("changedClasses")?.map { it.asString }
-        } catch (_: Exception) {
+        } catch (_: JsonParseException) {
           null
         }
 
@@ -143,7 +157,7 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
                 currentJar.toPath(),
                 java.nio.file.StandardCopyOption.REPLACE_EXISTING,
             )
-          } catch (e: Exception) {
+          } catch (e: IOException) {
             plugin.logger.warning("Failed to finalize staged jar: ${e.message}")
           }
         }
@@ -252,7 +266,7 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
       val flagFile = File(plugin.dataFolder.parentFile.parentFile, ".paperplane/save-complete")
       flagFile.parentFile.mkdirs()
       flagFile.writeText(System.currentTimeMillis().toString())
-    } catch (e: Exception) {
+    } catch (e: IOException) {
       plugin.logger.warning("Failed to save: ${e.message}")
     }
   }

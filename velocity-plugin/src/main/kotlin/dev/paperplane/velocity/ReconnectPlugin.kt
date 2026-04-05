@@ -2,6 +2,7 @@ package dev.paperplane.velocity
 
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import com.google.gson.JsonParseException
 import com.google.inject.Inject
 import com.velocitypowered.api.event.Subscribe
 import com.velocitypowered.api.event.player.KickedFromServerEvent
@@ -10,8 +11,11 @@ import com.velocitypowered.api.event.proxy.ProxyInitializeEvent
 import com.velocitypowered.api.plugin.Plugin
 import com.velocitypowered.api.proxy.ProxyServer
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import org.slf4j.Logger
@@ -25,19 +29,24 @@ import org.slf4j.Logger
 class ReconnectPlugin
 @Inject
 constructor(private val server: ProxyServer, private val logger: Logger) {
+  companion object {
+    private const val STATUS_POLL_INTERVAL_MS = 100L
+    private const val TRANSFER_TIMEOUT_SECONDS = 5L
+  }
+
   private val gson = Gson()
   private var activeServer: String = "server"
   private val statusFile = File("active-server.json")
 
   @Subscribe
-  fun onProxyInit(event: ProxyInitializeEvent) {
+  fun onProxyInit(_event: ProxyInitializeEvent) {
     // Read initial state
     pollStatus()
 
     // Poll active-server.json every 100ms
     server.scheduler
         .buildTask(this, Runnable { pollStatus() })
-        .repeat(100, TimeUnit.MILLISECONDS)
+        .repeat(STATUS_POLL_INTERVAL_MS, TimeUnit.MILLISECONDS)
         .schedule()
 
     logger.info("PaperPlane transfer plugin enabled")
@@ -84,7 +93,9 @@ constructor(private val server: ProxyServer, private val logger: Logger) {
           logger.warn("Transfer to {} had failures", newActive)
         }
       }
-    } catch (e: Exception) {
+    } catch (e: IOException) {
+      logger.warn("Failed to poll active-server.json: {}", e.message)
+    } catch (e: JsonParseException) {
       logger.warn("Failed to poll active-server.json: {}", e.message)
     }
   }
@@ -118,9 +129,17 @@ constructor(private val server: ProxyServer, private val logger: Logger) {
     if (futures.isEmpty()) return true
 
     return try {
-      CompletableFuture.allOf(*futures.toTypedArray()).get(5, TimeUnit.SECONDS)
+      CompletableFuture.allOf(*futures.toTypedArray())
+          .get(TRANSFER_TIMEOUT_SECONDS, TimeUnit.SECONDS)
       true
-    } catch (e: Exception) {
+    } catch (e: TimeoutException) {
+      logger.warn("Some transfers did not complete in time: {}", e.message)
+      false
+    } catch (e: ExecutionException) {
+      logger.warn("Some transfers did not complete in time: {}", e.message)
+      false
+    } catch (e: InterruptedException) {
+      Thread.currentThread().interrupt()
       logger.warn("Some transfers did not complete in time: {}", e.message)
       false
     }

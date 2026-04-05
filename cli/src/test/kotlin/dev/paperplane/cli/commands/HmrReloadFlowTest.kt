@@ -2,9 +2,12 @@ package dev.paperplane.cli.commands
 
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import dev.paperplane.cli.devserver.ReloadStrategy
 import dev.paperplane.cli.gradle.ClassChanges
 import java.io.File
-import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 
@@ -215,6 +218,10 @@ class HmrReloadFlowTest {
 
   // ── Strategy selection logic ──────────────────────────────────────
 
+  private fun selectStrategy(changes: ClassChanges): ReloadStrategy =
+      if (changes.noNewOrRemovedClasses && changes.modified.isNotEmpty()) ReloadStrategy.HOTSWAP
+      else ReloadStrategy.DIRECTORY
+
   @Test
   fun `hotswap strategy chosen when only modified classes and non-empty`() {
     val changes =
@@ -223,10 +230,7 @@ class HmrReloadFlowTest {
             added = emptyList(),
             removed = emptyList(),
         )
-    val strategy =
-        if (changes.noNewOrRemovedClasses && changes.modified.isNotEmpty()) "hotswap"
-        else "directory"
-    assertEquals("hotswap", strategy)
+    assertEquals(ReloadStrategy.HOTSWAP, selectStrategy(changes))
   }
 
   @Test
@@ -237,10 +241,7 @@ class HmrReloadFlowTest {
             added = listOf("com.example.NewClass"),
             removed = emptyList(),
         )
-    val strategy =
-        if (changes.noNewOrRemovedClasses && changes.modified.isNotEmpty()) "hotswap"
-        else "directory"
-    assertEquals("directory", strategy)
+    assertEquals(ReloadStrategy.DIRECTORY, selectStrategy(changes))
   }
 
   @Test
@@ -251,18 +252,55 @@ class HmrReloadFlowTest {
             added = emptyList(),
             removed = listOf("com.example.OldClass"),
         )
-    val strategy =
-        if (changes.noNewOrRemovedClasses && changes.modified.isNotEmpty()) "hotswap"
-        else "directory"
-    assertEquals("directory", strategy)
+    assertEquals(ReloadStrategy.DIRECTORY, selectStrategy(changes))
   }
 
   @Test
   fun `directory strategy chosen when no changes at all`() {
     val changes = ClassChanges(modified = emptyList(), added = emptyList(), removed = emptyList())
+    assertEquals(ReloadStrategy.DIRECTORY, selectStrategy(changes))
+  }
+
+  @Test
+  fun `hotswap strategy chosen with multiple modified classes`() {
+    val changes =
+        ClassChanges(
+            modified = listOf("com.example.A", "com.example.B", "com.example.C"),
+            added = emptyList(),
+            removed = emptyList(),
+        )
+    assertEquals(ReloadStrategy.HOTSWAP, selectStrategy(changes))
+  }
+
+  @Test
+  fun `directory strategy chosen when both added and modified`() {
+    val changes =
+        ClassChanges(
+            modified = listOf("com.example.MyPlugin"),
+            added = listOf("com.example.NewClass"),
+            removed = emptyList(),
+        )
+    assertEquals(ReloadStrategy.DIRECTORY, selectStrategy(changes))
+  }
+
+  @Test
+  fun `strategy key is used in protocol JSON`() {
     val strategy =
-        if (changes.noNewOrRemovedClasses && changes.modified.isNotEmpty()) "hotswap"
-        else "directory"
-    assertEquals("directory", strategy)
+        selectStrategy(
+            ClassChanges(
+                modified = listOf("com.example.A"),
+                added = emptyList(),
+                removed = emptyList(),
+            )
+        )
+    val statusExtra =
+        mutableMapOf<String, Any>(
+            "pluginName" to "TestPlugin",
+            "jarFileName" to "test.jar",
+            "reloadStrategy" to strategy.key,
+        )
+    val json = Gson().toJson(statusExtra)
+    val parsed = parseJson(json)
+    assertEquals("hotswap", parsed["reloadStrategy"])
   }
 }

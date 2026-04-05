@@ -5,12 +5,20 @@ import java.io.File
 import java.util.UUID
 
 class VelocityManager(private val proxyDir: File) {
+  companion object {
+    private const val TRANSFER_POLL_INTERVAL_MS = 100L
+    private const val STOP_TIMEOUT_SECONDS = 5L
+    private const val FORCE_STOP_TIMEOUT_SECONDS = 2L
+    private const val READY_TIMEOUT_MS = 30_000L
+    private const val READY_POLL_INTERVAL_MS = 500L
+  }
+
   private var process: Process? = null
   private val pluginsDir = File(proxyDir, "plugins")
 
   val forwardingSecret: String = UUID.randomUUID().toString()
 
-  fun configure(serverPort: Int = 25566, swapPort: Int = 25567, proxyPort: Int = 25565) {
+  fun configure(serverPort: Int, swapPort: Int, proxyPort: Int) {
     proxyDir.mkdirs()
     pluginsDir.mkdirs()
 
@@ -74,7 +82,7 @@ class VelocityManager(private val proxyDir: File) {
         file.delete()
         return true
       }
-      Thread.sleep(100)
+      Thread.sleep(TRANSFER_POLL_INTERVAL_MS)
     }
     return false
   }
@@ -125,26 +133,26 @@ class VelocityManager(private val proxyDir: File) {
     if (!proc.isAlive) return
 
     proc.destroy()
-    val exited = proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+    val exited = proc.waitFor(STOP_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
     if (!exited) {
       proc.destroyForcibly()
-      proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+      proc.waitFor(FORCE_STOP_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
     }
     process = null
   }
 
   fun isRunning(): Boolean = process?.isAlive == true
 
-  fun waitForReady(port: Int = 25565): Boolean {
+  fun waitForReady(port: Int = PaperServerManager.DEFAULT_PORT): Boolean {
     val proc = process ?: return false
     val startTime = System.currentTimeMillis()
-    val timeout = 30_000L
+    val timeout = READY_TIMEOUT_MS
     while (proc.isAlive && System.currentTimeMillis() - startTime < timeout) {
       try {
         java.net.Socket("localhost", port).close()
         return true
       } catch (_: Exception) {
-        Thread.sleep(500)
+        Thread.sleep(READY_POLL_INTERVAL_MS)
       }
     }
     return false

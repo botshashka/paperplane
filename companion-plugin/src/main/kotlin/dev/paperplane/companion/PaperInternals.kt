@@ -23,6 +23,9 @@ import org.bukkit.plugin.java.JavaPluginLoader
 @Suppress("DEPRECATION")
 object PaperInternals {
 
+  private const val MIN_CLASSLOADER_CTOR_PARAMS = 5
+  private const val MAX_REGISTRY_TRAVERSAL_DEPTH = 4
+
   // ── Cached reflection results ──────────────────────────────────────
 
   private var pluginClassLoaderCtor: Constructor<*>? = null
@@ -33,7 +36,9 @@ object PaperInternals {
   private val paperVersion: String by lazy {
     try {
       org.bukkit.Bukkit.getServer()?.javaClass?.`package`?.implementationVersion ?: "unknown"
-    } catch (_: Exception) {
+    } catch (
+        @Suppress("TooGenericExceptionCaught") // Server may not be initialized yet
+        _: Exception) {
       "unknown"
     }
   }
@@ -86,7 +91,7 @@ object PaperInternals {
       val loaderField = pclClass.getDeclaredField("loader")
       loaderField.isAccessible = true
       loaderField.set(classLoaderInstance, loader)
-    } catch (e: Exception) {
+    } catch (e: ReflectiveOperationException) {
       logger.warning("Could not set loader field on PluginClassLoader: ${e.message}")
     }
 
@@ -101,7 +106,7 @@ object PaperInternals {
           pluginInstance = v
           break
         }
-      } catch (_: Exception) {}
+      } catch (_: ReflectiveOperationException) {}
     }
 
     if (pluginInstance == null) {
@@ -130,7 +135,7 @@ object PaperInternals {
 
     val ctor =
         pclClass.declaredConstructors
-            .filter { it.parameterCount >= 5 }
+            .filter { it.parameterCount >= MIN_CLASSLOADER_CTOR_PARAMS }
             .maxByOrNull { it.parameterCount }
             ?: throw IllegalStateException(
                 "No suitable PluginClassLoader constructor found (Paper $paperVersion). " +
@@ -201,7 +206,7 @@ object PaperInternals {
           classLoader,
       )
       true
-    } catch (_: Exception) {
+    } catch (_: ReflectiveOperationException) {
       false
     }
   }
@@ -231,7 +236,7 @@ object PaperInternals {
         f.isAccessible = true
         f.set(plugin, value)
         setFields.add(name)
-      } catch (e: Exception) {
+      } catch (e: ReflectiveOperationException) {
         logger.warning("Failed to set JavaPlugin.$name: ${e.message}")
       }
     }
@@ -241,7 +246,7 @@ object PaperInternals {
       val loaderF = Class.forName("org.bukkit.plugin.PluginBase").getDeclaredField("loader")
       loaderF.isAccessible = true
       loaderF.set(plugin, JavaPluginLoader(server))
-    } catch (e: Exception) {
+    } catch (e: ReflectiveOperationException) {
       logger.warning("Failed to set PluginBase.loader: ${e.message}")
     }
 
@@ -284,7 +289,11 @@ object PaperInternals {
             cachedSpm = value
             return value
           }
-        } catch (_: Exception) {}
+        } catch (
+            @Suppress(
+                "TooGenericExceptionCaught"
+            ) // Reflection on unknown fields may throw any RuntimeException
+            _: Exception) {}
       }
       clazz = clazz.superclass
     }
@@ -300,11 +309,11 @@ object PaperInternals {
                 "Could not find SimplePluginManager (Paper $paperVersion)"
             )
 
-    val pluginsField = resolveSpmPluginsField(spm)
+    val pluginsField = resolveSpmPluginsField()
     @Suppress("UNCHECKED_CAST") val plugins = pluginsField.get(spm) as MutableList<Plugin>
     plugins.add(plugin)
 
-    val lookupField = resolveSpmLookupField(spm)
+    val lookupField = resolveSpmLookupField()
     @Suppress("UNCHECKED_CAST") val lookupNames = lookupField.get(spm) as MutableMap<String, Plugin>
     lookupNames[pluginName.lowercase()] = plugin
   }
@@ -317,16 +326,16 @@ object PaperInternals {
                 "Could not find SimplePluginManager (Paper $paperVersion)"
             )
 
-    val pluginsField = resolveSpmPluginsField(spm)
+    val pluginsField = resolveSpmPluginsField()
     @Suppress("UNCHECKED_CAST") val plugins = pluginsField.get(spm) as MutableList<Plugin>
     plugins.remove(plugin)
 
-    val lookupField = resolveSpmLookupField(spm)
+    val lookupField = resolveSpmLookupField()
     @Suppress("UNCHECKED_CAST") val lookupNames = lookupField.get(spm) as MutableMap<String, Plugin>
     lookupNames.remove(pluginName.lowercase())
   }
 
-  private fun resolveSpmPluginsField(spm: SimplePluginManager): Field {
+  private fun resolveSpmPluginsField(): Field {
     spmPluginsField?.let {
       return it
     }
@@ -336,7 +345,7 @@ object PaperInternals {
     return f
   }
 
-  private fun resolveSpmLookupField(spm: SimplePluginManager): Field {
+  private fun resolveSpmLookupField(): Field {
     spmLookupField?.let {
       return it
     }
@@ -379,7 +388,7 @@ object PaperInternals {
 
         commandMap.register(description.name, command)
       }
-    } catch (e: Exception) {
+    } catch (e: ReflectiveOperationException) {
       logger.warning("Failed to register commands from plugin.yml: ${e.message}")
     }
   }
@@ -394,7 +403,11 @@ object PaperInternals {
       val pluginCommandNames =
           try {
             plugin.description.commands.keys.map { it.lowercase() }
-          } catch (_: Exception) {
+          } catch (
+              @Suppress(
+                  "TooGenericExceptionCaught"
+              ) // PluginDescriptionFile access may fail on partially-torn-down plugins
+              _: Exception) {
             emptyList()
           }
 
@@ -417,7 +430,11 @@ object PaperInternals {
       if (toRemove.isNotEmpty()) {
         logger.info("Removed ${toRemove.size} command(s): $toRemove")
       }
-    } catch (e: Exception) {
+    } catch (
+        @Suppress(
+            "TooGenericExceptionCaught"
+        ) // Command map operations may throw via Paper internals
+        e: Exception) {
       logger.warning("Failed to clean up commands: ${e.message}")
     }
   }
@@ -428,7 +445,7 @@ object PaperInternals {
   fun syncCommands(server: Server) {
     try {
       server.javaClass.getMethod("syncCommands").invoke(server)
-    } catch (_: Exception) {
+    } catch (_: ReflectiveOperationException) {
       // Paper internal method — may not exist in all versions
     }
   }
@@ -452,7 +469,8 @@ object PaperInternals {
 
     while (queue.isNotEmpty()) {
       val (obj, depth) = queue.removeFirst()
-      if (depth > 4 || !visited.add(System.identityHashCode(obj))) continue
+      if (depth > MAX_REGISTRY_TRAVERSAL_DEPTH || !visited.add(System.identityHashCode(obj)))
+          continue
       val cls = obj.javaClass
       val cn = cls.name
       if (
@@ -496,11 +514,15 @@ object PaperInternals {
                     !vcn.startsWith("sun.") &&
                     !vcn.startsWith("javax.") &&
                     !vcn.startsWith("kotlin.") &&
-                    depth < 4
+                    depth < MAX_REGISTRY_TRAVERSAL_DEPTH
             ) {
               queue.add(value to depth + 1)
             }
-          } catch (_: Exception) {}
+          } catch (
+              @Suppress(
+                  "TooGenericExceptionCaught"
+              ) // Traversing unknown internal fields may throw any RuntimeException
+              _: Exception) {}
         }
         currentClass = currentClass.superclass
       }

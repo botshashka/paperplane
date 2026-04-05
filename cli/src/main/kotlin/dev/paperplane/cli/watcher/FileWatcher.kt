@@ -7,6 +7,11 @@ class FileWatcher(
     private val debounceMs: Long = 2000,
     private val onChange: (List<String>) -> Unit,
 ) {
+  companion object {
+    private const val POLL_INTERVAL_MS = 500L
+    private const val STOP_JOIN_TIMEOUT_MS = 2000L
+  }
+
   @Volatile private var running = false
   private var thread: Thread? = null
 
@@ -22,7 +27,7 @@ class FileWatcher(
         Thread(
                 {
                   while (running) {
-                    Thread.sleep(500)
+                    Thread.sleep(POLL_INTERVAL_MS)
 
                     val current = snapshot()
 
@@ -66,7 +71,7 @@ class FileWatcher(
 
   fun stop() {
     running = false
-    thread?.join(2000)
+    thread?.join(STOP_JOIN_TIMEOUT_MS)
   }
 
   private fun snapshot(): Map<String, Long> {

@@ -5,6 +5,7 @@ import com.google.gson.reflect.TypeToken
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.ByteArrayOutputStream
 import java.io.File
+import org.gradle.tooling.GradleConnectionException
 import org.gradle.tooling.GradleConnector
 import org.gradle.tooling.ProjectConnection
 
@@ -27,6 +28,12 @@ data class ProjectMetadata(
 }
 
 class GradleBridge(private val projectDir: File) : AutoCloseable {
+  companion object {
+    private const val MAX_DISPLAYED_ERRORS = 5
+    private const val MAX_FALLBACK_LINES = 10
+    internal val BUILD_ERROR_PATTERN = Regex("""(.+\.(?:java|kt)):(\d+): error: (.+)""")
+  }
+
   private var connection: ProjectConnection? = null
 
   private fun connect(): ProjectConnection {
@@ -51,7 +58,8 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
           .setStandardError(stderr)
           .run()
       true
-    } catch (e: Exception) {
+    } catch (e: GradleConnectionException) {
+      TerminalUI.status("Build failed: ${e.message}")
       val output = stderr.toString() + stdout.toString()
       parseBuildErrors(output)
       false
@@ -73,8 +81,9 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
           .setStandardError(stderr)
           .run()
       true
-    } catch (e: Exception) {
+    } catch (e: GradleConnectionException) {
       if (!quiet) {
+        TerminalUI.status("Test failed: ${e.message}")
         val output = stderr.toString() + stdout.toString()
         parseBuildErrors(output)
       }
@@ -101,7 +110,8 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
       if (!metadataFile.exists()) return null
 
       parseMetadataFile(metadataFile)
-    } catch (e: Exception) {
+    } catch (e: GradleConnectionException) {
+      TerminalUI.status("Metadata task failed: ${e.message}")
       null
     }
   }
@@ -125,18 +135,16 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
   }
 
   private fun parseBuildErrors(output: String) {
-    // Extract Java/Kotlin compiler errors and display them nicely
-    val errorPattern = Regex("""(.+\.(?:java|kt)):(\d+): error: (.+)""")
-    val errors = errorPattern.findAll(output).toList()
+    val errors = BUILD_ERROR_PATTERN.findAll(output).toList()
 
     if (errors.isNotEmpty()) {
-      for (match in errors.take(5)) {
+      for (match in errors.take(MAX_DISPLAYED_ERRORS)) {
         val (file, line, message) = match.destructured
         val shortFile = file.substringAfter("src/")
         TerminalUI.buildError("src/$shortFile", line.toInt(), message)
       }
-      if (errors.size > 5) {
-        TerminalUI.status("... and ${errors.size - 5} more errors")
+      if (errors.size > MAX_DISPLAYED_ERRORS) {
+        TerminalUI.status("... and ${errors.size - MAX_DISPLAYED_ERRORS} more errors")
       }
     } else {
       // Fallback: show raw output (trimmed)
@@ -145,7 +153,7 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
               .lines()
               .filter { it.isNotBlank() }
               .filter { !it.startsWith(">") && !it.startsWith("*") }
-              .takeLast(10)
+              .takeLast(MAX_FALLBACK_LINES)
               .joinToString("\n")
       if (trimmed.isNotBlank()) {
         TerminalUI.buildError("Build output", null, trimmed)

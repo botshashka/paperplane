@@ -5,8 +5,15 @@ import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
+import java.util.Locale
 
 class CleanCommand : CliktCommand(name = "clean") {
+  companion object {
+    private const val BYTES_PER_GB = 1_073_741_824.0
+    private const val BYTES_PER_MB = 1_048_576.0
+    private const val BYTES_PER_KB = 1024.0
+  }
+
   private val force by option("--force", "-f", help = "Skip confirmation").flag()
   private val all by
       option("--all", "-a", help = "Also delete cache (downloaded Paper/Velocity/JBR)").flag()
@@ -79,9 +86,9 @@ class CleanCommand : CliktCommand(name = "clean") {
 
   private fun formatSize(bytes: Long): String {
     return when {
-      bytes >= 1_073_741_824 -> "%.1f GB".format(bytes / 1_073_741_824.0)
-      bytes >= 1_048_576 -> "%.1f MB".format(bytes / 1_048_576.0)
-      bytes >= 1024 -> "%.1f KB".format(bytes / 1024.0)
+      bytes >= BYTES_PER_GB -> "%.1f GB".format(Locale.US, bytes / BYTES_PER_GB)
+      bytes >= BYTES_PER_MB -> "%.1f MB".format(Locale.US, bytes / BYTES_PER_MB)
+      bytes >= BYTES_PER_KB -> "%.1f KB".format(Locale.US, bytes / BYTES_PER_KB)
       else -> "$bytes B"
     }
   }

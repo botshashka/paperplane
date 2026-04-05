@@ -1,7 +1,9 @@
 package dev.paperplane.cli.server
 
 import java.io.File
-import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 
@@ -30,7 +32,7 @@ class VelocityManagerTest {
       writeText("old-config")
     }
 
-    manager.configure()
+    manager.configure(serverPort = 25566, swapPort = 25567, proxyPort = 25565)
 
     val toml = File(tempDir, "velocity.toml").readText()
     assertFalse(toml.contains("old-config"))
@@ -40,7 +42,7 @@ class VelocityManagerTest {
   @Test
   fun `configure writes forwarding secret`() {
     val manager = VelocityManager(tempDir)
-    manager.configure()
+    manager.configure(serverPort = 25566, swapPort = 25567, proxyPort = 25565)
 
     val secret = File(tempDir, "forwarding.secret").readText()
     assertEquals(manager.forwardingSecret, secret)
@@ -50,7 +52,7 @@ class VelocityManagerTest {
   @Test
   fun `configure writes initial active server json`() {
     val manager = VelocityManager(tempDir)
-    manager.configure()
+    manager.configure(serverPort = 25566, swapPort = 25567, proxyPort = 25565)
 
     val json = File(tempDir, "active-server.json").readText()
     assertTrue(json.contains("\"active\":\"blue\""))

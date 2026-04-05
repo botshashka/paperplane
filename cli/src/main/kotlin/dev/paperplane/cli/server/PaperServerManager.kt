@@ -2,12 +2,25 @@ package dev.paperplane.cli.server
 
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
+import java.io.IOException
 
 class PaperServerManager(
     val serverDir: File,
     private val downloader: PaperDownloader,
-    private val port: Int = 25565,
+    private val port: Int = DEFAULT_PORT,
 ) {
+  companion object {
+    internal const val DEFAULT_PORT = 25565
+    private const val LSOF_TIMEOUT_SECONDS = 5L
+    private const val KILL_TIMEOUT_SECONDS = 2L
+    private const val PORT_RELEASE_DELAY_MS = 500L
+    private const val STOP_TIMEOUT_SECONDS = 5L
+    private const val FORCE_STOP_TIMEOUT_SECONDS = 2L
+    private const val SAVE_POLL_INTERVAL_MS = 200L
+    private const val SERVER_READY_TIMEOUT_MS = 120_000L
+    private const val READY_POLL_INTERVAL_MS = 100L
+  }
+
   private var process: Process? = null
   private var processStdin: java.io.OutputStream? = null
   private val pluginsDir = File(serverDir, "plugins")
@@ -22,14 +35,14 @@ class PaperServerManager(
     try {
       val lsof = ProcessBuilder("lsof", "-ti", "tcp:$port").redirectErrorStream(true).start()
       val pids = lsof.inputStream.bufferedReader().readText().trim()
-      lsof.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+      lsof.waitFor(LSOF_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
       if (pids.isNotEmpty()) {
         for (pid in pids.lines().filter { it.isNotBlank() }) {
           ProcessBuilder("kill", "-9", pid)
               .start()
-              .waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+              .waitFor(KILL_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
         }
-        Thread.sleep(500) // Brief wait for port release
+        Thread.sleep(PORT_RELEASE_DELAY_MS) // Brief wait for port release
       }
     } catch (_: Exception) {
       // Best-effort; lsof may not be available on all systems
@@ -194,9 +207,7 @@ class PaperServerManager(
   private fun extractResource(resourceName: String, target: File) {
     val stream =
         javaClass.classLoader.getResourceAsStream(resourceName)
-            ?: throw RuntimeException(
-                "Resource '$resourceName' not found in CLI jar — corrupted build?"
-            )
+            ?: throw IOException("Resource '$resourceName' not found in CLI jar — corrupted build?")
     stream.use { input -> target.outputStream().use { output -> input.copyTo(output) } }
   }
 
@@ -252,10 +263,10 @@ class PaperServerManager(
     if (!proc.isAlive) return
 
     proc.destroy()
-    val exited = proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+    val exited = proc.waitFor(STOP_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
     if (!exited) {
       proc.destroyForcibly()
-      proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+      proc.waitFor(FORCE_STOP_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
     }
     process = null
     processStdin = null
@@ -285,7 +296,7 @@ class PaperServerManager(
         flagFile.delete()
         return true
       }
-      Thread.sleep(200)
+      Thread.sleep(SAVE_POLL_INTERVAL_MS)
     }
     return false
   }
@@ -297,13 +308,13 @@ class PaperServerManager(
     val flagFile = File(serverDir, ".paperplane/server-ready")
     flagFile.delete() // Clear stale flag
     val startTime = System.currentTimeMillis()
-    val timeout = 120_000L
+    val timeout = SERVER_READY_TIMEOUT_MS
     while (proc.isAlive && System.currentTimeMillis() - startTime < timeout) {
       if (flagFile.exists()) {
         flagFile.delete()
         return true
       }
-      Thread.sleep(100)
+      Thread.sleep(READY_POLL_INTERVAL_MS)
     }
     return false
   }

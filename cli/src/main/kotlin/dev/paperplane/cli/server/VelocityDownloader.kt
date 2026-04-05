@@ -3,6 +3,8 @@ package dev.paperplane.cli.server
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import java.io.File
+import java.io.IOException
+import java.net.HttpURLConnection
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -39,9 +41,9 @@ class VelocityDownloader(private val cacheDir: File) {
     val request = HttpRequest.newBuilder().uri(URI.create(downloadUrl)).build()
     val response = client.send(request, HttpResponse.BodyHandlers.ofFile(jarFile.toPath()))
 
-    if (response.statusCode() != 200) {
+    if (response.statusCode() != HttpURLConnection.HTTP_OK) {
       jarFile.delete()
-      throw RuntimeException("Failed to download Velocity: HTTP ${response.statusCode()}")
+      throw IOException("Failed to download Velocity: HTTP ${response.statusCode()}")
     }
 
     return jarFile
@@ -57,8 +59,8 @@ class VelocityDownloader(private val cacheDir: File) {
   private fun fetch(url: String): String {
     val request = HttpRequest.newBuilder().uri(URI.create(url)).build()
     val response = client.send(request, HttpResponse.BodyHandlers.ofString())
-    if (response.statusCode() != 200) {
-      throw RuntimeException("Velocity API request failed: HTTP ${response.statusCode()} for $url")
+    if (response.statusCode() != HttpURLConnection.HTTP_OK) {
+      throw IOException("Velocity API request failed: HTTP ${response.statusCode()} for $url")
     }
     return response.body()
   }

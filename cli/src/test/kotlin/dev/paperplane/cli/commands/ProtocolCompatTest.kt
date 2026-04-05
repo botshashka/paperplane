@@ -2,10 +2,14 @@ package dev.paperplane.cli.commands
 
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import dev.paperplane.cli.devserver.ReloadStrategy
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.server.PaperServerManager
 import java.io.File
-import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 
@@ -57,7 +61,9 @@ class ProtocolCompatTest {
     manager.serverDir.mkdirs()
     manager.writeCompanionStatus(
         "reloading",
-        mapOf("buildOutputDirs" to listOf("/build/classes/kotlin/main", "/build/classes/java/main")),
+        mapOf(
+            "buildOutputDirs" to listOf("/build/classes/kotlin/main", "/build/classes/java/main")
+        ),
     )
 
     val json = readStatus(manager)
@@ -168,5 +174,34 @@ class ProtocolCompatTest {
     manager.serverDir.mkdirs()
     manager.writeCompanionStatus("reloading", mapOf("reloadStrategy" to "hotswap"))
     assertEquals("hotswap", readStatus(manager).get("reloadStrategy").asString)
+  }
+
+  // -- ReloadStrategy enum ↔ protocol compatibility --
+
+  @Test
+  fun `ReloadStrategy HOTSWAP key matches protocol hotswap string`() {
+    val manager = createManager()
+    manager.serverDir.mkdirs()
+    manager.writeCompanionStatus("reloading", mapOf("reloadStrategy" to ReloadStrategy.HOTSWAP.key))
+    assertEquals("hotswap", readStatus(manager).get("reloadStrategy").asString)
+  }
+
+  @Test
+  fun `ReloadStrategy DIRECTORY key matches protocol directory string`() {
+    val manager = createManager()
+    manager.serverDir.mkdirs()
+    manager.writeCompanionStatus(
+        "reloading",
+        mapOf("reloadStrategy" to ReloadStrategy.DIRECTORY.key),
+    )
+    assertEquals("directory", readStatus(manager).get("reloadStrategy").asString)
+  }
+
+  @Test
+  fun `ReloadStrategy JAR key matches protocol jar string`() {
+    val manager = createManager()
+    manager.serverDir.mkdirs()
+    manager.writeCompanionStatus("reloading", mapOf("reloadStrategy" to ReloadStrategy.JAR.key))
+    assertEquals("jar", readStatus(manager).get("reloadStrategy").asString)
   }
 }

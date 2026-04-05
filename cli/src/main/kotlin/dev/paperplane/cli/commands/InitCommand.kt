@@ -8,6 +8,10 @@ import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 
 class InitCommand : CliktCommand(name = "init") {
+  companion object {
+    private const val WRAPPER_TIMEOUT_SECONDS = 60L
+  }
+
   private val name by argument(help = "Project directory name")
   private val pluginName by option("--name", "-n", help = "Plugin name").default("")
   private val packageName by option("--package", "-p", help = "Java package").default("")
@@ -108,7 +112,7 @@ class InitCommand : CliktCommand(name = "init") {
             .directory(projectDir)
             .redirectErrorStream(true)
             .start()
-    wrapperProcess.waitFor(60, java.util.concurrent.TimeUnit.SECONDS)
+    wrapperProcess.waitFor(WRAPPER_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
     if (wrapperProcess.exitValue() == 0) {
       TerminalUI.fileCreated("gradlew")
     } else {

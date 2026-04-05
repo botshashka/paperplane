@@ -40,16 +40,20 @@ class CompanionPlugin : JavaPlugin() {
       )
 
       logger.info("PaperPlane companion enabled")
-    } catch (e: Exception) {
+    } catch (
+        @Suppress("TooGenericExceptionCaught") // Startup involves reflection, I/O, and server API
+        e: Exception) {
       logger.severe("PaperPlane companion failed to enable: ${e.message}")
-      e.printStackTrace()
+      logger.severe(e.stackTraceToString())
     }
   }
 
   override fun onDisable() {
     try {
       buildStatusBar.stop()
-    } catch (_: Exception) {}
+    } catch (
+        @Suppress("TooGenericExceptionCaught") // Defensive — plugin may be partially initialized
+        _: Exception) {}
     logger.info("PaperPlane companion disabled")
   }
 }

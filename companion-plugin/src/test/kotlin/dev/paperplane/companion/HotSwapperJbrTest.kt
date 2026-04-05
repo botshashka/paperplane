@@ -2,7 +2,9 @@ package dev.paperplane.companion
 
 import java.io.File
 import java.util.logging.Logger
-import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import org.objectweb.asm.ClassWriter

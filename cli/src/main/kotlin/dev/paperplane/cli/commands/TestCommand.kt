@@ -3,6 +3,7 @@ package dev.paperplane.cli.commands
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
+import dev.paperplane.cli.devserver.formatDurationMs
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.ui.TerminalUI
 import dev.paperplane.cli.watcher.FileWatcher
@@ -10,6 +11,10 @@ import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 
 class TestCommand : CliktCommand(name = "test") {
+  companion object {
+    private const val WATCH_POLL_INTERVAL_MS = 1000L
+  }
+
   private val watch by option("--watch", "-w", help = "Re-run tests on file changes").flag()
   private val verbose by option("--verbose", "-v", help = "Show full error messages").flag()
   private val filter by option("--filter", "-f", help = "Filter tests by name (e.g. 'blockBreak')")
@@ -40,7 +45,7 @@ class TestCommand : CliktCommand(name = "test") {
           }
       watcher.start()
       try {
-        while (true) Thread.sleep(1000)
+        while (true) Thread.sleep(WATCH_POLL_INTERVAL_MS)
       } catch (_: InterruptedException) {
         watcher.stop()
       }
@@ -140,9 +145,7 @@ class TestCommand : CliktCommand(name = "test") {
     }
   }
 
-  private fun formatDuration(ms: Long): String {
-    return if (ms >= 1000) "%.1fs".format(ms / 1000.0) else "${ms}ms"
-  }
+  private fun formatDuration(ms: Long): String = formatDurationMs(ms)
 
   private data class TestSuiteResult(
       val name: String,

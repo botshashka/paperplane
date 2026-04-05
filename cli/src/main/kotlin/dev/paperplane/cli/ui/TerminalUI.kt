@@ -5,6 +5,9 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 object TerminalUI {
+  private const val SPINNER_FRAME_INTERVAL_MS = 80L
+  private const val SPINNER_THREAD_JOIN_TIMEOUT_MS = 200L
+
   private val noColor = System.getenv("NO_COLOR") != null
   private val isTty = System.console() != null
 
@@ -316,7 +319,7 @@ object TerminalUI {
             {
               var i = 0
               while (!done.get()) {
-                Thread.sleep(80)
+                Thread.sleep(SPINNER_FRAME_INTERVAL_MS)
                 lock.withLock {
                   if (!done.get()) {
                     i = (i + 1) % spinnerFrames.size
@@ -335,7 +338,7 @@ object TerminalUI {
       block()
     } finally {
       done.set(true)
-      thread.join(200)
+      thread.join(SPINNER_THREAD_JOIN_TIMEOUT_MS)
       lock.withLock {
         spinnerMessage = null
         spinnerSubstatus = null

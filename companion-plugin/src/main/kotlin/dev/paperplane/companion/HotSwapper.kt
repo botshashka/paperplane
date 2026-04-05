@@ -3,6 +3,7 @@ package dev.paperplane.companion
 import java.io.File
 import java.lang.instrument.ClassDefinition
 import java.lang.instrument.Instrumentation
+import java.lang.instrument.UnmodifiableClassException
 import java.util.logging.Logger
 
 /** Result of a hot-swap attempt. */
@@ -83,7 +84,9 @@ class HotSwapper(private val logger: Logger) {
       HotSwapResult.SUCCESS
     } catch (_: UnsupportedOperationException) {
       HotSwapResult.STRUCTURAL_CHANGE
-    } catch (e: Exception) {
+    } catch (_: UnmodifiableClassException) {
+      HotSwapResult.STRUCTURAL_CHANGE
+    } catch (e: ClassNotFoundException) {
       logger.warning("Hot-swap failed: ${e.message}")
       HotSwapResult.FAILED
     }
@@ -105,7 +108,7 @@ class HotSwapper(private val logger: Logger) {
       val agentClass =
           ClassLoader.getSystemClassLoader().loadClass("dev.paperplane.agent.PaperPlaneAgent")
       agentClass.getMethod("getInstrumentation").invoke(null) as? Instrumentation
-    } catch (e: Exception) {
+    } catch (e: ReflectiveOperationException) {
       logger.warning("Could not resolve Instrumentation: ${e.javaClass.simpleName}: ${e.message}")
       null
     }
@@ -124,7 +127,7 @@ class HotSwapper(private val logger: Logger) {
     val path = fqcn.replace('.', '/') + ".class"
     return try {
       classLoader.getResourceAsStream(path)?.readAllBytes()
-    } catch (_: Exception) {
+    } catch (_: java.io.IOException) {
       null // Old bytes unavailable (e.g., directory-based load where files were overwritten)
     }
   }

@@ -9,6 +9,10 @@ import org.bukkit.event.server.PluginEnableEvent
 import org.bukkit.plugin.java.JavaPlugin
 
 class ErrorCatcher(private val plugin: JavaPlugin) : Listener {
+  companion object {
+    private const val MAX_STACK_FRAMES = 5
+  }
+
   private val companionPackage = "dev.paperplane.companion"
 
   @EventHandler
@@ -18,7 +22,10 @@ class ErrorCatcher(private val plugin: JavaPlugin) : Listener {
   }
 
   fun broadcastError(throwable: Throwable) {
-    val frames = throwable.stackTrace.filter { !it.className.startsWith(companionPackage) }.take(5)
+    val frames =
+        throwable.stackTrace
+            .filter { !it.className.startsWith(companionPackage) }
+            .take(MAX_STACK_FRAMES)
 
     val header =
         Component.text("  Exception: ", NamedTextColor.RED, TextDecoration.BOLD)
@@ -37,9 +44,12 @@ class ErrorCatcher(private val plugin: JavaPlugin) : Listener {
       )
     }
 
-    if (throwable.stackTrace.size > 5) {
+    if (throwable.stackTrace.size > MAX_STACK_FRAMES) {
       components.add(
-          Component.text("    ... ${throwable.stackTrace.size - 5} more", NamedTextColor.DARK_GRAY)
+          Component.text(
+              "    ... ${throwable.stackTrace.size - MAX_STACK_FRAMES} more",
+              NamedTextColor.DARK_GRAY,
+          )
       )
     }
 
