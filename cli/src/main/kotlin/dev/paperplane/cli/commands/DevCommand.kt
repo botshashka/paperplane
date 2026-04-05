@@ -13,6 +13,8 @@ import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 class DevCommand : CliktCommand(name = "dev") {
   private val modeFlag by option("--mode", "-m", help = "Dev mode: hot-reload, blue-green, restart")
@@ -66,7 +68,7 @@ class DevCommand : CliktCommand(name = "dev") {
 
     TerminalUI.beginBlock()
     if (oldBlue.exists() && !newServer.exists()) {
-      oldBlue.renameTo(newServer)
+      Files.move(oldBlue.toPath(), newServer.toPath(), StandardCopyOption.REPLACE_EXISTING)
       TerminalUI.info("Migrated:", "server-blue/ → server/")
     }
     if (oldGreen.exists()) {

@@ -10,6 +10,7 @@ object TerminalUI {
 
   private val noColor = System.getenv("NO_COLOR") != null
   private val isTty = System.console() != null
+  val useColor: Boolean = !noColor
 
   // ANSI codes
   private const val RESET = "\u001b[0m"
@@ -268,6 +269,14 @@ object TerminalUI {
 
   fun blank() {
     emit("")
+  }
+
+  /** Prints a confirmation prompt and returns true if the user answers y/yes. */
+  fun confirm(message: String): Boolean {
+    println()
+    print("  $message (y/N): ")
+    val answer = readlnOrNull()?.trim()?.lowercase()
+    return answer == "y" || answer == "yes"
   }
 
   fun fileCreated(path: String) {

@@ -92,10 +92,10 @@ class VelocityManager(private val proxyDir: File) {
         .writeText("""{"active":"$serverName","transfer":$transfer}""")
   }
 
-  fun start(velocityJar: File): Process {
+  fun start(velocityJar: File, javaBin: String = "java"): Process {
     val cmd =
         listOf(
-            "java",
+            javaBin,
             "-Xmx256M",
             "-XX:+UseG1GC",
             "--enable-native-access=ALL-UNNAMED",
@@ -149,7 +149,7 @@ class VelocityManager(private val proxyDir: File) {
     val timeout = READY_TIMEOUT_MS
     while (proc.isAlive && System.currentTimeMillis() - startTime < timeout) {
       try {
-        java.net.Socket("localhost", port).close()
+        java.net.Socket(java.net.InetAddress.getLoopbackAddress(), port).close()
         return true
       } catch (_: Exception) {
         Thread.sleep(READY_POLL_INTERVAL_MS)
@@ -168,13 +168,10 @@ class VelocityManager(private val proxyDir: File) {
 
   private val proxyLineRegex = Regex("""\[[\d:]+] \[([^]]+)] (.+)""")
 
-  private fun formatProxyLine(line: String): String {
+  internal fun formatProxyLine(line: String): String {
     val match = proxyLineRegex.find(line)
-    return if (match != null) {
-      val (thread, message) = match.destructured
-      "\u001b[2m[proxy/$thread]\u001b[0m $message"
-    } else {
-      "\u001b[2m[proxy]\u001b[0m $line"
-    }
+    val prefix = if (match != null) "proxy/${match.destructured.component1()}" else "proxy"
+    val message = if (match != null) match.destructured.component2() else line
+    return if (TerminalUI.useColor) "\u001b[2m[$prefix]\u001b[0m $message" else "[$prefix] $message"
   }
 }

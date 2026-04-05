@@ -1,4 +1,6 @@
 #!/bin/bash
+# Development launcher — for working on PaperPlane itself.
+# End users install via: curl -fsSL https://paperplane.dev/install | sh
 # Resolve symlinks to find the real install directory
 SOURCE="${BASH_SOURCE[0]}"
 while [ -L "$SOURCE" ]; do

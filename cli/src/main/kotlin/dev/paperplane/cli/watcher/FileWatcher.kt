@@ -1,5 +1,6 @@
 package dev.paperplane.cli.watcher
 
+import dev.paperplane.cli.util.Platform
 import java.io.File
 
 class FileWatcher(
@@ -80,7 +81,7 @@ class FileWatcher(
         .walkTopDown()
         .onEnter { !shouldIgnoreDir(it.name) }
         .filter { it.isFile && !shouldIgnore(it.name) }
-        .forEach { result[it.absolutePath] = it.lastModified() }
+        .forEach { result[normalizePath(it.absolutePath)] = it.lastModified() }
     return result
   }
 
@@ -95,4 +96,7 @@ class FileWatcher(
         name == ".paperplane" ||
         name == "node_modules"
   }
+
+  private fun normalizePath(path: String): String =
+      if (Platform.isWindows) path.lowercase() else path
 }

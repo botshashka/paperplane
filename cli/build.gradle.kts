@@ -1,6 +1,13 @@
 plugins {
+  application
   alias(libs.plugins.shadow)
   alias(libs.plugins.kotlin.serialization)
+}
+
+application {
+  applicationName = "ppl"
+  mainClass.set("dev.paperplane.cli.PaperPlaneKt")
+  applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
 }
 
 dependencies {
@@ -57,3 +64,48 @@ tasks.shadowJar {
     )
   }
 }
+
+// The distribution ships the shadow fat jar only (not individual dependency jars).
+// Override the startScripts classpath so the launcher only references the shadow jar.
+tasks.startScripts { classpath = files(tasks.shadowJar.flatMap { it.archiveFile }) }
+
+// Replace the default lib contents (all dependency jars) with just the shadow fat jar.
+val distLib = copySpec {
+  from(tasks.shadowJar)
+  into("lib")
+}
+
+distributions {
+  main {
+    contents {
+      // Remove the default CopySpec that includes runtime classpath jars
+      with(distLib)
+    }
+  }
+}
+
+// After Gradle resolves the dist contents, strip out the default per-dependency jars.
+// Only keep the shadow jar + bin scripts.
+tasks.distZip {
+  archiveBaseName.set("ppl")
+  // Exclude all lib/ entries that are NOT the shadow jar
+  eachFile {
+    if (relativePath.pathString.contains("/lib/") && !name.contains("paperplane-cli")) {
+      exclude()
+    }
+  }
+}
+
+tasks.distTar {
+  archiveBaseName.set("ppl")
+  eachFile {
+    if (relativePath.pathString.contains("/lib/") && !name.contains("paperplane-cli")) {
+      exclude()
+    }
+  }
+}
+
+// Disable shadowDist tasks — we use the standard distribution with shadow jar
+tasks.named("shadowDistZip") { enabled = false }
+
+tasks.named("shadowDistTar") { enabled = false }

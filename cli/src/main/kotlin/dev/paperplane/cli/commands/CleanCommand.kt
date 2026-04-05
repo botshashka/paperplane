@@ -4,15 +4,10 @@ import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import dev.paperplane.cli.ui.TerminalUI
+import dev.paperplane.cli.util.Platform
 import java.io.File
-import java.util.Locale
 
 class CleanCommand : CliktCommand(name = "clean") {
-  companion object {
-    private const val BYTES_PER_GB = 1_073_741_824.0
-    private const val BYTES_PER_MB = 1_048_576.0
-    private const val BYTES_PER_KB = 1024.0
-  }
 
   private val force by option("--force", "-f", help = "Skip confirmation").flag()
   private val all by
@@ -44,29 +39,26 @@ class CleanCommand : CliktCommand(name = "clean") {
       return
     }
 
-    val totalSize = dirsToDelete.sumOf { dirSize(it) }
+    val totalSize = dirsToDelete.sumOf { Platform.dirSize(it) }
 
     TerminalUI.beginBlock()
     TerminalUI.status("This will delete:")
     for (dir in dirsToDelete) {
-      TerminalUI.info("${dir.name}/", formatSize(dirSize(dir)))
+      TerminalUI.info("${dir.name}/", Platform.formatSize(Platform.dirSize(dir)))
     }
     if (!all && cacheDir.exists()) {
       TerminalUI.blank()
-      TerminalUI.status("Cache preserved (${formatSize(dirSize(cacheDir))}). Use --all to delete.")
+      TerminalUI.status(
+          "Cache preserved (${Platform.formatSize(Platform.dirSize(cacheDir))}). Use --all to delete."
+      )
     }
     TerminalUI.blank()
-    TerminalUI.status("Total: ${formatSize(totalSize)}")
+    TerminalUI.status("Total: ${Platform.formatSize(totalSize)}")
     TerminalUI.endBlock()
 
-    if (!force) {
-      println()
-      print("  Are you sure? (y/N): ")
-      val answer = readlnOrNull()?.trim()?.lowercase()
-      if (answer != "y" && answer != "yes") {
-        TerminalUI.status("Cancelled")
-        return
-      }
+    if (!force && !TerminalUI.confirm("Are you sure?")) {
+      TerminalUI.status("Cancelled")
+      return
     }
 
     TerminalUI.beginBlock()
@@ -77,19 +69,5 @@ class CleanCommand : CliktCommand(name = "clean") {
     TerminalUI.blank()
     TerminalUI.success("Clean complete — next 'ppl dev' will set up a fresh server")
     TerminalUI.endBlock()
-  }
-
-  private fun dirSize(dir: File): Long {
-    if (!dir.exists()) return 0
-    return dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
-  }
-
-  private fun formatSize(bytes: Long): String {
-    return when {
-      bytes >= BYTES_PER_GB -> "%.1f GB".format(Locale.US, bytes / BYTES_PER_GB)
-      bytes >= BYTES_PER_MB -> "%.1f MB".format(Locale.US, bytes / BYTES_PER_MB)
-      bytes >= BYTES_PER_KB -> "%.1f KB".format(Locale.US, bytes / BYTES_PER_KB)
-      else -> "$bytes B"
-    }
   }
 }

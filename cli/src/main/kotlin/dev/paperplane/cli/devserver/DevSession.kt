@@ -92,7 +92,7 @@ internal class DevSession(
         FileWatcher(srcDir, config.dev.debounceMs) { changedFiles ->
           TerminalUI.discardBlock()
           TerminalUI.beginBlock()
-          val shortName = changedFiles.firstOrNull()?.substringAfterLast("/") ?: "files"
+          val shortName = changedFiles.firstOrNull()?.let { File(it).name } ?: "files"
           TerminalUI.change("Change detected: $shortName")
           onFix()
         }
@@ -138,7 +138,7 @@ internal class DevSession(
         FileWatcher(srcDir, config.dev.debounceMs) { changedFiles ->
           TerminalUI.discardBlock()
           TerminalUI.beginBlock()
-          val shortName = changedFiles.firstOrNull()?.substringAfterLast("/") ?: "files"
+          val shortName = changedFiles.firstOrNull()?.let { File(it).name } ?: "files"
           val extra = if (changedFiles.size > 1) " (+${changedFiles.size - 1} more)" else ""
           TerminalUI.change("Change detected: $shortName$extra")
           onChanged(changedFiles)
@@ -190,13 +190,13 @@ internal class DevSession(
       "auto" -> {
         if (checkIsJbr("java")) JavaRuntime("java", true)
         else {
-          val jbrDownloader = JbrDownloader(File(ppDir, "cache"))
+          val jbrDownloader = JbrDownloader()
           val javaBin = TerminalUI.spin("Downloading JBR...") { jbrDownloader.download() }
           JavaRuntime(javaBin.absolutePath, true)
         }
       }
       "on" -> {
-        val jbrDownloader = JbrDownloader(File(ppDir, "cache"))
+        val jbrDownloader = JbrDownloader()
         val javaBin = TerminalUI.spin("Downloading JBR...") { jbrDownloader.download() }
         JavaRuntime(javaBin.absolutePath, true)
       }

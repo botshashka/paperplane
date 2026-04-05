@@ -1,8 +1,11 @@
 package dev.paperplane.cli.server
 
 import dev.paperplane.cli.ui.TerminalUI
+import dev.paperplane.cli.util.Platform
 import java.io.File
 import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 class PaperServerManager(
     val serverDir: File,
@@ -33,19 +36,13 @@ class PaperServerManager(
   fun cleanupStale() {
     // Kill any process still bound to our port (zombie from previous run)
     try {
-      val lsof = ProcessBuilder("lsof", "-ti", "tcp:$port").redirectErrorStream(true).start()
-      val pids = lsof.inputStream.bufferedReader().readText().trim()
-      lsof.waitFor(LSOF_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
-      if (pids.isNotEmpty()) {
-        for (pid in pids.lines().filter { it.isNotBlank() }) {
-          ProcessBuilder("kill", "-9", pid)
-              .start()
-              .waitFor(KILL_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
-        }
-        Thread.sleep(PORT_RELEASE_DELAY_MS) // Brief wait for port release
+      if (Platform.isWindows) {
+        killPortProcessWindows(port)
+      } else {
+        killPortProcessUnix(port)
       }
     } catch (_: Exception) {
-      // Best-effort; lsof may not be available on all systems
+      // Best-effort; port detection may not be available on all systems
     }
 
     // Remove stale session.lock files from world directories
@@ -164,14 +161,14 @@ class PaperServerManager(
     val temp = File(pluginsDir, ".${jarPath.name}.tmp")
     jarPath.copyTo(temp, overwrite = true)
     try {
-      java.nio.file.Files.move(
+      Files.move(
           temp.toPath(),
           target.toPath(),
-          java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-          java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+          StandardCopyOption.ATOMIC_MOVE,
+          StandardCopyOption.REPLACE_EXISTING,
       )
     } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
-      temp.renameTo(target)
+      Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
     }
   }
 
@@ -328,18 +325,60 @@ class PaperServerManager(
     val json = gson.toJson(map)
     val tmpFile = File(statusDir, ".companion-status.tmp")
     tmpFile.writeText(json)
-    tmpFile.renameTo(statusFile)
+    Files.move(tmpFile.toPath(), statusFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
   }
 
   private val serverLineRegex = Regex("""\[[\d:]+] \[([^]]+)] (.+)""")
 
-  private fun formatServerLine(line: String): String {
+  internal fun formatServerLine(line: String): String {
     val match = serverLineRegex.find(line)
     return if (match != null) {
       val (thread, message) = match.destructured
-      "\u001b[2m[$thread]\u001b[0m $message"
+      if (TerminalUI.useColor) "\u001b[2m[$thread]\u001b[0m $message" else "[$thread] $message"
     } else {
       line
+    }
+  }
+
+  private fun killPortProcessUnix(port: Int) {
+    val lsof = ProcessBuilder("lsof", "-ti", "tcp:$port").redirectErrorStream(true).start()
+    val pids = lsof.inputStream.bufferedReader().readText().trim()
+    lsof.waitFor(LSOF_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+    if (pids.isNotEmpty()) {
+      for (pid in pids.lines().filter { it.isNotBlank() }) {
+        ProcessBuilder("kill", "-9", pid)
+            .start()
+            .waitFor(KILL_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+      }
+      Thread.sleep(PORT_RELEASE_DELAY_MS)
+    }
+  }
+
+  private fun killPortProcessWindows(port: Int) {
+    val netstat =
+        ProcessBuilder("cmd", "/c", "netstat -ano | findstr :$port | findstr LISTENING")
+            .redirectErrorStream(true)
+            .start()
+    val output = netstat.inputStream.bufferedReader().readText().trim()
+    netstat.waitFor(LSOF_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+    // Each line ends with a PID, e.g. "  TCP    0.0.0.0:25565    0.0.0.0:0    LISTENING    12345"
+    val pids =
+        output
+            .lines()
+            .filter { it.isNotBlank() }
+            .mapNotNull { it.trim().split("\\s+".toRegex()).lastOrNull() }
+            .filter { it.all(Char::isDigit) }
+            .toSet()
+    if (pids.isNotEmpty()) {
+      val cmd = mutableListOf("taskkill", "/F")
+      for (pid in pids) {
+        cmd.add("/PID")
+        cmd.add(pid)
+      }
+      ProcessBuilder(cmd)
+          .start()
+          .waitFor(KILL_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+      Thread.sleep(PORT_RELEASE_DELAY_MS)
     }
   }
 

@@ -1,5 +1,6 @@
 package dev.paperplane.cli
 
+import com.github.ajalt.clikt.completion.completionOption
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.context
 import com.github.ajalt.clikt.core.main
@@ -9,9 +10,11 @@ import com.github.ajalt.mordant.rendering.TextColors
 import com.github.ajalt.mordant.rendering.TextStyles
 import dev.paperplane.cli.commands.CleanCommand
 import dev.paperplane.cli.commands.DevCommand
+import dev.paperplane.cli.commands.ImplodeCommand
 import dev.paperplane.cli.commands.InitCommand
 import dev.paperplane.cli.commands.SetupCommand
 import dev.paperplane.cli.commands.TestCommand
+import dev.paperplane.cli.commands.UpgradeCommand
 import dev.paperplane.cli.ui.TerminalUI
 
 class PaperPlane : CliktCommand(name = "ppl") {
@@ -45,12 +48,23 @@ fun main(args: Array<String>) {
     TerminalUI.info("setup", "Download and configure Paper server")
     TerminalUI.info("test", "Run tests via Gradle")
     TerminalUI.info("clean", "Clean .paperplane directory")
+    TerminalUI.info("upgrade", "Update ppl to the latest version")
+    TerminalUI.info("implode", "Uninstall ppl completely")
     TerminalUI.blank()
     TerminalUI.status("Run 'ppl <command> --help' for more info")
     return
   }
 
   PaperPlane()
-      .subcommands(InitCommand(), DevCommand(), SetupCommand(), TestCommand(), CleanCommand())
+      .completionOption()
+      .subcommands(
+          InitCommand(),
+          DevCommand(),
+          SetupCommand(),
+          TestCommand(),
+          CleanCommand(),
+          UpgradeCommand(),
+          ImplodeCommand(),
+      )
       .main(args)
 }
