@@ -37,7 +37,8 @@ object TerminalUI {
   private var spinnerMessage: String? = null
   private var spinnerSubstatus: String? = null
   private var spinnerFrameIndex = 0
-  private var hasExternalOutput = false
+  private var needsSeparator = true
+  private var hasLogOutput = false
 
   private val spinnerFrames = arrayOf("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
@@ -77,7 +78,7 @@ object TerminalUI {
     clearDisplay()
     // Blank separator only after server/proxy logs have appeared above
     val sep =
-        if (currentBlockType == BlockType.TRANSIENT || hasExternalOutput) {
+        if (needsSeparator || currentBlockType == BlockType.TRANSIENT || hasLogOutput) {
           println()
           1
         } else 0
@@ -97,13 +98,21 @@ object TerminalUI {
     displayedLineCount = sep + blockLines.size + extra
   }
 
+  /** If needed, prints a blank separator line before scroll-committed output. Must hold [lock]. */
+  private fun emitSeparatorIfNeeded() {
+    if (needsSeparator) {
+      println()
+      needsSeparator = false
+    }
+  }
+
   private fun resetBlock() {
     blockLines.clear()
     spinnerMessage = null
     spinnerSubstatus = null
     displayedLineCount = 0
     blockActive = false
-    hasExternalOutput = false
+    hasLogOutput = false
   }
 
   // ── Block lifecycle ────────────────────────────────────────────────
@@ -115,10 +124,9 @@ object TerminalUI {
    */
   fun beginBlock(type: BlockType = BlockType.PERSIST) {
     lock.withLock {
-      if (type == BlockType.PERSIST) println()
       blockActive = true
       currentBlockType = type
-      hasExternalOutput = false
+      hasLogOutput = false
     }
   }
 
@@ -131,10 +139,11 @@ object TerminalUI {
       if (!blockActive && blockLines.isEmpty()) return
       if (isTty) clearDisplay()
       if (currentBlockType == BlockType.PERSIST && blockLines.isNotEmpty()) {
-        if (hasExternalOutput) println()
+        emitSeparatorIfNeeded()
         for (line in blockLines) {
           println(line)
         }
+        needsSeparator = true
       }
       resetBlock()
     }
@@ -182,12 +191,18 @@ object TerminalUI {
   fun serverLog(line: String) {
     lock.withLock {
       if (blockActive && isTty && displayedLineCount > 0) {
-        hasExternalOutput = true
+        val first = !hasLogOutput
+        hasLogOutput = true
         clearDisplay()
+        if (first) emitSeparatorIfNeeded()
         println(line)
+        needsSeparator = true
         redraw()
       } else {
+        if (!hasLogOutput) emitSeparatorIfNeeded()
+        hasLogOutput = true
         println(line)
+        needsSeparator = true
       }
     }
   }
@@ -197,6 +212,7 @@ object TerminalUI {
   fun header(version: String) {
     println()
     println("  ${cyan("✈")}  ${bold(cyan("PaperPlane"))} ${dim("v$version")}")
+    needsSeparator = true
   }
 
   fun success(message: String, duration: String? = null) {
@@ -344,8 +360,12 @@ object TerminalUI {
         spinnerSubstatus = null
         if (isTty) redraw()
         if (autoBlock) {
-          for (line in blockLines) {
-            println(line)
+          if (blockLines.isNotEmpty()) {
+            emitSeparatorIfNeeded()
+            for (line in blockLines) {
+              println(line)
+            }
+            needsSeparator = true
           }
           resetBlock()
         }

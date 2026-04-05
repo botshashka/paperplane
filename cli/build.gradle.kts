@@ -50,5 +50,5 @@ tasks.shadowJar {
   archiveBaseName.set("paperplane-cli")
   archiveClassifier.set("")
   archiveVersion.set("")
-  manifest { attributes("Main-Class" to "dev.paperplane.cli.MainKt") }
+  manifest { attributes("Main-Class" to "dev.paperplane.cli.PaperPlaneKt") }
 }
