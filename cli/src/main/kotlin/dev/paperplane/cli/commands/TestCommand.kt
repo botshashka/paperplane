@@ -5,6 +5,7 @@ import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import dev.paperplane.cli.devserver.formatDurationMs
 import dev.paperplane.cli.gradle.GradleBridge
+import dev.paperplane.cli.Versions
 import dev.paperplane.cli.ui.TerminalUI
 import dev.paperplane.cli.watcher.FileWatcher
 import java.io.File
@@ -21,7 +22,7 @@ class TestCommand : CliktCommand(name = "test") {
   private val projectDir = File(System.getProperty("user.dir"))
 
   override fun run() {
-    val version = javaClass.`package`?.implementationVersion ?: "0.1.0"
+    val version = Versions.paperplaneVersion()
     TerminalUI.header(version)
 
     if (watch) {

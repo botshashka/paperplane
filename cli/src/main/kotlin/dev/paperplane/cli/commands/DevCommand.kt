@@ -9,6 +9,7 @@ import dev.paperplane.cli.devserver.DevSession
 import dev.paperplane.cli.devserver.HotReloadMode
 import dev.paperplane.cli.devserver.RestartMode
 import dev.paperplane.cli.gradle.GradleBridge
+import dev.paperplane.cli.Versions
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
@@ -18,7 +19,7 @@ class DevCommand : CliktCommand(name = "dev") {
   private val projectDir = File(System.getProperty("user.dir"))
 
   override fun run() {
-    val version = javaClass.`package`?.implementationVersion ?: "0.1.0"
+    val version = Versions.paperplaneVersion()
     TerminalUI.header(version)
 
     val config = PaperPlaneConfig.load(projectDir)

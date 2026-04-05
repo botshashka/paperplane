@@ -2,6 +2,7 @@ package dev.paperplane.cli.server
 
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import dev.paperplane.cli.Versions
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -52,8 +53,9 @@ class VelocityDownloader(private val cacheDir: File) {
   fun latestVersion(): String {
     val response = fetch(baseUrl)
     val json = gson.fromJson(response, JsonObject::class.java)
-    val versions = json.getAsJsonArray("versions")
-    return versions.last().asString
+    val versions = json.getAsJsonArray("versions").map { it.asString }
+    val seriesPrefix = "${Versions.VELOCITY_SERIES}."
+    return versions.lastOrNull { it.startsWith(seriesPrefix) } ?: versions.last()
   }
 
   private fun fetch(url: String): String {

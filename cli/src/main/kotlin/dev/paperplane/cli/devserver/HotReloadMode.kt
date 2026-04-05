@@ -81,7 +81,7 @@ internal class HotReloadMode(private val session: DevSession) {
         if (javaRuntime.isJbr) session.config.server.jvmArgs + "-XX:+AllowEnhancedClassRedefinition"
         else session.config.server.jvmArgs
 
-    val mcVersion = session.config.server.version ?: metadata.paperApiVersion
+    val mcVersion = session.resolveMcVersion(metadata)
     val serverStart = System.currentTimeMillis()
     serverManager.start(paperJar, jvmArgs, hotReload = true, javaBin = javaRuntime.bin)
     val ready =

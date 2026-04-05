@@ -1,5 +1,6 @@
 package dev.paperplane.cli.devserver
 
+import dev.paperplane.cli.Versions
 import dev.paperplane.cli.config.PaperPlaneConfig
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.gradle.ProjectMetadata
@@ -37,6 +38,19 @@ internal class DevSession(
     return metadata
   }
 
+  fun resolveMcVersion(metadata: ProjectMetadata): String {
+    val mcVersion = config.server.version ?: metadata.paperApiVersion
+    val api = Versions.apiVersion(mcVersion)
+    if (api !in Versions.SUPPORTED_API_VERSIONS) {
+      throw IllegalArgumentException(
+          "Paper $mcVersion (api-version $api) is not supported by this version of PaperPlane. " +
+              "Supported: ${Versions.SUPPORTED_API_VERSIONS.sorted().joinToString(", ")}. " +
+              "Please update PaperPlane or change your Paper version."
+      )
+    }
+    return mcVersion
+  }
+
   fun initialBuild(
       metadata: ProjectMetadata,
       serverManager: PaperServerManager,
@@ -56,7 +70,7 @@ internal class DevSession(
     }
     TerminalUI.success("Build succeeded", buildDuration)
 
-    val mcVersion = config.server.version ?: metadata.paperApiVersion
+    val mcVersion = resolveMcVersion(metadata)
     return downloadPaper(mcVersion)
   }
 
@@ -109,7 +123,7 @@ internal class DevSession(
     TerminalUI.success("Build succeeded", buildDuration)
 
     val metadata = gradle.metadata() ?: return
-    val mcVersion = config.server.version ?: metadata.paperApiVersion
+    val mcVersion = resolveMcVersion(metadata)
     val paperJar = downloader.download(mcVersion)
     onReady(metadata, paperJar)
   }

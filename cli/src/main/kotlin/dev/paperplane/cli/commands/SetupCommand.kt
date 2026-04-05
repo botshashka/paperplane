@@ -1,6 +1,8 @@
 package dev.paperplane.cli.commands
 
 import com.github.ajalt.clikt.core.CliktCommand
+import dev.paperplane.cli.Versions
+import dev.paperplane.cli.server.PaperVersionResolver
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 
@@ -8,7 +10,7 @@ class SetupCommand : CliktCommand(name = "setup") {
   private val projectDir = File(System.getProperty("user.dir"))
 
   override fun run() {
-    val version = javaClass.`package`?.implementationVersion ?: "0.1.0"
+    val version = Versions.paperplaneVersion()
     TerminalUI.header(version)
 
     // Detect build file
@@ -97,13 +99,10 @@ class SetupCommand : CliktCommand(name = "setup") {
       }
     }
 
-    // Detect Paper version from dependencies
-    var detectedVersion = "1.21.4"
+    // Detect Paper version from dependencies, fall back to latest supported
     val paperPattern = Regex("""paper-api[:'"]([^'"]+)-R""")
     val match = paperPattern.find(buildContent)
-    if (match != null) {
-      detectedVersion = match.groupValues[1]
-    }
+    val detectedVersion = match?.groupValues?.get(1) ?: PaperVersionResolver().resolveLatest()
 
     // Create paperplane.yml
     val configFile = File(projectDir, "paperplane.yml")

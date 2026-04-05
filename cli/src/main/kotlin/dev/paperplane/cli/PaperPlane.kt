@@ -38,7 +38,7 @@ class PaperPlane : CliktCommand(name = "ppl") {
 
 fun main(args: Array<String>) {
   if (args.isEmpty()) {
-    val version = PaperPlane::class.java.`package`?.implementationVersion ?: "0.1.0"
+    val version = Versions.paperplaneVersion()
     TerminalUI.header(version)
     TerminalUI.info("dev", "Start dev server with file watching")
     TerminalUI.info("init", "Scaffold a new Paper plugin project")

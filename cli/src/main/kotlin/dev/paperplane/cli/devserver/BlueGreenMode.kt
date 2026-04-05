@@ -135,7 +135,7 @@ internal class BlueGreenMode(private val session: DevSession) {
     active.copyPlugin(builtJar)
     active.copyCompanion()
 
-    val mcVersion = session.config.server.version ?: metadata.paperApiVersion
+    val mcVersion = session.resolveMcVersion(metadata)
     val serverStart = System.currentTimeMillis()
     active.start(paperJar, session.config.server.jvmArgs)
     val ready = TerminalUI.spin("Starting Paper $mcVersion server...") { active.waitForReady() }

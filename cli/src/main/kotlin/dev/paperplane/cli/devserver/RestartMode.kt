@@ -65,7 +65,7 @@ internal class RestartMode(private val session: DevSession) {
     serverManager.copyPlugin(builtJar)
     serverManager.copyCompanion()
 
-    val mcVersion = session.config.server.version ?: metadata.paperApiVersion
+    val mcVersion = session.resolveMcVersion(metadata)
     val serverStart = System.currentTimeMillis()
     serverManager.start(paperJar, session.config.server.jvmArgs)
     val ready =

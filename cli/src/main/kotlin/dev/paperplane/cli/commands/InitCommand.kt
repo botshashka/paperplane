@@ -4,6 +4,8 @@ import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.parameters.arguments.argument
 import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.option
+import dev.paperplane.cli.Versions
+import dev.paperplane.cli.server.PaperVersionResolver
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 
@@ -15,7 +17,7 @@ class InitCommand : CliktCommand(name = "init") {
   private val name by argument(help = "Project directory name")
   private val pluginName by option("--name", "-n", help = "Plugin name").default("")
   private val packageName by option("--package", "-p", help = "Java package").default("")
-  private val paperVersion by option("--paper", help = "Paper MC version").default("1.21.10")
+  private val paperVersion by option("--paper", help = "Paper MC version").default("")
   private val author by option("--author", "-a", help = "Plugin author").default("")
   private val kotlin by
       option("--kotlin", "-k", help = "Use Kotlin instead of Java").default("false")
@@ -38,7 +40,13 @@ class InitCommand : CliktCommand(name = "init") {
     val resolvedAuthor = author.ifEmpty { defaultAuthor }
     val useKotlin = kotlin == "true"
 
-    TerminalUI.header(version())
+    val resolvedPaperVersion =
+        if (paperVersion.isEmpty()) {
+          TerminalUI.status("Resolving latest Paper version...")
+          PaperVersionResolver().resolveLatest()
+        } else paperVersion
+
+    TerminalUI.header(Versions.paperplaneVersion())
 
     TerminalUI.beginBlock()
     TerminalUI.status("Creating $name/...")
@@ -60,7 +68,7 @@ class InitCommand : CliktCommand(name = "init") {
     writeTemplate(
         projectDir,
         "build.gradle.kts",
-        buildGradle(resolvedPluginName, resolvedPackage, paperVersion),
+        buildGradle(resolvedPluginName, resolvedPackage, resolvedPaperVersion),
     )
     TerminalUI.fileCreated("build.gradle.kts")
 
@@ -98,7 +106,7 @@ class InitCommand : CliktCommand(name = "init") {
     writeTemplate(projectDir, "$srcResources/config.yml", "# ${resolvedPluginName} configuration\n")
     TerminalUI.fileCreated("$srcResources/config.yml")
 
-    writeTemplate(projectDir, "paperplane.yml", paperplaneYml(paperVersion))
+    writeTemplate(projectDir, "paperplane.yml", paperplaneYml(resolvedPaperVersion))
     TerminalUI.fileCreated("paperplane.yml")
 
     writeTemplate(projectDir, ".gitignore", gitignore())
@@ -108,7 +116,7 @@ class InitCommand : CliktCommand(name = "init") {
     // Generate Gradle wrapper
     TerminalUI.status("Generating Gradle wrapper...")
     val wrapperProcess =
-        ProcessBuilder("gradle", "wrapper", "--gradle-version", "9.4.1")
+        ProcessBuilder("gradle", "wrapper", "--gradle-version", Versions.GRADLE_WRAPPER)
             .directory(projectDir)
             .redirectErrorStream(true)
             .start()
@@ -135,8 +143,6 @@ class InitCommand : CliktCommand(name = "init") {
     return if (input.isNullOrEmpty()) default else input
   }
 
-  private fun version(): String = javaClass.`package`?.implementationVersion ?: "0.1.0"
-
   private fun writeTemplate(projectDir: File, path: String, content: String) {
     val file = File(projectDir, path)
     file.parentFile.mkdirs()
@@ -149,7 +155,7 @@ class InitCommand : CliktCommand(name = "init") {
       """
         plugins {
             java
-            id("dev.paperplane") version "0.1.0"
+            id("dev.paperplane") version "${Versions.paperplaneVersion()}"
         }
 
         group = "$packageName"
@@ -170,9 +176,9 @@ class InitCommand : CliktCommand(name = "init") {
             compileOnly("io.papermc.paper:paper-api:$paperVersion-R0.1-SNAPSHOT")
 
             testImplementation("io.papermc.paper:paper-api:$paperVersion-R0.1-SNAPSHOT")
-            testImplementation("org.mockbukkit.mockbukkit:mockbukkit-v1.21:4.108.0")
-            testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
-            testRuntimeOnly("org.junit.platform:junit-platform-launcher:5.11.4")
+            testImplementation("org.mockbukkit.mockbukkit:${Versions.mockbukkitArtifact(paperVersion)}:${Versions.MOCKBUKKIT}")
+            testImplementation("org.junit.jupiter:junit-jupiter:${Versions.JUNIT}")
+            testRuntimeOnly("org.junit.platform:junit-platform-launcher:${Versions.JUNIT}")
         }
 
         paperplane {
