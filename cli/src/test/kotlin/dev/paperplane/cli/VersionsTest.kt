@@ -34,7 +34,10 @@ class VersionsTest {
   @Test
   fun `PAPER_FALLBACK is within supported range`() {
     val api = Versions.apiVersion(Versions.PAPER_FALLBACK)
-    assertTrue(api in Versions.SUPPORTED_API_VERSIONS, "PAPER_FALLBACK api-version $api not in SUPPORTED_API_VERSIONS")
+    assertTrue(
+        api in Versions.SUPPORTED_API_VERSIONS,
+        "PAPER_FALLBACK api-version $api not in SUPPORTED_API_VERSIONS",
+    )
   }
 
   @Test

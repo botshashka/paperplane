@@ -27,9 +27,7 @@ class PaperVersionResolver(
       val versions = json.getAsJsonArray("versions").map { it.asString }
       val supported = versions.filter { Versions.apiVersion(it) in Versions.SUPPORTED_API_VERSIONS }
       supported.lastOrNull() ?: Versions.PAPER_FALLBACK
-    } catch (
-        @Suppress("TooGenericExceptionCaught") _: Exception
-    ) {
+    } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
       Versions.PAPER_FALLBACK
     }
   }

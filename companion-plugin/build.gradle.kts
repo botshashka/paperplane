@@ -13,6 +13,8 @@ dependencies {
   testImplementation(libs.mockbukkit)
 }
 
+tasks.processResources { expand("version" to project.version) }
+
 tasks.shadowJar {
   archiveBaseName.set("paperplane-companion")
   archiveClassifier.set("")

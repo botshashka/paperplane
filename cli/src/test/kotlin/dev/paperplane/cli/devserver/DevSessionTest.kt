@@ -2,7 +2,6 @@ package dev.paperplane.cli.devserver
 
 import dev.paperplane.cli.Versions
 import dev.paperplane.cli.config.PaperPlaneConfig
-import dev.paperplane.cli.config.ServerConfig
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.server.PaperDownloader

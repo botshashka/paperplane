@@ -2,6 +2,7 @@ package dev.paperplane.cli.commands
 
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.parameters.options.option
+import dev.paperplane.cli.Versions
 import dev.paperplane.cli.config.DevMode
 import dev.paperplane.cli.config.PaperPlaneConfig
 import dev.paperplane.cli.devserver.BlueGreenMode
@@ -9,7 +10,6 @@ import dev.paperplane.cli.devserver.DevSession
 import dev.paperplane.cli.devserver.HotReloadMode
 import dev.paperplane.cli.devserver.RestartMode
 import dev.paperplane.cli.gradle.GradleBridge
-import dev.paperplane.cli.Versions
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File

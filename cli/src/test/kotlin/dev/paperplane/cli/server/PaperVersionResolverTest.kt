@@ -68,9 +68,7 @@ class PaperVersionResolverTest {
 
   @Test
   fun `resolveLatest returns fallback on non-200 response`() {
-    server.createContext("/") { exchange ->
-      exchange.sendResponseHeaders(500, -1)
-    }
+    server.createContext("/") { exchange -> exchange.sendResponseHeaders(500, -1) }
 
     assertEquals(Versions.PAPER_FALLBACK, resolver().resolveLatest())
   }

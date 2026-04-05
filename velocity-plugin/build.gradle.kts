@@ -7,6 +7,8 @@ dependencies {
   implementation(libs.gson)
 }
 
+tasks.processResources { expand("version" to project.version) }
+
 tasks.shadowJar {
   archiveBaseName.set("paperplane-velocity")
   archiveClassifier.set("")

@@ -1,7 +1,7 @@
 {
   "id": "paperplane-transfer",
   "name": "PaperPlane Transfer",
-  "version": "0.1.0",
+  "version": "${version}",
   "description": "Handles seamless player transfers during PaperPlane blue/green rebuilds",
   "authors": ["PaperPlane"],
   "main": "dev.paperplane.velocity.ReconnectPlugin"

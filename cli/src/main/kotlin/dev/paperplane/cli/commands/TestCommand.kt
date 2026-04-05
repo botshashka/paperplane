@@ -3,9 +3,9 @@ package dev.paperplane.cli.commands
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
+import dev.paperplane.cli.Versions
 import dev.paperplane.cli.devserver.formatDurationMs
 import dev.paperplane.cli.gradle.GradleBridge
-import dev.paperplane.cli.Versions
 import dev.paperplane.cli.ui.TerminalUI
 import dev.paperplane.cli.watcher.FileWatcher
 import java.io.File

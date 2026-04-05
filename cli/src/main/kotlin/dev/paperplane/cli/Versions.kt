@@ -16,14 +16,11 @@ object Versions {
   const val JUNIT = "5.11.4"
 
   /** PaperPlane's own version, read from JAR manifest at runtime. */
-  fun paperplaneVersion(): String =
-      Versions::class.java.`package`?.implementationVersion ?: "0.1.0"
+  fun paperplaneVersion(): String = Versions::class.java.`package`?.implementationVersion ?: "dev"
 
   /** Extracts the api-version from a full MC version. "1.21.10" → "1.21" */
-  fun apiVersion(mcVersion: String): String =
-      mcVersion.split(".").take(2).joinToString(".")
+  fun apiVersion(mcVersion: String): String = mcVersion.split(".").take(2).joinToString(".")
 
   /** Derives the MockBukkit artifact name. "1.21.10" → "mockbukkit-v1.21" */
-  fun mockbukkitArtifact(mcVersion: String): String =
-      "mockbukkit-v${apiVersion(mcVersion)}"
+  fun mockbukkitArtifact(mcVersion: String): String = "mockbukkit-v${apiVersion(mcVersion)}"
 }

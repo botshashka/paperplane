@@ -23,7 +23,6 @@ import org.slf4j.Logger
 @Plugin(
     id = "paperplane-transfer",
     name = "PaperPlane Transfer",
-    version = "0.1.0",
     description = "Handles seamless player transfers during PaperPlane blue/green rebuilds",
 )
 class ReconnectPlugin
