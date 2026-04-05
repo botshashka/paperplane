@@ -1,18 +1,18 @@
 [versions]
-kotlin = "2.3.0"
-clikt = "5.0.3"
-kaml = "0.67.0"
-shadow = "8.3.5"
-junit = "5.11.3"
-junit-platform = "1.11.3"
+kotlin = "2.3.20"
+clikt = "5.1.0"
+kaml = "0.104.0"
+shadow = "9.4.1"
+junit = "6.0.3"
+junit-platform = "6.0.3"
 paper-api = "1.21.11-R0.1-SNAPSHOT"
 velocity-api = "3.4.0-SNAPSHOT"
 gradle-tooling = "9.4.1"
-gson = "2.11.0"
-asm = "9.7.1"
-adventure = "4.17.0"
+gson = "2.13.2"
+asm = "9.9.1"
+adventure = "4.26.1"
 mockbukkit = "4.108.0"
-kotlinx-serialization = "1.7.3"
+kotlinx-serialization = "1.10.0"
 ktfmt = "0.26.0"
 detekt = "2.0.0-alpha.2"
 
@@ -28,7 +28,7 @@ adventure-minimessage = { module = "net.kyori:adventure-text-minimessage", versi
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher", version.ref = "junit-platform" }
 mockbukkit = { module = "org.mockbukkit.mockbukkit:mockbukkit-v1.21", version.ref = "mockbukkit" }
-slf4j-nop = { module = "org.slf4j:slf4j-nop", version = "2.0.16" }
+slf4j-nop = { module = "org.slf4j:slf4j-nop", version = "2.0.17" }
 velocity-api = { module = "com.velocitypowered:velocity-api", version.ref = "velocity-api" }
 
 [plugins]

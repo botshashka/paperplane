@@ -2,8 +2,8 @@
 // Produces a minimal JAR with the correct agent manifest
 
 dependencies {
-  testImplementation("org.junit.jupiter:junit-jupiter:5.11.3")
-  testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.3")
+  testImplementation(libs.junit.jupiter)
+  testRuntimeOnly(libs.junit.platform.launcher)
 }
 
 tasks.test { useJUnitPlatform() }

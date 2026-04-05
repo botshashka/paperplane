@@ -17,12 +17,12 @@ abstract class PaperPlaneExtension @Inject constructor(project: Project) {
   abstract val softDepend: ListProperty<String>
 
   val commands: NamedDomainObjectContainer<CommandDefinition> =
-      project.container(CommandDefinition::class.java) { name ->
+      project.objects.domainObjectContainer(CommandDefinition::class.java) { name ->
         project.objects.newInstance(CommandDefinition::class.java, name)
       }
 
   val permissions: NamedDomainObjectContainer<PermissionDefinition> =
-      project.container(PermissionDefinition::class.java) { name ->
+      project.objects.domainObjectContainer(PermissionDefinition::class.java) { name ->
         project.objects.newInstance(PermissionDefinition::class.java, name)
       }
 
