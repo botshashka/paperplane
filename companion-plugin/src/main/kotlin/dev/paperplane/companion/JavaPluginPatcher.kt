@@ -65,6 +65,12 @@ object JavaPluginPatcher {
     } catch (e: UnmodifiableClassException) {
       logger.warning("Failed to patch JavaPlugin constructor: ${e.message}")
       false
+    } catch (e: VerifyError) {
+      logger.warning(
+          "Failed to patch JavaPlugin constructor (bytecode verification failed, " +
+              "likely Java version incompatibility): ${e.message}"
+      )
+      false
     }
   }
 
@@ -117,7 +123,33 @@ internal class JavaPluginTransformer : ClassFileTransformer {
     if (className != TARGET_CLASS || classfileBuffer == null) return null
 
     val reader = ClassReader(classfileBuffer)
-    val writer = ClassWriter(reader, ClassWriter.COMPUTE_FRAMES)
+    val writer =
+        object : ClassWriter(reader, COMPUTE_FRAMES) {
+          override fun getCommonSuperClass(type1: String, type2: String): String {
+            // Default implementation uses Class.forName() which fails across classloader
+            // boundaries. Use the classloader that loaded JavaPlugin to resolve server types.
+            val cl =
+                classBeingRedefined?.classLoader ?: return super.getCommonSuperClass(type1, type2)
+            return try {
+              val c1 = Class.forName(type1.replace('/', '.'), false, cl)
+              val c2 = Class.forName(type2.replace('/', '.'), false, cl)
+              when {
+                c1.isAssignableFrom(c2) -> type1
+                c2.isAssignableFrom(c1) -> type2
+                c1.isInterface || c2.isInterface -> "java/lang/Object"
+                else -> {
+                  var current = c1
+                  while (!current.isAssignableFrom(c2)) {
+                    current = current.superclass
+                  }
+                  current.name.replace('.', '/')
+                }
+              }
+            } catch (_: ClassNotFoundException) {
+              "java/lang/Object"
+            }
+          }
+        }
     val superName = reader.superName
 
     reader.accept(
