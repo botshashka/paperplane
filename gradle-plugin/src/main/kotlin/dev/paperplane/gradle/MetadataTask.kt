@@ -19,8 +19,12 @@ abstract class MetadataTask : DefaultTask() {
 
   @TaskAction
   fun writeMetadata() {
+    // Prefer shadowJar output (fat jar with bundled dependencies) over plain jar.
+    // This ensures Kotlin runtime and other dependencies are included when deployed.
+    val shadowJarTask = project.tasks.findByName("shadowJar") as? org.gradle.jvm.tasks.Jar
     val jarTask =
-        project.tasks.findByName("jar") as? org.gradle.jvm.tasks.Jar
+        shadowJarTask
+            ?: project.tasks.findByName("jar") as? org.gradle.jvm.tasks.Jar
             ?: throw IllegalStateException(
                 "PaperPlane: No 'jar' task found. Ensure the Java or Kotlin plugin is applied."
             )

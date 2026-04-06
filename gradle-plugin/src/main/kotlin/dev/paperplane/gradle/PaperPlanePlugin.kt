@@ -49,6 +49,11 @@ class PaperPlanePlugin : Plugin<Project> {
       if (!extension.mainClass.isPresent) {
         // Will be resolved at task execution time by scanning compiled classes
       }
+
+      // Make ppMetadata run after jar packaging so jar path is known.
+      // Prefer shadowJar (fat jar) when available — ensures bundled dependencies are deployed.
+      val jarDep = if (project.tasks.findByName("shadowJar") != null) "shadowJar" else "jar"
+      project.tasks.named("ppMetadata") { task -> task.dependsOn(jarDep) }
     }
 
     project.tasks.register("ppMetadataFast", MetadataTask::class.java) { task ->
@@ -57,9 +62,6 @@ class PaperPlanePlugin : Plugin<Project> {
       task.extension = extension
       task.outputDir.set(project.layout.buildDirectory.dir("paperplane"))
     }
-
-    // Make ppMetadata run after compileJava/compileKotlin so jar path is known
-    project.tasks.named("ppMetadata") { task -> task.dependsOn("jar") }
 
     project.tasks.named("ppMetadataFast") { task -> task.dependsOn("classes") }
   }
