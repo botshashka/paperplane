@@ -10,8 +10,10 @@ object Versions {
   // Velocity major series pin — prevents pulling e.g. Velocity 4.x with breaking changes
   const val VELOCITY_SERIES = "3"
 
-  // Defaults for ppl init scaffolding only (new projects can change these immediately)
+  // Defaults for ppl create scaffolding only (new projects can change these immediately)
   const val GRADLE_WRAPPER = "9.4.1"
+  const val KOTLIN = "2.3.20"
+  const val SHADOW = "9.4.1"
   const val MOCKBUKKIT = "4.108.0"
   const val JUNIT = "5.11.4"
 

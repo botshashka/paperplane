@@ -92,6 +92,17 @@ class PaperVersionResolverTest {
     assertEquals(Versions.PAPER_FALLBACK, resolver().resolveLatest())
   }
 
+  @Test
+  fun `resolveLatest filters out pre-release versions`() {
+    server.createContext("/") { exchange ->
+      val json = """{"versions":["1.21.4","1.21.10","1.21.11-pre1","1.21.11-rc1"]}"""
+      exchange.sendResponseHeaders(200, json.length.toLong())
+      exchange.responseBody.use { it.write(json.toByteArray()) }
+    }
+
+    assertEquals("1.21.10", resolver().resolveLatest())
+  }
+
   // ── resolveRecent ─────────────────────────────────────────────────
 
   @Test
@@ -152,6 +163,18 @@ class PaperVersionResolverTest {
     server.createContext("/") { exchange -> exchange.sendResponseHeaders(500, -1) }
 
     assertEquals(listOf(Versions.PAPER_FALLBACK), resolver().resolveRecent())
+  }
+
+  @Test
+  fun `resolveRecent filters out pre-release versions`() {
+    server.createContext("/") { exchange ->
+      val json =
+          """{"versions":["1.21","1.21.4","1.21.10","1.21.11-pre1","1.21.11-rc1","1.21.11-rc2"]}"""
+      exchange.sendResponseHeaders(200, json.length.toLong())
+      exchange.responseBody.use { it.write(json.toByteArray()) }
+    }
+
+    assertEquals(listOf("1.21", "1.21.4", "1.21.10"), resolver().resolveRecent(3))
   }
 
   @Test

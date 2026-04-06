@@ -22,6 +22,14 @@ class TestCommand : CliktCommand(name = "test") {
   private val projectDir = File(System.getProperty("user.dir"))
 
   override fun run() {
+    try {
+      runInternal()
+    } finally {
+      TerminalUI.endView()
+    }
+  }
+
+  private fun runInternal() {
     val version = Versions.paperplaneVersion()
     TerminalUI.header(version)
 

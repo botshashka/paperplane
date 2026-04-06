@@ -21,12 +21,19 @@ class DevCommand : CliktCommand(name = "dev") {
   private val projectDir = File(System.getProperty("user.dir"))
 
   override fun run() {
+    try {
+      runInternal()
+    } finally {
+      TerminalUI.endView()
+    }
+  }
+
+  private fun runInternal() {
     val version = Versions.paperplaneVersion()
     TerminalUI.header(version)
 
     val config = PaperPlaneConfig.load(projectDir)
     val ppDir = File(projectDir, ".paperplane")
-    ppDir.mkdirs()
 
     migrateOldLayout(ppDir)
 

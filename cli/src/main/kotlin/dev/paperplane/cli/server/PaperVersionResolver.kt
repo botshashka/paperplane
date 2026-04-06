@@ -25,19 +25,25 @@ class PaperVersionResolver(
     return try {
       val json = gson.fromJson(fetch(baseUrl), JsonObject::class.java)
       val versions = json.getAsJsonArray("versions").map { it.asString }
-      val supported = versions.filter { Versions.apiVersion(it) in Versions.SUPPORTED_API_VERSIONS }
+      val supported =
+          versions.filter {
+            Versions.apiVersion(it) in Versions.SUPPORTED_API_VERSIONS && !it.contains("-")
+          }
       supported.lastOrNull() ?: Versions.PAPER_FALLBACK
     } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
       Versions.PAPER_FALLBACK
     }
   }
 
-  /** Returns the last [count] supported Paper versions, latest last. */
+  /** Returns the last [count] supported stable Paper versions, latest last. */
   fun resolveRecent(count: Int = 3): List<String> {
     return try {
       val json = gson.fromJson(fetch(baseUrl), JsonObject::class.java)
       val versions = json.getAsJsonArray("versions").map { it.asString }
-      val supported = versions.filter { Versions.apiVersion(it) in Versions.SUPPORTED_API_VERSIONS }
+      val supported =
+          versions.filter {
+            Versions.apiVersion(it) in Versions.SUPPORTED_API_VERSIONS && !it.contains("-")
+          }
       if (supported.isEmpty()) listOf(Versions.PAPER_FALLBACK) else supported.takeLast(count)
     } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
       listOf(Versions.PAPER_FALLBACK)

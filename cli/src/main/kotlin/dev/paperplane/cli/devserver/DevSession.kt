@@ -8,6 +8,7 @@ import dev.paperplane.cli.server.JbrDownloader
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.TerminalUI
+import dev.paperplane.cli.util.JavaRuntimeUtil
 import dev.paperplane.cli.watcher.FileWatcher
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
@@ -21,7 +22,6 @@ internal class DevSession(
 ) {
   companion object {
     private const val MAIN_LOOP_POLL_INTERVAL_MS = 1000L
-    private const val JBR_CHECK_TIMEOUT_SECONDS = 5L
   }
 
   fun resolveMetadataOrAbort(shuttingDown: AtomicBoolean): ProjectMetadata? {
@@ -32,7 +32,9 @@ internal class DevSession(
       TerminalUI.endBlock()
       shuttingDown.set(true)
       gradle.close()
+      return null
     }
+    ppDir.mkdirs()
     return metadata
   }
 
@@ -186,8 +188,7 @@ internal class DevSession(
   fun resolveJava(): JavaRuntime {
     return when (config.dev.jbr) {
       "auto" -> {
-        if (checkIsJbr("java")) JavaRuntime("java", true)
-        else JavaRuntime("java", false)
+        if (checkIsJbr("java")) JavaRuntime("java", true) else JavaRuntime("java", false)
       }
       "on" -> {
         val jbrDownloader = JbrDownloader()
@@ -203,20 +204,11 @@ internal class DevSession(
     TerminalUI.error("PaperPlane Gradle plugin not found.")
     TerminalUI.endBlock()
     TerminalUI.beginBlock()
-    TerminalUI.info("ppl setup", "add PaperPlane to this project")
-    TerminalUI.info("ppl init", "scaffold a new plugin")
+    TerminalUI.info("ppl init", "add PaperPlane to this project")
+    TerminalUI.info("ppl create", "scaffold a new plugin")
   }
 
-  private fun checkIsJbr(javaBin: String): Boolean {
-    return try {
-      val proc = ProcessBuilder(javaBin, "-version").redirectErrorStream(true).start()
-      val output = proc.inputStream.bufferedReader().readText()
-      proc.waitFor(JBR_CHECK_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
-      output.contains("JetBrains", ignoreCase = true) || output.contains("JBR", ignoreCase = true)
-    } catch (_: Exception) {
-      false
-    }
-  }
+  private fun checkIsJbr(javaBin: String): Boolean = JavaRuntimeUtil.checkIsJbr(javaBin)
 }
 
 private const val FORMAT_THRESHOLD_MS = 1000

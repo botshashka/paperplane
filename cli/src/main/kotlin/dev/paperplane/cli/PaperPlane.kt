@@ -9,15 +9,17 @@ import com.github.ajalt.clikt.output.MordantHelpFormatter
 import com.github.ajalt.mordant.rendering.TextColors
 import com.github.ajalt.mordant.rendering.TextStyles
 import dev.paperplane.cli.commands.CleanCommand
+import dev.paperplane.cli.commands.CreateCommand
 import dev.paperplane.cli.commands.DevCommand
 import dev.paperplane.cli.commands.ImplodeCommand
 import dev.paperplane.cli.commands.InitCommand
-import dev.paperplane.cli.commands.SetupCommand
 import dev.paperplane.cli.commands.TestCommand
 import dev.paperplane.cli.commands.UpgradeCommand
 import dev.paperplane.cli.ui.TerminalUI
 
 class PaperPlane : CliktCommand(name = "ppl") {
+  override fun aliases() = mapOf("new" to listOf("create"), "setup" to listOf("init"))
+
   init {
     context {
       helpFormatter = { ctx ->
@@ -44,8 +46,8 @@ fun main(args: Array<String>) {
     val version = Versions.paperplaneVersion()
     TerminalUI.header(version)
     TerminalUI.info("dev", "Start dev server with file watching")
-    TerminalUI.info("init", "Scaffold a new Paper plugin project")
-    TerminalUI.info("setup", "Download and configure Paper server")
+    TerminalUI.info("create", "Scaffold a new Paper plugin project")
+    TerminalUI.info("init", "Add PaperPlane to an existing project")
     TerminalUI.info("test", "Run tests via Gradle")
     TerminalUI.info("clean", "Clean .paperplane directory")
     TerminalUI.info("upgrade", "Update ppl to the latest version")
@@ -58,9 +60,9 @@ fun main(args: Array<String>) {
   PaperPlane()
       .completionOption()
       .subcommands(
+          CreateCommand(),
           InitCommand(),
           DevCommand(),
-          SetupCommand(),
           TestCommand(),
           CleanCommand(),
           UpgradeCommand(),

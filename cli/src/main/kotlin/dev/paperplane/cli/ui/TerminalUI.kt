@@ -7,6 +7,7 @@ import kotlin.concurrent.withLock
 object TerminalUI {
   private const val SPINNER_FRAME_INTERVAL_MS = 80L
   private const val SPINNER_THREAD_JOIN_TIMEOUT_MS = 200L
+  private const val BOTTOM_PADDING = 2
 
   private val noColor = System.getenv("NO_COLOR") != null
   private val isTty = System.console() != null
@@ -40,26 +41,27 @@ object TerminalUI {
   private var spinnerFrameIndex = 0
   private var needsSeparator = true
   private var hasLogOutput = false
+  private var viewClosed = false
 
   private val spinnerFrames = arrayOf("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
   // ── Color helpers ──────────────────────────────────────────────────
 
-  private fun color(code: String, text: String): String = if (noColor) text else "$code$text$RESET"
+  internal fun color(code: String, text: String): String = if (noColor) text else "$code$text$RESET"
 
-  private fun bold(text: String) = color(BOLD, text)
+  internal fun bold(text: String) = color(BOLD, text)
 
-  private fun dim(text: String) = color(DIM, text)
+  internal fun dim(text: String) = color(DIM, text)
 
-  private fun green(text: String) = color(GREEN, text)
+  internal fun green(text: String) = color(GREEN, text)
 
-  private fun red(text: String) = color(RED, text)
+  internal fun red(text: String) = color(RED, text)
 
-  private fun yellow(text: String) = color(YELLOW, text)
+  internal fun yellow(text: String) = color(YELLOW, text)
 
-  private fun cyan(text: String) = color(CYAN, text)
+  internal fun cyan(text: String) = color(CYAN, text)
 
-  private fun brightWhite(text: String) = color(BRIGHT_WHITE, text)
+  internal fun brightWhite(text: String) = color(BRIGHT_WHITE, text)
 
   // ── Sticky footer internals ────────────────────────────────────────
 
@@ -214,6 +216,31 @@ object TerminalUI {
     println()
     println("  ${cyan("✈")}  ${bold(cyan("PaperPlane"))} ${dim("v$version")}")
     needsSeparator = true
+    viewClosed = false
+  }
+
+  /**
+   * Bold subtitle line printed directly under [header]. Like [header], it bypasses the block system
+   * since it appears before any block activity. Preserves a blank line above for separation from
+   * the header.
+   */
+  fun subtitle(text: String) {
+    println()
+    println("  ${bold(brightWhite(text))}")
+    needsSeparator = true
+  }
+
+  /**
+   * Marks the end of a "view" (a full command's output). Emits one trailing blank line so the
+   * shell prompt has breathing room. Idempotent — safe to call multiple times within a single
+   * command. Reset by [header]. Every command should call this at the end of its `run()`.
+   */
+  fun endView() {
+    lock.withLock {
+      if (viewClosed) return
+      viewClosed = true
+      println()
+    }
   }
 
   fun success(message: String, duration: String? = null) {
@@ -277,6 +304,278 @@ object TerminalUI {
     print("  $message (y/N): ")
     val answer = readlnOrNull()?.trim()?.lowercase()
     return answer == "y" || answer == "yes"
+  }
+
+  /**
+   * Prompts the user for text input with an optional default (Vite-style). Shows a two-line active
+   * state with `›` prefix and dim placeholder, collapsing to a `◇` completed state after input.
+   *
+   * In TTY mode, uses raw input for placeholder replacement. Falls back to simple line input
+   * otherwise.
+   */
+  fun prompt(label: String, default: String? = null): String {
+    if (!isTty) return promptFallback(label, default)
+
+    while (true) {
+      // Active state: label + placeholder
+      println()
+      println("  ${cyan("›")}  $label:")
+      val placeholder = default ?: ""
+      print("     ${dim(placeholder)}")
+      // Add bottom padding, then move cursor back to input line
+      print("\n".repeat(BOTTOM_PADDING) + "\u001b[${BOTTOM_PADDING}A\r\u001b[5C")
+      System.out.flush()
+
+      val input = StringBuilder()
+      var usingDefault = default != null
+      val savedStty = sttyCapture("-g")
+
+      try {
+        sttySet("raw", "-echo")
+
+        while (true) {
+          val b = System.`in`.read()
+          when (b) {
+            3 -> { // Ctrl+C
+              restoreStty(savedStty)
+              println()
+              System.exit(130)
+            }
+            27 -> { // ESC — abort
+              restoreStty(savedStty)
+              println()
+              System.exit(130)
+            }
+            13,
+            10 -> { // Enter
+              val result = if (usingDefault && input.isEmpty()) default ?: "" else input.toString()
+              if (result.isEmpty() && default == null) {
+                // Re-render input line (stay in loop)
+                print("\r\u001b[2K     ")
+                System.out.flush()
+                continue
+              }
+
+              restoreStty(savedStty)
+              // Collapse to completed state: move up to label line, rewrite label + input
+              print("\r\u001b[1A\u001b[2K\r")
+              println("  ${dim("◇")}  $label:")
+              print("\u001b[2K")
+              println("     $result")
+              // Clear bottom padding lines
+              for (i in 0 until BOTTOM_PADDING) {
+                print("\u001b[2K\n")
+              }
+              print("\u001b[${BOTTOM_PADDING}A")
+              System.out.flush()
+              return result
+            }
+            127,
+            8 -> { // Backspace
+              if (usingDefault) {
+                input.clear()
+                usingDefault = false
+              } else if (input.isNotEmpty()) {
+                input.deleteCharAt(input.length - 1)
+              }
+              if (input.isEmpty() && !usingDefault && default != null) {
+                // Restore placeholder when input is cleared
+                usingDefault = true
+                print("\r\u001b[2K     ${dim(default)}\r\u001b[5C")
+              } else {
+                print("\r\u001b[2K     ${input}")
+              }
+              System.out.flush()
+            }
+            else -> {
+              if (b in 32..126) {
+                if (usingDefault) {
+                  input.clear()
+                  usingDefault = false
+                }
+                input.append(b.toChar())
+                print("\r\u001b[2K     ${input}")
+                System.out.flush()
+              }
+            }
+          }
+        }
+      } catch (e: Exception) {
+        restoreStty(savedStty)
+        throw e
+      }
+    }
+  }
+
+  /** Fallback prompt for non-TTY environments. */
+  private fun promptFallback(label: String, default: String?): String {
+    while (true) {
+      val suffix = if (default != null) " ${dim("($default)")}" else ""
+      print("  $label$suffix: ")
+      System.out.flush()
+      val input = readlnOrNull()?.trim()
+      if (!input.isNullOrEmpty()) return input
+      if (default != null) return default
+    }
+  }
+
+  /**
+   * Displays an arrow-key selection menu. Must be called outside any block with no spinner active.
+   * Returns the selected index.
+   *
+   * On non-TTY terminals, falls back to a numbered list with line input.
+   */
+  fun select(
+      label: String,
+      options: List<String>,
+      descriptions: List<String> = emptyList(),
+      note: String? = null,
+      default: Int = 0,
+  ): Int {
+    if (!isTty) return selectFallback(label, options, descriptions, default)
+
+    val noteText = if (note != null) "  ${dim(note)}" else ""
+    println()
+    println("  ${cyan("›")}  ${bold(brightWhite(label))}:$noteText")
+
+    var selected = default
+
+    // Initial render
+    print("\u001b[?25l") // hide cursor
+    renderSelectOptions(options, descriptions, selected)
+    // Add bottom padding, then move cursor back
+    print("\n".repeat(BOTTOM_PADDING) + "\u001b[${BOTTOM_PADDING}A")
+    System.out.flush()
+
+    // Save terminal settings and enter raw mode
+    val savedStty = sttyCapture("-g")
+
+    try {
+      sttySet("raw", "-echo")
+
+      while (true) {
+        val b = System.`in`.read()
+        when (b) {
+          3 -> { // Ctrl+C
+            restoreStty(savedStty)
+            println()
+            System.exit(130)
+            break
+          }
+          13,
+          10 -> break // Enter
+          27 -> { // Escape or escape sequence
+            // Wait briefly for follow-up bytes (arrow keys send ESC [ A/B)
+            Thread.sleep(20)
+            if (System.`in`.available() > 0 && System.`in`.read() == '['.code) {
+              when (System.`in`.read()) {
+                'A'.code -> selected = (selected - 1 + options.size) % options.size
+                'B'.code -> selected = (selected + 1) % options.size
+              }
+              // Move cursor to first option line, redraw all
+              print("\u001b[${options.size}A")
+              renderSelectOptions(options, descriptions, selected)
+              System.out.flush()
+            } else {
+              // Bare ESC — abort
+              restoreStty(savedStty)
+              print("\u001b[?25h")
+              println()
+              System.exit(130)
+            }
+          }
+        }
+      }
+    } finally {
+      restoreStty(savedStty)
+      print("\u001b[?25h") // show cursor
+      System.out.flush()
+    }
+
+    // Collapse: move up to label line (options + 1 for label), clear all, write two-line result
+    val totalLines = options.size + 1 // label + options
+    print("\u001b[${totalLines}A")
+    for (i in 0 until totalLines) {
+      print("\u001b[2K") // clear line
+      if (i < totalLines - 1) print("\u001b[1B") // move down
+    }
+    // Cursor is on the last line — move back to first (label line)
+    if (totalLines > 1) print("\u001b[${totalLines - 1}A")
+    print("\r")
+
+    // Write completed state: ◇ label + answer
+    println("  ${dim("◇")}  $label:")
+    println("     ${options[selected]}")
+
+    // Erase any remaining lines below (excess option lines + bottom padding)
+    val excess = totalLines - 2 + BOTTOM_PADDING
+    for (i in 0 until excess) {
+      print("\u001b[2K\n")
+    }
+    // Move cursor back up to right after the result lines
+    if (excess > 0) print("\u001b[${excess}A")
+    System.out.flush()
+
+    return selected
+  }
+
+  /** Renders option lines, clearing each line first. Cursor ends after the last line. */
+  private fun renderSelectOptions(
+      options: List<String>,
+      descriptions: List<String>,
+      selected: Int,
+  ) {
+    for ((i, option) in options.withIndex()) {
+      print("\u001b[2K\r") // clear line, carriage return
+      val marker = if (i == selected) "${cyan("›")} " else "  "
+      val desc = descriptions.getOrNull(i)
+      val descText = if (desc != null) " ${dim("— $desc")}" else ""
+      val text = if (i == selected) brightWhite(option) else dim(option)
+      print("    $marker$text$descText")
+      if (i < options.size - 1) println() // newline between options, not after last
+    }
+    println() // final newline after last option
+  }
+
+  /** Fallback selection for non-TTY environments: numbered list with line input. */
+  private fun selectFallback(
+      label: String,
+      options: List<String>,
+      descriptions: List<String>,
+      default: Int,
+  ): Int {
+    println()
+    println("  $label")
+    for ((i, option) in options.withIndex()) {
+      val desc = descriptions.getOrNull(i)
+      val descText = if (desc != null) " — $desc" else ""
+      val marker = if (i == default) " (default)" else ""
+      println("    ${i + 1}. $option$descText$marker")
+    }
+    print("  Choice [${default + 1}]: ")
+    System.out.flush()
+    val input = readlnOrNull()?.trim()
+    if (input.isNullOrEmpty()) return default
+    return (input.toIntOrNull()?.minus(1))?.coerceIn(0, options.size - 1) ?: default
+  }
+
+  private fun sttyCapture(vararg args: String): String {
+    val proc = ProcessBuilder("stty", *args).redirectInput(ProcessBuilder.Redirect.INHERIT).start()
+    val result = proc.inputStream.bufferedReader().readText().trim()
+    proc.waitFor()
+    return result
+  }
+
+  private fun sttySet(vararg args: String) {
+    ProcessBuilder("stty", *args).redirectInput(ProcessBuilder.Redirect.INHERIT).start().waitFor()
+  }
+
+  private fun restoreStty(saved: String) {
+    try {
+      sttySet(saved)
+    } catch (_: Exception) {
+      // Best effort restore
+    }
   }
 
   fun fileCreated(path: String) {
@@ -367,7 +666,9 @@ object TerminalUI {
       lock.withLock {
         spinnerMessage = null
         spinnerSubstatus = null
-        if (isTty) redraw()
+        if (isTty) {
+          clearDisplay()
+        }
         if (autoBlock) {
           if (blockLines.isNotEmpty()) {
             emitSeparatorIfNeeded()

@@ -15,6 +15,14 @@ class CleanCommand : CliktCommand(name = "clean") {
   private val projectDir = File(System.getProperty("user.dir"))
 
   override fun run() {
+    try {
+      runInternal()
+    } finally {
+      TerminalUI.endView()
+    }
+  }
+
+  private fun runInternal() {
     val ppDir = File(projectDir, ".paperplane")
     if (!ppDir.exists()) {
       TerminalUI.blank()
