@@ -6,7 +6,6 @@ import com.github.ajalt.clikt.parameters.options.option
 import dev.paperplane.cli.ui.TerminalUI
 import dev.paperplane.cli.util.Platform
 import java.io.File
-import java.io.InputStreamReader
 
 class ImplodeCommand : CliktCommand(name = "implode") {
   companion object {
@@ -117,7 +116,7 @@ class ImplodeCommand : CliktCommand(name = "implode") {
               )
               .redirectErrorStream(true)
               .start()
-      val output = InputStreamReader(proc.inputStream).readText()
+      val output = proc.inputStream.bufferedReader().use { it.readText() }
       proc.waitFor()
 
       // Extract the PATH value and remove our entry

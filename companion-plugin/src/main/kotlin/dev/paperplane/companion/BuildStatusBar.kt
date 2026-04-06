@@ -17,6 +17,8 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
 
   private val gson = Gson()
   private var pollTask: BukkitTask? = null
+  // All mutable state is accessed exclusively from the main server thread
+  // (Bukkit scheduler tasks and event handlers are single-threaded)
   private var lastState: String? = null
   var isSaving: Boolean = false
     private set
@@ -47,7 +49,6 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
     val statusFile =
         File(plugin.dataFolder.parentFile.parentFile, ".paperplane/companion-status.json")
     if (!statusFile.exists()) return
-
     try {
       val json = gson.fromJson(statusFile.readText(), JsonObject::class.java)
       val state = json.get("state")?.asString ?: return
@@ -114,7 +115,7 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
     }
 
     if (reloader!!.shouldForceBlueGreen) {
-      File(ppDir, "reload-failed").writeText("CLASSLOADER_LEAKS")
+      writeFlagFile(ppDir, "reload-failed", "CLASSLOADER_LEAKS")
       broadcast(Component.text("Switching to blue/green mode", NamedTextColor.YELLOW))
       return
     }
@@ -161,22 +162,22 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
             plugin.logger.warning("Failed to finalize staged jar: ${e.message}")
           }
         }
-        File(ppDir, "reload-complete").writeText(timingInfo)
+        writeFlagFile(ppDir, "reload-complete", timingInfo)
         val msg =
             if (outcome.teardownMs == 0L && outcome.loadMs == 0L) "$pluginName hot-swapped!"
             else "$pluginName reloaded!"
         broadcast(Component.text(msg, NamedTextColor.GREEN))
       }
       ReloadResult.ROLLBACK_SUCCESS -> {
-        pendingJar?.delete()
-        File(ppDir, "reload-failed").writeText("ROLLBACK_SUCCESS")
+        deletePendingJar(pendingJar)
+        writeFlagFile(ppDir, "reload-failed", "ROLLBACK_SUCCESS")
         broadcast(
             Component.text("Reload failed, reverted to previous version", NamedTextColor.YELLOW)
         )
       }
       ReloadResult.ROLLBACK_FAILED -> {
-        pendingJar?.delete()
-        File(ppDir, "reload-failed").writeText("ROLLBACK_FAILED")
+        deletePendingJar(pendingJar)
+        writeFlagFile(ppDir, "reload-failed", "ROLLBACK_FAILED")
         broadcast(
             Component.text(
                 "Reload failed and rollback failed — restart recommended",
@@ -186,8 +187,8 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
         broadcast(Component.text("Switching to blue/green mode", NamedTextColor.YELLOW))
       }
       else -> {
-        pendingJar?.delete()
-        File(ppDir, "reload-failed").writeText(outcome.result.name)
+        deletePendingJar(pendingJar)
+        writeFlagFile(ppDir, "reload-failed", outcome.result.name)
         broadcast(Component.text("Reload failed: ${outcome.result}", NamedTextColor.RED))
 
         if (reloader!!.shouldForceBlueGreen) {
@@ -268,6 +269,20 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
       flagFile.writeText(System.currentTimeMillis().toString())
     } catch (e: IOException) {
       plugin.logger.warning("Failed to save: ${e.message}")
+    }
+  }
+
+  private fun writeFlagFile(ppDir: File, name: String, content: String) {
+    try {
+      File(ppDir, name).writeText(content)
+    } catch (e: IOException) {
+      plugin.logger.warning("Failed to write $name flag: ${e.message}")
+    }
+  }
+
+  private fun deletePendingJar(pendingJar: File?) {
+    if (pendingJar?.delete() == false) {
+      plugin.logger.warning("Failed to delete pending jar: ${pendingJar.absolutePath}")
     }
   }
 

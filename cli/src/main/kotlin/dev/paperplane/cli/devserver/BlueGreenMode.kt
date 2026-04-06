@@ -11,12 +11,16 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 internal class BlueGreenMode(private val session: DevSession) {
   companion object {
+    // Blue-green backend ports. The Velocity proxy listens on DEFAULT_PORT (25565);
+    // these sit behind it. Not used in restart or hot-reload modes.
+    internal const val SERVER_A_PORT = 25566
+    internal const val SERVER_B_PORT = 25567
     private const val TRANSFER_SETTLE_DELAY_MS = 200L
   }
 
   internal enum class Slot(val serverName: String, val port: Int) {
-    SERVER("server", DevSession.SERVER_PORT),
-    SWAP("swap", DevSession.SWAP_PORT);
+    SERVER("server", SERVER_A_PORT),
+    SWAP("swap", SERVER_B_PORT);
 
     fun other() = if (this == SERVER) SWAP else SERVER
   }

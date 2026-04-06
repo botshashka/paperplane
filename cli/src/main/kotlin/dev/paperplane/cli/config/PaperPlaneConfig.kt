@@ -3,9 +3,9 @@ package dev.paperplane.cli.config
 import com.charleskorn.kaml.InvalidPropertyValueException
 import com.charleskorn.kaml.UnknownPropertyException
 import com.charleskorn.kaml.Yaml
+import com.github.ajalt.clikt.core.ProgramResult
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
-import kotlin.system.exitProcess
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -28,10 +28,10 @@ data class PaperPlaneConfig(
         } else {
           TerminalUI.error("Invalid paperplane.yml: ${e.message}")
         }
-        exitProcess(1)
+        throw ProgramResult(1)
       } catch (e: UnknownPropertyException) {
         reportUnknownKey(e)
-        exitProcess(1)
+        throw ProgramResult(1)
       }
     }
 

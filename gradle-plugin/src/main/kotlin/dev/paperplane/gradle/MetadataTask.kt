@@ -19,7 +19,11 @@ abstract class MetadataTask : DefaultTask() {
 
   @TaskAction
   fun writeMetadata() {
-    val jarTask = project.tasks.named("jar").get() as org.gradle.jvm.tasks.Jar
+    val jarTask =
+        project.tasks.findByName("jar") as? org.gradle.jvm.tasks.Jar
+            ?: throw IllegalStateException(
+                "PaperPlane: No 'jar' task found. Ensure the Java or Kotlin plugin is applied."
+            )
     val jarPath = jarTask.archiveFile.get().asFile.relativeTo(project.projectDir).path
 
     // Use Gradle's source set API to find actual class output directories.

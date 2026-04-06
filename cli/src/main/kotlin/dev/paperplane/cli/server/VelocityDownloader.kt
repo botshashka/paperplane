@@ -30,7 +30,9 @@ class VelocityDownloader(private val cacheDir: File) {
     val buildsResponse = fetch(buildsUrl)
     val buildsJson = gson.fromJson(buildsResponse, JsonObject::class.java)
     val builds = buildsJson.getAsJsonArray("builds")
-    val latestBuild = builds.last().asJsonObject
+    val latestBuild =
+        builds.lastOrNull()?.asJsonObject
+            ?: throw IOException("No builds found for Velocity $resolvedVersion")
     val buildNumber = latestBuild.get("build").asInt
     val downloadName =
         latestBuild.getAsJsonObject("downloads").getAsJsonObject("application").get("name").asString

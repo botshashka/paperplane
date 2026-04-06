@@ -34,7 +34,7 @@ constructor(private val server: ProxyServer, private val logger: Logger) {
   }
 
   private val gson = Gson()
-  private var activeServer: String = "server"
+  @Volatile private var activeServer: String = "server"
   private val statusFile = File("active-server.json")
 
   @Subscribe
@@ -78,12 +78,22 @@ constructor(private val server: ProxyServer, private val logger: Logger) {
       val newActive = json.get("active")?.asString ?: return
       val transfer = json.get("transfer")?.asBoolean ?: false
 
-      activeServer = newActive
+      if (newActive != activeServer) {
+        if (server.getServer(newActive).isEmpty) {
+          logger.warn("Active server '{}' not registered on proxy", newActive)
+        }
+        activeServer = newActive
+      }
 
       if (transfer) {
         // Clear transfer flag BEFORE transferring — pollStatus runs on a thread pool,
         // so a concurrent poll must not see transfer=true again while we're blocking
-        statusFile.writeText("""{"active":"$newActive","transfer":false}""")
+        val updated =
+            JsonObject().apply {
+              addProperty("active", newActive)
+              addProperty("transfer", false)
+            }
+        statusFile.writeText(gson.toJson(updated))
         val success = transferPlayers(newActive)
         if (success) {
           File(statusFile.parentFile, "transfer-complete")

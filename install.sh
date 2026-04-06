@@ -78,6 +78,7 @@ main() {
 
   DOWNLOAD_URL="https://github.com/$REPO/releases/download/v${LATEST}/ppl-${LATEST}.zip"
   TMP_DIR=$(mktemp -d)
+  trap 'rm -rf "$TMP_DIR"' EXIT
   TMP_ZIP="$TMP_DIR/ppl.zip"
 
   echo "Downloading ppl v${LATEST}..."
@@ -101,8 +102,6 @@ main() {
 
   # Make launcher executable
   chmod +x "$BIN_DIR/ppl"
-
-  rm -rf "$TMP_DIR"
 
   # ── Set up shell completions ────────────────────────────────────────
 

@@ -32,7 +32,7 @@ PaperPlane (`ppl`) is a CLI dev tool for Minecraft Paper plugin development. It 
 
 ## Architecture
 
-Four Gradle submodules (`settings.gradle.kts`):
+Five Gradle submodules (`settings.gradle.kts`):
 
 - **`cli`** — The `ppl` command. Kotlin + Clikt CLI framework. Embeds companion and velocity plugin jars as resources (copied as `.bin` files during build to prevent Shadow from unpacking them). Uses Gradle Tooling API (`GradleBridge`) to invoke builds in the user's project without shelling out.
 
@@ -42,13 +42,15 @@ Four Gradle submodules (`settings.gradle.kts`):
 
 - **`velocity-plugin`** — Velocity proxy plugin for blue/green mode. Polls `active-server.json` to route/transfer players between blue and green Paper backends during zero-downtime rebuilds.
 
+- **`agent`** — Minimal Java agent for hot-swap class redefinition. Produces a JAR with `Premain-Class` manifest for `Can-Redefine-Classes` / `Can-Retransform-Classes`.
+
 ### Dev Server Modes
 
-Configured via `paperplane.yml` in the user's project:
+Configured via `dev.mode` in `paperplane.yml`:
 
-1. **Single server** (`proxy: false`) — Stops server, rebuilds, restarts. Simple but has downtime.
-2. **Blue/green** (`proxy: true`, default) — Two Paper servers behind a Velocity proxy. Rebuilds deploy to the standby server, then players are transferred. Pre-warms the standby after each swap.
-3. **Hot-reload** (`hot-reload: true`) — Single server stays running. Companion plugin unloads/reloads the plugin JAR in-place. Fastest iteration but experimental.
+1. **Restart** (`mode: restart`) — Stops server, rebuilds, restarts. Simple but has downtime.
+2. **Blue-green** (`mode: blue-green`) — Two Paper servers behind a Velocity proxy. Rebuilds deploy to the standby server, then players are transferred. Pre-warms the standby after each swap.
+3. **Hot-reload** (`mode: hot-reload`) — Single server stays running. Companion plugin unloads/reloads the plugin JAR in-place. Fastest iteration but experimental.
 
 ### CLI ↔ Server Communication
 
@@ -84,7 +86,7 @@ Types: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `chore`, `ci`, `build`
 
 ## Key Conventions
 
-- Kotlin throughout, Java 21 toolchain, JUnit 5 for tests
+- Kotlin throughout, Java 21 toolchain, JUnit 6 for tests
 - Config is `paperplane.yml` (parsed with kaml/kotlinx-serialization) — see `PaperPlaneConfig.kt` for schema
 - The `ppl` launcher script at repo root runs the built CLI jar directly
 - Version catalog in `gradle/libs.versions.toml` — all dependency versions managed there

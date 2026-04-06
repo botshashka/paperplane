@@ -30,7 +30,7 @@ try {
 # ── Fetch latest version ────────────────────────────────────────────
 
 Write-Host "Fetching latest version..."
-$Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
+$Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -TimeoutSec 30
 $Version = $Release.tag_name -replace '^v', ''
 
 if (-not $Version) {
@@ -44,7 +44,7 @@ $DownloadUrl = "https://github.com/$Repo/releases/download/v$Version/ppl-$Versio
 $TmpZip = [System.IO.Path]::GetTempFileName() + ".zip"
 
 Write-Host "Downloading ppl v$Version..."
-Invoke-WebRequest -Uri $DownloadUrl -OutFile $TmpZip
+Invoke-WebRequest -Uri $DownloadUrl -OutFile $TmpZip -TimeoutSec 120
 
 # Clean previous installation but preserve jbr cache
 if (Test-Path "$InstallDir\bin") { Remove-Item -Recurse -Force "$InstallDir\bin" }

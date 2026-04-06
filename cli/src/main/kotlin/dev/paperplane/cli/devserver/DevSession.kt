@@ -20,8 +20,6 @@ internal class DevSession(
     val projectDir: File,
 ) {
   companion object {
-    const val SERVER_PORT = 25566
-    const val SWAP_PORT = 25567
     private const val MAIN_LOOP_POLL_INTERVAL_MS = 1000L
     private const val JBR_CHECK_TIMEOUT_SECONDS = 5L
   }
@@ -189,11 +187,7 @@ internal class DevSession(
     return when (config.dev.jbr) {
       "auto" -> {
         if (checkIsJbr("java")) JavaRuntime("java", true)
-        else {
-          val jbrDownloader = JbrDownloader()
-          val javaBin = TerminalUI.spin("Downloading JBR...") { jbrDownloader.download() }
-          JavaRuntime(javaBin.absolutePath, true)
-        }
+        else JavaRuntime("java", false)
       }
       "on" -> {
         val jbrDownloader = JbrDownloader()

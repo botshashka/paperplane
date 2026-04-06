@@ -4,6 +4,7 @@ import javax.inject.Inject
 import org.gradle.api.NamedDomainObjectContainer
 import org.gradle.api.Project
 import org.gradle.api.provider.ListProperty
+import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
 
 abstract class PaperPlaneExtension @Inject constructor(project: Project) {
@@ -41,5 +42,5 @@ abstract class CommandDefinition @Inject constructor(val name: String) {
 abstract class PermissionDefinition @Inject constructor(val name: String) {
   abstract val default: Property<String>
   abstract val description: Property<String>
-  abstract val children: ListProperty<String>
+  abstract val children: MapProperty<String, Boolean>
 }

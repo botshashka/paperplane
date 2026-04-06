@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # Development launcher — for working on PaperPlane itself.
 # End users install via: curl -fsSL https://paperplane.dev/install | sh
 # Resolve symlinks to find the real install directory
@@ -9,4 +10,15 @@ while [ -L "$SOURCE" ]; do
   [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
-exec java --enable-native-access=ALL-UNNAMED -jar "$SCRIPT_DIR/cli/build/libs/paperplane-cli.jar" "$@"
+if ! command -v java >/dev/null 2>&1; then
+  echo "Error: Java is not installed. Install Java 21+: https://adoptium.net" >&2
+  exit 1
+fi
+
+JAR_PATH="$SCRIPT_DIR/cli/build/libs/paperplane-cli.jar"
+if [ ! -f "$JAR_PATH" ]; then
+  echo "Error: CLI jar not found. Run: ./gradlew :cli:shadowJar" >&2
+  exit 1
+fi
+
+exec java --enable-native-access=ALL-UNNAMED -jar "$JAR_PATH" "$@"

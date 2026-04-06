@@ -255,12 +255,13 @@ class PluginReloader(private val server: Server, private val logger: Logger) {
   // ── JAR loading ────────────────────────────────────────────────────
 
   private fun loadAndEnableFromJar(jarFile: File, pluginName: String): Plugin {
-    val jar = JarFile(jarFile)
-    val pluginYmlEntry =
-        jar.getJarEntry("plugin.yml")
-            ?: throw IllegalStateException("No plugin.yml found in ${jarFile.name}")
-    val description = PluginDescriptionFile(jar.getInputStream(pluginYmlEntry))
-    jar.close()
+    val description =
+        JarFile(jarFile).use { jar ->
+          val pluginYmlEntry =
+              jar.getJarEntry("plugin.yml")
+                  ?: throw IllegalStateException("No plugin.yml found in ${jarFile.name}")
+          PluginDescriptionFile(jar.getInputStream(pluginYmlEntry))
+        }
 
     val (pluginInstance, classLoaderInstance) =
         PaperInternals.loadPluginFromJar(jarFile, description, server, logger)

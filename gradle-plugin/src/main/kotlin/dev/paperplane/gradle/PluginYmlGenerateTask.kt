@@ -39,7 +39,7 @@ abstract class PluginYmlGenerateTask : DefaultTask() {
     }
 
     if (extension.authors.isPresent && extension.authors.get().isNotEmpty()) {
-      val authorList = extension.authors.get().joinToString(", ") { "'$it'" }
+      val authorList = extension.authors.get().joinToString(", ")
       lines.add("authors: [$authorList]")
     }
 
@@ -88,6 +88,12 @@ abstract class PluginYmlGenerateTask : DefaultTask() {
         }
         if (perm.description.isPresent) {
           lines.add("    description: ${perm.description.get()}")
+        }
+        if (perm.children.isPresent && perm.children.get().isNotEmpty()) {
+          lines.add("    children:")
+          for ((child, value) in perm.children.get()) {
+            lines.add("      $child: $value")
+          }
         }
       }
     }

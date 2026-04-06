@@ -6,6 +6,7 @@ plugins {
 dependencies {
   implementation(libs.gson)
 
+  testImplementation(gradleTestKit())
   testImplementation(libs.junit.jupiter)
   testRuntimeOnly(libs.junit.platform.launcher)
 }

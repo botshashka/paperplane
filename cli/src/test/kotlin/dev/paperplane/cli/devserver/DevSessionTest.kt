@@ -146,17 +146,4 @@ class DevSessionTest {
         }
     assertTrue(ex.message!!.contains("1.16"))
   }
-
-  // ── DevSession constants ──────────────────────────────────────────
-
-  @Test
-  fun `SERVER_PORT and SWAP_PORT are distinct`() {
-    assertTrue(DevSession.SERVER_PORT != DevSession.SWAP_PORT)
-  }
-
-  @Test
-  fun `SERVER_PORT and SWAP_PORT are in valid range`() {
-    assertTrue(DevSession.SERVER_PORT in 1024..65535)
-    assertTrue(DevSession.SWAP_PORT in 1024..65535)
-  }
 }

@@ -120,16 +120,24 @@ class InitCommand : CliktCommand(name = "init") {
             .directory(projectDir)
             .redirectErrorStream(true)
             .start()
-    wrapperProcess.waitFor(WRAPPER_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
-    if (wrapperProcess.exitValue() == 0) {
-      TerminalUI.fileCreated("gradlew")
-    } else {
-      TerminalUI.error("Failed to generate Gradle wrapper — run 'gradle wrapper' manually")
-    }
+    val finished =
+        wrapperProcess.waitFor(WRAPPER_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+    val wrapperOk =
+        if (!finished) {
+          wrapperProcess.destroyForcibly()
+          TerminalUI.error("Gradle wrapper timed out — run 'gradle wrapper' manually")
+          false
+        } else if (wrapperProcess.exitValue() == 0) {
+          TerminalUI.fileCreated("gradlew")
+          true
+        } else {
+          TerminalUI.error("Failed to generate Gradle wrapper — run 'gradle wrapper' manually")
+          false
+        }
     TerminalUI.endBlock()
 
     TerminalUI.beginBlock()
-    TerminalUI.success("Project created")
+    TerminalUI.success(if (wrapperOk) "Project created" else "Project created (without Gradle wrapper)")
     TerminalUI.blank()
     TerminalUI.status("Next steps:")
     TerminalUI.info("cd", name)
@@ -322,6 +330,7 @@ class InitCommand : CliktCommand(name = "init") {
 
         dev:
           mode: hot-reload      # hot-reload | blue-green | restart
+          # debounce-ms: 2000   # Delay (ms) before rebuild after file change
           # jbr: auto           # auto | on | off | /path/to/jbr
     """
           .trimIndent() + "\n"
