@@ -91,4 +91,77 @@ class PaperVersionResolverTest {
 
     assertEquals(Versions.PAPER_FALLBACK, resolver().resolveLatest())
   }
+
+  // ── resolveRecent ─────────────────────────────────────────────────
+
+  @Test
+  fun `resolveRecent returns last N supported versions`() {
+    server.createContext("/") { exchange ->
+      val json =
+          """{"versions":["1.18","1.18.2","1.19","1.19.4","1.20","1.20.6","1.21","1.21.4","1.21.10"]}"""
+      exchange.sendResponseHeaders(200, json.length.toLong())
+      exchange.responseBody.use { it.write(json.toByteArray()) }
+    }
+
+    assertEquals(listOf("1.21", "1.21.4", "1.21.10"), resolver().resolveRecent(3))
+  }
+
+  @Test
+  fun `resolveRecent respects count parameter`() {
+    server.createContext("/") { exchange ->
+      val json =
+          """{"versions":["1.18","1.18.2","1.19","1.19.4","1.20","1.20.6","1.21","1.21.4","1.21.10"]}"""
+      exchange.sendResponseHeaders(200, json.length.toLong())
+      exchange.responseBody.use { it.write(json.toByteArray()) }
+    }
+
+    assertEquals(listOf("1.21.4", "1.21.10"), resolver().resolveRecent(2))
+  }
+
+  @Test
+  fun `resolveRecent filters out unsupported versions`() {
+    server.createContext("/") { exchange ->
+      val json = """{"versions":["1.18","1.21.4","1.22","1.22.1"]}"""
+      exchange.sendResponseHeaders(200, json.length.toLong())
+      exchange.responseBody.use { it.write(json.toByteArray()) }
+    }
+
+    assertEquals(listOf("1.18", "1.21.4"), resolver().resolveRecent(3))
+  }
+
+  @Test
+  fun `resolveRecent returns fallback list when no supported versions`() {
+    server.createContext("/") { exchange ->
+      val json = """{"versions":["1.22","1.23"]}"""
+      exchange.sendResponseHeaders(200, json.length.toLong())
+      exchange.responseBody.use { it.write(json.toByteArray()) }
+    }
+
+    assertEquals(listOf(Versions.PAPER_FALLBACK), resolver().resolveRecent())
+  }
+
+  @Test
+  fun `resolveRecent returns fallback list on connection failure`() {
+    server.stop(0)
+
+    assertEquals(listOf(Versions.PAPER_FALLBACK), resolver().resolveRecent())
+  }
+
+  @Test
+  fun `resolveRecent returns fallback list on non-200 response`() {
+    server.createContext("/") { exchange -> exchange.sendResponseHeaders(500, -1) }
+
+    assertEquals(listOf(Versions.PAPER_FALLBACK), resolver().resolveRecent())
+  }
+
+  @Test
+  fun `resolveRecent returns all when fewer than count`() {
+    server.createContext("/") { exchange ->
+      val json = """{"versions":["1.21.4","1.21.10"]}"""
+      exchange.sendResponseHeaders(200, json.length.toLong())
+      exchange.responseBody.use { it.write(json.toByteArray()) }
+    }
+
+    assertEquals(listOf("1.21.4", "1.21.10"), resolver().resolveRecent(5))
+  }
 }
