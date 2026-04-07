@@ -10,6 +10,9 @@ import org.objectweb.asm.ClassReader
 import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
+import org.objectweb.asm.util.CheckClassAdapter
+import java.io.PrintWriter
+import java.io.StringWriter
 
 class JavaPluginPatcherTest {
 
@@ -120,6 +123,27 @@ class JavaPluginPatcherTest {
     val originalMethods = collectMethods(original)
     val transformedMethods = collectMethods(transformed)
     assertEquals(originalMethods, transformedMethods, "Non-init methods should be preserved")
+  }
+
+  @Test
+  fun `transformed bytecode passes ASM verifier`() {
+    val original = getJavaPluginBytes()
+    val transformed =
+        transformer.transform(
+            null,
+            "org/bukkit/plugin/java/JavaPlugin",
+            org.bukkit.plugin.java.JavaPlugin::class.java,
+            null,
+            original,
+        )!!
+
+    val sw = StringWriter()
+    CheckClassAdapter.verify(ClassReader(transformed), true, PrintWriter(sw))
+    val output = sw.toString()
+    assertFalse(
+        output.contains("Error"),
+        "Verifier reported errors:\n$output",
+    )
   }
 
   @Test

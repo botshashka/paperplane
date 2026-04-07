@@ -11,6 +11,15 @@ dependencies {
   testImplementation(libs.junit.jupiter)
   testRuntimeOnly(libs.junit.platform.launcher)
   testImplementation(libs.mockbukkit)
+  testImplementation(libs.asm.util)
+  testImplementation("net.bytebuddy:byte-buddy-agent:1.17.7")
+}
+
+tasks.test {
+  jvmArgs(
+      "-Djdk.attach.allowAttachSelf=true",
+      "-Xlog:redefine+class*=trace",
+  )
 }
 
 tasks.processResources { expand("version" to project.version) }
