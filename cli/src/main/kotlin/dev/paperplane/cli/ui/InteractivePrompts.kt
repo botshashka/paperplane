@@ -54,6 +54,13 @@ object InteractivePrompts {
       if (viewActive) return
       val t = terminal()
       savedAttributes = t.enterRawMode()
+      // JLine's enterRawMode leaves ISIG enabled, so Ctrl+C still generates SIGINT at the OS
+      // level instead of being delivered as byte 3 — the JVM terminates before our
+      // PromptCancelledException handler can print the "Cancelled" banner. Clear ISIG so
+      // Ctrl+C / Ctrl+\ arrive as raw bytes to the keystroke loop.
+      val attrs = Attributes(t.attributes)
+      attrs.setLocalFlag(Attributes.LocalFlag.ISIG, false)
+      t.attributes = attrs
       viewActive = true
     }
   }
@@ -95,6 +102,10 @@ object InteractivePrompts {
       } else {
         ownsRawMode = true
         localSaved = t.enterRawMode()
+        // See beginInteractiveView — clear ISIG so Ctrl+C arrives as a byte, not a signal.
+        val attrs = Attributes(t.attributes)
+        attrs.setLocalFlag(Attributes.LocalFlag.ISIG, false)
+        t.attributes = attrs
       }
     }
     try {
@@ -170,10 +181,20 @@ object InteractivePrompts {
       val b = reader.read()
       when (b) {
         -1, // EOF
-        AsciiKeys.CTRL_C,
-        AsciiKeys.ESC -> {
+        AsciiKeys.CTRL_C -> {
           println()
           cancelPrompt()
+        }
+        AsciiKeys.ESC -> {
+          // Arrow keys send ESC [ A/B/C/D; swallow the sequence and continue.
+          // A bare ESC (no follow-up within the peek timeout) cancels the prompt.
+          val next = reader.peek(ARROW_KEY_PEEK_TIMEOUT_MS)
+          if (next >= 0 && reader.read() == '['.code) {
+            reader.read() // consume direction byte (A/B/C/D) and ignore
+          } else {
+            println()
+            cancelPrompt()
+          }
         }
         AsciiKeys.CR,
         AsciiKeys.LF -> { // Enter
