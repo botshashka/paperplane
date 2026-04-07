@@ -59,9 +59,7 @@ class TestCommand : CliktCommand(name = "test") {
         watcher.stop()
       }
     } else {
-      TerminalUI.beginBlock()
-      runTestsInBlock()
-      TerminalUI.endBlock()
+      TerminalUI.block { runTestsInBlock() }
     }
   }
 

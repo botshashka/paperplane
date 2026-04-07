@@ -50,33 +50,33 @@ class CleanCommand : CliktCommand(name = "clean") {
 
     val totalSize = dirsToDelete.sumOf { Platform.dirSize(it) }
 
-    TerminalUI.beginBlock()
-    TerminalUI.status("This will delete:")
-    for (dir in dirsToDelete) {
-      TerminalUI.info("${dir.name}/", Platform.formatSize(Platform.dirSize(dir)))
+    TerminalUI.block {
+      status("This will delete:")
+      for (dir in dirsToDelete) {
+        info("${dir.name}/", Platform.formatSize(Platform.dirSize(dir)))
+      }
+      if (!all && cacheDir.exists()) {
+        blank()
+        status(
+            "Cache preserved (${Platform.formatSize(Platform.dirSize(cacheDir))}). Use --all to delete."
+        )
+      }
+      blank()
+      status("Total: ${Platform.formatSize(totalSize)}")
     }
-    if (!all && cacheDir.exists()) {
-      TerminalUI.blank()
-      TerminalUI.status(
-          "Cache preserved (${Platform.formatSize(Platform.dirSize(cacheDir))}). Use --all to delete."
-      )
-    }
-    TerminalUI.blank()
-    TerminalUI.status("Total: ${Platform.formatSize(totalSize)}")
-    TerminalUI.endBlock()
 
     if (!force && !InteractivePrompts.confirm("Are you sure?")) {
       TerminalUI.status("Cancelled")
       return
     }
 
-    TerminalUI.beginBlock()
-    for (dir in dirsToDelete) {
-      dir.deleteRecursively()
-      TerminalUI.success("Deleted ${dir.name}/")
+    TerminalUI.block {
+      for (dir in dirsToDelete) {
+        dir.deleteRecursively()
+        success("Deleted ${dir.name}/")
+      }
+      blank()
+      success("Clean complete — next 'ppl dev' will set up a fresh server")
     }
-    TerminalUI.blank()
-    TerminalUI.success("Clean complete — next 'ppl dev' will set up a fresh server")
-    TerminalUI.endBlock()
   }
 }

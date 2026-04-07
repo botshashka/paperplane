@@ -26,50 +26,48 @@ class ImplodeCommand : CliktCommand(name = "implode") {
 
     val totalSize = Platform.dirSize(installDir)
 
-    TerminalUI.beginBlock()
-    TerminalUI.status("This will remove:")
-    TerminalUI.info("~/.paperplane/", Platform.formatSize(totalSize))
-
     val rcFiles = shellRcFiles()
     val affectedRcFiles = rcFiles.filter { it.readText().contains(PAPERPLANE_MARKER) }
-    if (affectedRcFiles.isNotEmpty()) {
-      TerminalUI.info("PATH entries", affectedRcFiles.joinToString(", ") { "~/${it.name}" })
-    }
 
-    TerminalUI.blank()
-    TerminalUI.status("Total: ${Platform.formatSize(totalSize)}")
-    TerminalUI.endBlock()
+    TerminalUI.block {
+      status("This will remove:")
+      info("~/.paperplane/", Platform.formatSize(totalSize))
+      if (affectedRcFiles.isNotEmpty()) {
+        info("PATH entries", affectedRcFiles.joinToString(", ") { "~/${it.name}" })
+      }
+      blank()
+      status("Total: ${Platform.formatSize(totalSize)}")
+    }
 
     if (!force && !InteractivePrompts.confirm("Are you sure? This will remove ppl from your system.")) {
       TerminalUI.status("Cancelled")
       return
     }
 
-    TerminalUI.beginBlock()
+    TerminalUI.block {
+      // Remove PATH entries
+      if (Platform.isWindows) {
+        removeWindowsPathEntry()
+      }
+      for (rcFile in affectedRcFiles) {
+        removePaperplaneBlock(rcFile)
+        success("Cleaned ${rcFile.name}")
+      }
 
-    // Remove PATH entries
-    if (Platform.isWindows) {
-      removeWindowsPathEntry()
+      // Remove fish completions if present
+      val fishCompletion = File(Platform.userHome, ".config/fish/completions/ppl.fish")
+      if (fishCompletion.exists()) {
+        fishCompletion.delete()
+        success("Removed fish completion")
+      }
+
+      // Delete the installation directory
+      installDir.deleteRecursively()
+      success("Deleted ~/.paperplane/")
+
+      blank()
+      status("paperplane has been removed. Goodbye!")
     }
-    for (rcFile in affectedRcFiles) {
-      removePaperplaneBlock(rcFile)
-      TerminalUI.success("Cleaned ${rcFile.name}")
-    }
-
-    // Remove fish completions if present
-    val fishCompletion = File(Platform.userHome, ".config/fish/completions/ppl.fish")
-    if (fishCompletion.exists()) {
-      fishCompletion.delete()
-      TerminalUI.success("Removed fish completion")
-    }
-
-    // Delete the installation directory
-    installDir.deleteRecursively()
-    TerminalUI.success("Deleted ~/.paperplane/")
-
-    TerminalUI.blank()
-    TerminalUI.status("paperplane has been removed. Goodbye!")
-    TerminalUI.endBlock()
   }
 
   private fun shellRcFiles(): List<File> {

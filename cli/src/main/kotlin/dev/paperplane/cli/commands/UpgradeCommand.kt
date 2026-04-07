@@ -21,39 +21,36 @@ class UpgradeCommand : CliktCommand(name = "upgrade") {
 
   override fun run() {
     val currentVersion = Versions.paperplaneVersion()
-    TerminalUI.beginBlock()
+    TerminalUI.block {
+      val client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()
+      val gson = Gson()
 
-    val client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()
-    val gson = Gson()
+      // Fetch latest release info
+      val latestVersion =
+          TerminalUI.spin("Checking for updates...") { fetchLatestVersion(client, gson) }
 
-    // Fetch latest release info
-    val latestVersion =
-        TerminalUI.spin("Checking for updates...") { fetchLatestVersion(client, gson) }
+      if (latestVersion == null) {
+        error("Could not determine latest version")
+        return@block
+      }
 
-    if (latestVersion == null) {
-      TerminalUI.error("Could not determine latest version")
-      TerminalUI.endBlock()
-      return
+      if (latestVersion == currentVersion) {
+        success("Already up to date (v$currentVersion)")
+        return@block
+      }
+
+      // Download and extract the new version
+      val ok =
+          TerminalUI.spin("Downloading v$latestVersion...") {
+            downloadAndExtract(client, latestVersion)
+          }
+
+      if (ok) {
+        success("Updated ppl v$currentVersion → v$latestVersion")
+      } else {
+        error("Failed to download v$latestVersion")
+      }
     }
-
-    if (latestVersion == currentVersion) {
-      TerminalUI.success("Already up to date (v$currentVersion)")
-      TerminalUI.endBlock()
-      return
-    }
-
-    // Download and extract the new version
-    val success =
-        TerminalUI.spin("Downloading v$latestVersion...") {
-          downloadAndExtract(client, latestVersion)
-        }
-
-    if (success) {
-      TerminalUI.success("Updated ppl v$currentVersion → v$latestVersion")
-    } else {
-      TerminalUI.error("Failed to download v$latestVersion")
-    }
-    TerminalUI.endBlock()
   }
 
   private fun fetchLatestVersion(client: HttpClient, gson: Gson): String? {

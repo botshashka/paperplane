@@ -29,23 +29,23 @@ class FormatCommand : CliktCommand(name = "format") {
       val spinMessage = if (check) "Checking formatting..." else "Formatting..."
       val result = TerminalUI.spin(spinMessage) { gradle.format(check = check) }
 
-      TerminalUI.beginBlock()
-      if (result.success) {
-        TerminalUI.success(if (check) "Formatting OK" else "Formatted")
-      } else if (result.taskMissing) {
-        TerminalUI.error("No formatter configured for this project")
-        TerminalUI.status(
-            "ppl format runs Spotless — add the Spotless plugin to build.gradle.kts to enable it"
-        )
-        TerminalUI.status("See https://github.com/diffplug/spotless for setup")
-      } else {
-        val summary = result.rootMessage ?: "Format failed"
-        TerminalUI.error(summary)
-        if (result.outputLines.isNotEmpty()) {
-          TerminalUI.buildError("Spotless output", null, result.outputLines.joinToString("\n"))
+      TerminalUI.block {
+        if (result.success) {
+          success(if (check) "Formatting OK" else "Formatted")
+        } else if (result.taskMissing) {
+          error("No formatter configured for this project")
+          status(
+              "ppl format runs Spotless — add the Spotless plugin to build.gradle.kts to enable it"
+          )
+          status("See https://github.com/diffplug/spotless for setup")
+        } else {
+          val summary = result.rootMessage ?: "Format failed"
+          error(summary)
+          if (result.outputLines.isNotEmpty()) {
+            buildError("Spotless output", null, result.outputLines.joinToString("\n"))
+          }
         }
       }
-      TerminalUI.endBlock()
     } finally {
       gradle.close()
     }

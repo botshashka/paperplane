@@ -60,9 +60,9 @@ class DevCommand : CliktCommand(name = "dev") {
           try {
             DevMode.valueOf(it.uppercase().replace("-", "_"))
           } catch (_: Exception) {
-            TerminalUI.beginBlock()
-            TerminalUI.error("Unknown mode: $it (expected: hot-reload, blue-green, restart)")
-            TerminalUI.endBlock()
+            TerminalUI.block {
+              error("Unknown mode: $it (expected: hot-reload, blue-green, restart)")
+            }
             return
           }
         } ?: config.dev.mode
@@ -89,9 +89,7 @@ class DevCommand : CliktCommand(name = "dev") {
             note = "https://aka.ms/MinecraftEULA",
         )
     if (choice != 0) {
-      TerminalUI.beginBlock()
-      TerminalUI.error("You must accept the Minecraft EULA to run a server")
-      TerminalUI.endBlock()
+      TerminalUI.block { error("You must accept the Minecraft EULA to run a server") }
       return false
     }
 
@@ -108,15 +106,15 @@ class DevCommand : CliktCommand(name = "dev") {
     val needsMigration = (oldBlue.exists() && !newServer.exists()) || oldGreen.exists()
     if (!needsMigration) return
 
-    TerminalUI.beginBlock()
-    if (oldBlue.exists() && !newServer.exists()) {
-      Files.move(oldBlue.toPath(), newServer.toPath(), StandardCopyOption.REPLACE_EXISTING)
-      TerminalUI.info("Migrated:", "server-blue/ → server/")
+    TerminalUI.block {
+      if (oldBlue.exists() && !newServer.exists()) {
+        Files.move(oldBlue.toPath(), newServer.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        info("Migrated:", "server-blue/ → server/")
+      }
+      if (oldGreen.exists()) {
+        oldGreen.deleteRecursively()
+        info("Cleaned up:", "server-green/ (no longer needed)")
+      }
     }
-    if (oldGreen.exists()) {
-      oldGreen.deleteRecursively()
-      TerminalUI.info("Cleaned up:", "server-green/ (no longer needed)")
-    }
-    TerminalUI.endBlock()
   }
 }

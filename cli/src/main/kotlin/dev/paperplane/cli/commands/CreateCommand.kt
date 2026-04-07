@@ -135,16 +135,12 @@ class CreateCommand : CliktCommand(name = "create") {
       displayName = InteractivePrompts.prompt("Plugin name", "My Plugin")
       slug = deriveSlug(displayName)
       if (slug.isEmpty()) {
-        TerminalUI.beginBlock()
-        TerminalUI.error("Could not derive a project name from '$displayName'")
-        TerminalUI.endBlock()
+        TerminalUI.block { error("Could not derive a project name from '$displayName'") }
         continue
       }
       projectDir = File(slug)
       if (projectDir.exists()) {
-        TerminalUI.beginBlock()
-        TerminalUI.error("Directory '$slug' already exists")
-        TerminalUI.endBlock()
+        TerminalUI.block { error("Directory '$slug' already exists") }
         continue
       }
       break
@@ -156,9 +152,9 @@ class CreateCommand : CliktCommand(name = "create") {
     while (true) {
       resolvedPackage = InteractivePrompts.prompt("Package", derivePackage(resolvedAuthor, slug))
       if (isValidPackage(resolvedPackage)) break
-      TerminalUI.beginBlock()
-      TerminalUI.error("Invalid package name (use lowercase segments like com.example.myplugin)")
-      TerminalUI.endBlock()
+      TerminalUI.block {
+        error("Invalid package name (use lowercase segments like com.example.myplugin)")
+      }
     }
 
     val versions =
@@ -206,9 +202,7 @@ class CreateCommand : CliktCommand(name = "create") {
     TerminalUI.header(Versions.paperplaneVersion())
 
     if (projectDir.exists()) {
-      TerminalUI.beginBlock()
-      TerminalUI.error("Directory '$slug' already exists")
-      TerminalUI.endBlock()
+      TerminalUI.block { error("Directory '$slug' already exists") }
       return
     }
 
@@ -242,17 +236,13 @@ class CreateCommand : CliktCommand(name = "create") {
 
   private fun resolveJbrSetting(): String {
     if (JavaRuntimeUtil.checkIsJbr("java")) {
-      TerminalUI.beginBlock()
-      TerminalUI.success("JetBrains Runtime detected")
-      TerminalUI.endBlock()
+      TerminalUI.block { success("JetBrains Runtime detected") }
       return "auto"
     }
 
     val jbrCache = File(Platform.paperplaneHome, "jbr")
     if (jbrCache.exists() && jbrCache.listFiles()?.isNotEmpty() == true) {
-      TerminalUI.beginBlock()
-      TerminalUI.success("JetBrains Runtime found")
-      TerminalUI.endBlock()
+      TerminalUI.block { success("JetBrains Runtime found") }
       return "auto"
     }
 
@@ -268,20 +258,17 @@ class CreateCommand : CliktCommand(name = "create") {
   private fun createProject(config: ProjectConfig) {
     val wrapperOk = TerminalUI.spin(CREATING_MESSAGES.random()) { scaffoldFiles(config) }
 
-    TerminalUI.beginBlock()
-    TerminalUI.success("${SUCCESS_MESSAGES.random()} — ${config.projectName}/")
-    if (!wrapperOk) {
-      TerminalUI.error("Gradle wrapper failed — run 'gradle wrapper' manually")
+    TerminalUI.block {
+      success("${SUCCESS_MESSAGES.random()} — ${config.projectName}/")
+      if (!wrapperOk) {
+        error("Gradle wrapper failed — run 'gradle wrapper' manually")
+      }
     }
-    TerminalUI.endBlock()
 
-    TerminalUI.beginBlock()
-    TerminalUI.info(
-        "cd",
-        "${config.projectName}  ${TerminalUI.dim("switch to your project folder")}",
-    )
-    TerminalUI.info("ppl", "dev  ${TerminalUI.dim("launch the dev server")}")
-    TerminalUI.endBlock()
+    TerminalUI.block {
+      info("cd", "${config.projectName}  ${TerminalUI.dim("switch to your project folder")}")
+      info("ppl", "dev  ${TerminalUI.dim("launch the dev server")}")
+    }
   }
 
   private fun scaffoldFiles(c: ProjectConfig): Boolean {

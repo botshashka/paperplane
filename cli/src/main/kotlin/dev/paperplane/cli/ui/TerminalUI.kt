@@ -186,6 +186,26 @@ object TerminalUI {
     status(if (watching) "Watching for changes..." else "Waiting for changes...")
   }
 
+  /**
+   * Scoped PERSIST block. Use for command one-shot output:
+   * ```
+   * TerminalUI.block {
+   *     success("Done")
+   *     info("files", "12 changed")
+   * }
+   * ```
+   * The lambda receiver is `TerminalUI`, so emit calls are unqualified. The block closes on
+   * scope exit even if [body] throws — "forgot to endBlock" becomes impossible.
+   */
+  inline fun <T> block(body: TerminalUI.() -> T): T {
+    beginBlock(BlockType.PERSIST)
+    try {
+      return body()
+    } finally {
+      endBlock()
+    }
+  }
+
   // ── Output methods (block-aware) ───────────────────────────────────
 
   private fun emit(text: String) {

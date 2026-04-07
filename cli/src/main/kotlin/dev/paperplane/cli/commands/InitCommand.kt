@@ -33,82 +33,81 @@ class InitCommand : CliktCommand(name = "init") {
           buildFileKts.exists() -> buildFileKts
           buildFileGroovy.exists() -> buildFileGroovy
           else -> {
-            TerminalUI.beginBlock()
-            TerminalUI.error("No build.gradle or build.gradle.kts found in current directory")
-            TerminalUI.endBlock()
+            TerminalUI.block {
+              error("No build.gradle or build.gradle.kts found in current directory")
+            }
             return
           }
         }
 
     val isKts = buildFile.name.endsWith(".kts")
 
-    TerminalUI.beginBlock()
-    TerminalUI.status("Found ${buildFile.name}")
+    TerminalUI.block {
+      status("Found ${buildFile.name}")
 
-    val buildContent = buildFile.readText()
-    if (buildContent.contains("dev.paperplane")) {
-      TerminalUI.status("PaperPlane plugin already applied")
-    } else {
-      val pluginLine =
-          if (isKts) {
-            """    id("dev.paperplane") version "$version""""
-          } else {
-            """    id 'dev.paperplane' version '$version'"""
+      val buildContent = buildFile.readText()
+      if (buildContent.contains("dev.paperplane")) {
+        status("PaperPlane plugin already applied")
+      } else {
+        val pluginLine =
+            if (isKts) {
+              """    id("dev.paperplane") version "$version""""
+            } else {
+              """    id 'dev.paperplane' version '$version'"""
+            }
+
+        val updated =
+            if (buildContent.contains("plugins {")) {
+              buildContent.replaceFirst("plugins {", "plugins {\n$pluginLine")
+            } else {
+              "plugins {\n$pluginLine\n}\n\n$buildContent"
+            }
+        buildFile.writeText(updated)
+        fileCreated("Added PaperPlane plugin to ${buildFile.name}")
+      }
+
+      val settingsKts = File(projectDir, "settings.gradle.kts")
+      val settingsGroovy = File(projectDir, "settings.gradle")
+      val settingsFile =
+          when {
+            settingsKts.exists() -> settingsKts
+            settingsGroovy.exists() -> settingsGroovy
+            else -> null
           }
 
-      val updated =
-          if (buildContent.contains("plugins {")) {
-            buildContent.replaceFirst("plugins {", "plugins {\n$pluginLine")
-          } else {
-            "plugins {\n$pluginLine\n}\n\n$buildContent"
-          }
-      buildFile.writeText(updated)
-      TerminalUI.fileCreated("Added PaperPlane plugin to ${buildFile.name}")
-    }
-
-    val settingsKts = File(projectDir, "settings.gradle.kts")
-    val settingsGroovy = File(projectDir, "settings.gradle")
-    val settingsFile =
-        when {
-          settingsKts.exists() -> settingsKts
-          settingsGroovy.exists() -> settingsGroovy
-          else -> null
+      if (settingsFile != null && ProjectTemplates.gradlePluginInMavenLocal()) {
+        val settingsContent = settingsFile.readText()
+        if (!settingsContent.contains("mavenLocal")) {
+          settingsFile.writeText(ProjectTemplates.PLUGIN_MANAGEMENT_BLOCK + settingsContent)
+          fileCreated("Added mavenLocal() to ${settingsFile.name}")
         }
+      }
 
-    if (settingsFile != null && ProjectTemplates.gradlePluginInMavenLocal()) {
-      val settingsContent = settingsFile.readText()
-      if (!settingsContent.contains("mavenLocal")) {
-        settingsFile.writeText(ProjectTemplates.PLUGIN_MANAGEMENT_BLOCK + settingsContent)
-        TerminalUI.fileCreated("Added mavenLocal() to ${settingsFile.name}")
+      val match = PAPER_VERSION_PATTERN.find(buildContent)
+      val detectedVersion = match?.groupValues?.get(1) ?: PaperVersionResolver().resolveLatest()
+
+      val configFile = File(projectDir, "paperplane.yml")
+      if (!configFile.exists()) {
+        configFile.writeText(ProjectTemplates.paperplaneYml(detectedVersion, "hot-reload", "auto"))
+        fileCreated("paperplane.yml")
+      } else {
+        status("paperplane.yml already exists")
+      }
+
+      File(projectDir, ".paperplane").mkdirs()
+      val gitignore = File(projectDir, ".gitignore")
+      if (gitignore.exists()) {
+        val gitignoreContent = gitignore.readText()
+        if (!gitignoreContent.contains(".paperplane")) {
+          gitignore.appendText("\n# PaperPlane\n.paperplane/\n")
+          fileCreated("Added .paperplane/ to .gitignore")
+        }
       }
     }
 
-    val match = PAPER_VERSION_PATTERN.find(buildContent)
-    val detectedVersion = match?.groupValues?.get(1) ?: PaperVersionResolver().resolveLatest()
-
-    val configFile = File(projectDir, "paperplane.yml")
-    if (!configFile.exists()) {
-      configFile.writeText(ProjectTemplates.paperplaneYml(detectedVersion, "hot-reload", "auto"))
-      TerminalUI.fileCreated("paperplane.yml")
-    } else {
-      TerminalUI.status("paperplane.yml already exists")
+    TerminalUI.block {
+      success("PaperPlane setup complete")
+      status("Run 'ppl dev' to start developing!")
     }
-
-    File(projectDir, ".paperplane").mkdirs()
-    val gitignore = File(projectDir, ".gitignore")
-    if (gitignore.exists()) {
-      val content = gitignore.readText()
-      if (!content.contains(".paperplane")) {
-        gitignore.appendText("\n# PaperPlane\n.paperplane/\n")
-        TerminalUI.fileCreated("Added .paperplane/ to .gitignore")
-      }
-    }
-
-    TerminalUI.endBlock()
-
-    TerminalUI.beginBlock()
-    TerminalUI.success("PaperPlane setup complete")
-    TerminalUI.status("Run 'ppl dev' to start developing!")
-    TerminalUI.endBlock()
   }
 }
