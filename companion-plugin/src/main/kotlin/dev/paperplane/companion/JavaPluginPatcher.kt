@@ -136,6 +136,14 @@ internal class JavaPluginTransformer : ClassFileTransformer {
           override fun getCommonSuperClass(type1: String, type2: String): String {
             // Default implementation uses Class.forName() which fails across classloader
             // boundaries. Use the classloader that loaded JavaPlugin to resolve server types.
+            //
+            // Defensive: the current rewritten <init>()V body has no reference-type merge points
+            // that exercise this path, so removing it would not break today's tests. But the
+            // moment anyone adds a try/catch or a second branch storing a different reference
+            // type in the same local, ASM's frame computation will call getCommonSuperClass on
+            // a Paper-internal type the agent's loader can't see, and the transformer will
+            // crash before producing bytes. That is exactly the failure f374fce shipped to fix.
+            // Keeping the override avoids re-walking that ground.
             val cl =
                 classBeingRedefined?.classLoader ?: return super.getCommonSuperClass(type1, type2)
             return try {
