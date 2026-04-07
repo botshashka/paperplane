@@ -9,6 +9,7 @@ import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import dev.paperplane.cli.Versions
 import dev.paperplane.cli.server.PaperVersionResolver
+import dev.paperplane.cli.ui.EXIT_CANCELLED
 import dev.paperplane.cli.ui.InteractivePrompts
 import dev.paperplane.cli.ui.PromptCancelledException
 import dev.paperplane.cli.ui.TerminalUI
@@ -19,6 +20,7 @@ import java.io.File
 class CreateCommand : CliktCommand(name = "create") {
   companion object {
     private const val WRAPPER_TIMEOUT_SECONDS = 60L
+    private const val PAPER_VERSIONS_TO_SHOW = 5
 
     private val CREATING_MESSAGES =
         listOf(
@@ -73,7 +75,7 @@ class CreateCommand : CliktCommand(name = "create") {
     } catch (_: PromptCancelledException) {
       rollbackScaffold()
       TerminalUI.cancelled()
-      throw ProgramResult(130)
+      throw ProgramResult(EXIT_CANCELLED)
     } finally {
       InteractivePrompts.endInteractiveView()
       TerminalUI.endView()
@@ -158,7 +160,9 @@ class CreateCommand : CliktCommand(name = "create") {
     }
 
     val versions =
-        TerminalUI.spin("Resolving Paper versions...") { PaperVersionResolver().resolveRecent(5) }
+        TerminalUI.spin("Resolving Paper versions...") {
+          PaperVersionResolver().resolveRecent(PAPER_VERSIONS_TO_SHOW)
+        }
     val versionLabels = versions.mapIndexed { i, v ->
       if (i == versions.lastIndex) "$v (latest)" else v
     }

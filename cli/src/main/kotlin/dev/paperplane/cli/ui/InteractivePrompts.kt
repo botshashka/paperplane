@@ -14,6 +14,18 @@ import org.jline.utils.NonBlockingReader
  */
 object InteractivePrompts {
   private const val BOTTOM_PADDING = 1
+  private const val ARROW_KEY_PEEK_TIMEOUT_MS = 50L
+
+  /** ASCII control codes consumed by the raw-mode keystroke loop. */
+  private object AsciiKeys {
+    const val CTRL_C = 3
+    const val BACKSPACE = 8
+    const val LF = 10
+    const val CR = 13
+    const val ESC = 27
+    const val FIRST_PRINTABLE = 32
+    const val DEL = 127
+  }
 
   private val isTty = System.console() != null
 
@@ -158,16 +170,16 @@ object InteractivePrompts {
           println()
           throw PromptCancelledException()
         }
-        3 -> { // Ctrl+C
+        AsciiKeys.CTRL_C -> {
           println()
           throw PromptCancelledException()
         }
-        27 -> { // ESC — abort
+        AsciiKeys.ESC -> { // abort
           println()
           throw PromptCancelledException()
         }
-        13,
-        10 -> { // Enter
+        AsciiKeys.CR,
+        AsciiKeys.LF -> { // Enter
           val result = if (usingDefault && input.isEmpty()) default ?: "" else input.toString()
           if (result.isEmpty() && default == null) {
             // Re-render input line; caller re-enters via outer loop
@@ -177,8 +189,8 @@ object InteractivePrompts {
           }
           return result
         }
-        127,
-        8 -> { // Backspace
+        AsciiKeys.DEL,
+        AsciiKeys.BACKSPACE -> {
           if (usingDefault) {
             input.clear()
             usingDefault = false
@@ -195,7 +207,7 @@ object InteractivePrompts {
           System.out.flush()
         }
         else -> {
-          if (b >= 32 && !Character.isISOControl(b)) {
+          if (b >= AsciiKeys.FIRST_PRINTABLE && !Character.isISOControl(b)) {
             if (usingDefault) {
               input.clear()
               usingDefault = false
@@ -271,16 +283,16 @@ object InteractivePrompts {
               println()
               throw PromptCancelledException()
             }
-            3 -> { // Ctrl+C
+            AsciiKeys.CTRL_C -> {
               print("\u001b[?25h")
               println()
               throw PromptCancelledException()
             }
-            13,
-            10 -> break@loop // Enter
-            27 -> { // Escape or escape sequence
+            AsciiKeys.CR,
+            AsciiKeys.LF -> break@loop // Enter
+            AsciiKeys.ESC -> { // Escape or escape sequence
               // Arrow keys send ESC [ A/B; peek briefly for the follow-up bytes.
-              val next = reader.peek(50)
+              val next = reader.peek(ARROW_KEY_PEEK_TIMEOUT_MS)
               if (next >= 0 && reader.read() == '['.code) {
                 when (reader.read()) {
                   'A'.code -> selected = (selected - 1 + options.size) % options.size

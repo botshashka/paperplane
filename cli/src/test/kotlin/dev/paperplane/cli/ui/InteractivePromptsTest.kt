@@ -45,7 +45,9 @@ class InteractivePromptsTest {
     override fun readBuffered(b: CharArray?, off: Int, len: Int, timeout: Long): Int =
         throw UnsupportedOperationException("not used by readPromptLine")
 
-    override fun close() {}
+    override fun close() {
+      // no-op — fake has no resources
+    }
   }
 
   // ── Plain ASCII input + Enter ──────────────────────────────────────

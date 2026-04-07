@@ -15,6 +15,7 @@ import javax.xml.parsers.DocumentBuilderFactory
 class TestCommand : CliktCommand(name = "test") {
   companion object {
     private const val WATCH_POLL_INTERVAL_MS = 1000L
+    private const val MILLIS_PER_SECOND = 1000.0
   }
 
   private val watch by option("--watch", "-w", help = "Re-run tests on file changes").flag()
@@ -127,10 +128,10 @@ class TestCommand : CliktCommand(name = "test") {
             val failureMessage =
                 if (verbose) rawMessage else rawMessage?.lines()?.firstOrNull { it.isNotBlank() }
 
-            testCases.add(TestCaseResult(name, time * 1000, failureMessage))
+            testCases.add(TestCaseResult(name, time * MILLIS_PER_SECOND, failureMessage))
           }
 
-          TestSuiteResult(suiteName, suiteTime * 1000, testCases)
+          TestSuiteResult(suiteName, suiteTime * MILLIS_PER_SECOND, testCases)
         }
         ?.sortedBy { it.name } ?: emptyList()
   }

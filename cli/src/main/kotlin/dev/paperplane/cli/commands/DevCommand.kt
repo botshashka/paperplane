@@ -12,6 +12,7 @@ import dev.paperplane.cli.devserver.HotReloadMode
 import dev.paperplane.cli.devserver.RestartMode
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.server.PaperDownloader
+import dev.paperplane.cli.ui.EXIT_CANCELLED
 import dev.paperplane.cli.ui.InteractivePrompts
 import dev.paperplane.cli.ui.PromptCancelledException
 import dev.paperplane.cli.ui.TerminalUI
@@ -28,7 +29,7 @@ class DevCommand : CliktCommand(name = "dev") {
       runInternal()
     } catch (_: PromptCancelledException) {
       TerminalUI.cancelled()
-      throw ProgramResult(130)
+      throw ProgramResult(EXIT_CANCELLED)
     } finally {
       InteractivePrompts.endInteractiveView()
       TerminalUI.endView()

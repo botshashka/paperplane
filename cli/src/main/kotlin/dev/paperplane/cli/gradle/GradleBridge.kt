@@ -31,6 +31,7 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
   companion object {
     private const val MAX_DISPLAYED_ERRORS = 5
     private const val MAX_FALLBACK_LINES = 10
+    private const val MAX_DISPLAYED_ERROR_LINES = 30
     internal val BUILD_ERROR_PATTERN = Regex("""(.+\.(?:java|kt)):(\d+): error: (.+)""")
 
     /**
@@ -114,7 +115,7 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
                 !it.startsWith("FAILURE") && !it.contains("error:") && !it.contains("Exception")
               }
               .filter { it.isNotBlank() }
-              .take(30)
+              .take(MAX_DISPLAYED_ERROR_LINES)
       FormatResult(success = false, rootMessage = rootMsg, outputLines = errorLines)
     }
   }
