@@ -126,38 +126,41 @@ class CreateCommand : CliktCommand(name = "create") {
 
   private fun deriveAuthor(): String = System.getProperty("user.name") ?: "author"
 
-  private fun runInteractive() {
-    TerminalUI.header(Versions.paperplaneVersion())
-    TerminalUI.subtitle("Let's make a new Paper plugin")
-
-    var displayName: String
-    var slug: String
-    var projectDir: File
+  private fun promptProjectNameAndDir(): Triple<String, String, File> {
     while (true) {
-      displayName = InteractivePrompts.prompt("Plugin name", "My Plugin")
-      slug = deriveSlug(displayName)
+      val displayName = InteractivePrompts.prompt("Plugin name", "My Plugin")
+      val slug = deriveSlug(displayName)
       if (slug.isEmpty()) {
         TerminalUI.block { error("Could not derive a project name from '$displayName'") }
         continue
       }
-      projectDir = File(slug)
+      val projectDir = File(slug)
       if (projectDir.exists()) {
         TerminalUI.block { error("Directory '$slug' already exists") }
         continue
       }
-      break
+      return Triple(displayName, slug, projectDir)
     }
+  }
 
-    val resolvedAuthor = InteractivePrompts.prompt("Author", deriveAuthor())
-    val className = deriveClassName(slug)
-    var resolvedPackage: String
+  private fun promptPackageName(resolvedAuthor: String, slug: String): String {
     while (true) {
-      resolvedPackage = InteractivePrompts.prompt("Package", derivePackage(resolvedAuthor, slug))
-      if (isValidPackage(resolvedPackage)) break
+      val pkg = InteractivePrompts.prompt("Package", derivePackage(resolvedAuthor, slug))
+      if (isValidPackage(pkg)) return pkg
       TerminalUI.block {
         error("Invalid package name (use lowercase segments like com.example.myplugin)")
       }
     }
+  }
+
+  private fun runInteractive() {
+    TerminalUI.header(Versions.paperplaneVersion())
+    TerminalUI.subtitle("Let's make a new Paper plugin")
+
+    val (displayName, slug, projectDir) = promptProjectNameAndDir()
+    val resolvedAuthor = InteractivePrompts.prompt("Author", deriveAuthor())
+    val className = deriveClassName(slug)
+    val resolvedPackage = promptPackageName(resolvedAuthor, slug)
 
     val versions =
         TerminalUI.spin("Resolving Paper versions...") {
@@ -318,15 +321,16 @@ class CreateCommand : CliktCommand(name = "create") {
   }
 
   private fun doScaffold(c: ProjectConfig): Boolean {
-    val packagePath = c.packageName.replace(".", "/")
-    val srcMain = if (c.useKotlin) "src/main/kotlin/$packagePath" else "src/main/java/$packagePath"
-    val srcTest = if (c.useKotlin) "src/test/kotlin/$packagePath" else "src/test/java/$packagePath"
-    val srcResources = "src/main/resources"
-
     // writeTemplate creates parent directories for each file, so only the standalone .paperplane
     // directory (which has no files written into it here) needs an explicit mkdirs.
     File(c.projectDir, ".paperplane").mkdirs()
+    writeBuildFiles(c)
+    writeSourceFiles(c)
+    writeConfigFiles(c)
+    return runGradleWrapper(c.projectDir)
+  }
 
+  private fun writeBuildFiles(c: ProjectConfig) {
     ProjectTemplates.writeTemplate(
         c.projectDir,
         "build.gradle.kts",
@@ -343,7 +347,12 @@ class CreateCommand : CliktCommand(name = "create") {
         "settings.gradle.kts",
         ProjectTemplates.settingsGradle(c.projectName),
     )
+  }
 
+  private fun writeSourceFiles(c: ProjectConfig) {
+    val packagePath = c.packageName.replace(".", "/")
+    val srcMain = if (c.useKotlin) "src/main/kotlin/$packagePath" else "src/main/java/$packagePath"
+    val srcTest = if (c.useKotlin) "src/test/kotlin/$packagePath" else "src/test/java/$packagePath"
     if (c.useKotlin) {
       ProjectTemplates.writeTemplate(
           c.projectDir,
@@ -367,10 +376,12 @@ class CreateCommand : CliktCommand(name = "create") {
           ProjectTemplates.testPluginJava(c.packageName, c.className),
       )
     }
+  }
 
+  private fun writeConfigFiles(c: ProjectConfig) {
     ProjectTemplates.writeTemplate(
         c.projectDir,
-        "$srcResources/config.yml",
+        "src/main/resources/config.yml",
         "# ${c.displayName} configuration\n",
     )
     ProjectTemplates.writeTemplate(
@@ -394,10 +405,12 @@ class CreateCommand : CliktCommand(name = "create") {
         ".vscode/settings.json",
         ProjectTemplates.vscodeSettings(),
     )
+  }
 
+  private fun runGradleWrapper(projectDir: File): Boolean {
     val wp =
         ProcessBuilder("gradle", "wrapper", "--gradle-version", Versions.GRADLE_WRAPPER)
-            .directory(c.projectDir)
+            .directory(projectDir)
             .redirectErrorStream(true)
             .start()
     wrapperProcess = wp

@@ -47,25 +47,39 @@ internal object ProjectTemplates {
       paperVersion: String,
       isKotlin: Boolean,
   ): String {
-    val plugins =
-        buildList {
-              add("java")
-              if (isKotlin) {
-                add("kotlin(\"jvm\") version \"${Versions.KOTLIN}\"")
-                add("id(\"com.gradleup.shadow\") version \"${Versions.SHADOW}\"")
-                add("id(\"com.diffplug.spotless\") version \"${Versions.SPOTLESS}\"")
-              }
-              add("id(\"dev.paperplane\") version \"${Versions.paperplaneVersion()}\"")
+    val plugins = buildPluginsBlock(isKotlin)
+    val kotlinBlock = buildKotlinToolchainBlock(isKotlin)
+    val spotlessBlock = buildSpotlessBlock(isKotlin)
+    val deps = buildDependenciesBlock(paperVersion, isKotlin)
+    return renderBuildGradleTemplate(
+        className,
+        packageName,
+        author,
+        plugins,
+        kotlinBlock,
+        spotlessBlock,
+        deps,
+    )
+  }
+
+  private fun buildPluginsBlock(isKotlin: Boolean): String =
+      buildList {
+            add("java")
+            if (isKotlin) {
+              add("kotlin(\"jvm\") version \"${Versions.KOTLIN}\"")
+              add("id(\"com.gradleup.shadow\") version \"${Versions.SHADOW}\"")
+              add("id(\"com.diffplug.spotless\") version \"${Versions.SPOTLESS}\"")
             }
-            .joinToString("\n") { "    $it" }
+            add("id(\"dev.paperplane\") version \"${Versions.paperplaneVersion()}\"")
+          }
+          .joinToString("\n") { "    $it" }
 
-    val kotlinBlock =
-        if (isKotlin) {
-          "\n\n        kotlin {\n            jvmToolchain(21)\n        }"
-        } else ""
+  private fun buildKotlinToolchainBlock(isKotlin: Boolean): String =
+      if (isKotlin) "\n\n        kotlin {\n            jvmToolchain(21)\n        }" else ""
 
-    val spotlessBlock =
-        if (isKotlin) {
+  private fun buildSpotlessBlock(isKotlin: Boolean): String =
+      if (!isKotlin) ""
+      else
           buildString {
             append("\n\n        spotless {")
             append("\n            kotlin {")
@@ -78,27 +92,34 @@ internal object ProjectTemplates {
             append("\n            }")
             append("\n        }")
           }
-        } else ""
 
-    val deps =
-        buildList {
-              if (isKotlin) add("    implementation(kotlin(\"stdlib\"))")
-              add("    compileOnly(\"io.papermc.paper:paper-api:$paperVersion-R0.1-SNAPSHOT\")")
-              add("")
-              add(
-                  "    testImplementation(\"io.papermc.paper:paper-api:$paperVersion-R0.1-SNAPSHOT\")"
-              )
-              add(
-                  "    testImplementation(\"org.mockbukkit.mockbukkit:${Versions.mockbukkitArtifact(paperVersion)}:${Versions.MOCKBUKKIT}\")"
-              )
-              add("    testImplementation(\"org.junit.jupiter:junit-jupiter:${Versions.JUNIT}\")")
-              add(
-                  "    testRuntimeOnly(\"org.junit.platform:junit-platform-launcher:${Versions.JUNIT}\")"
-              )
-              if (isKotlin) add("    testImplementation(\"org.jetbrains.kotlin:kotlin-test\")")
-            }
-            .joinToString("\n")
+  private fun buildDependenciesBlock(paperVersion: String, isKotlin: Boolean): String {
+    val mockbukkitCoord =
+        "org.mockbukkit.mockbukkit:${Versions.mockbukkitArtifact(paperVersion)}:${Versions.MOCKBUKKIT}"
+    return buildList {
+          if (isKotlin) add("    implementation(kotlin(\"stdlib\"))")
+          add("    compileOnly(\"io.papermc.paper:paper-api:$paperVersion-R0.1-SNAPSHOT\")")
+          add("")
+          add("    testImplementation(\"io.papermc.paper:paper-api:$paperVersion-R0.1-SNAPSHOT\")")
+          add("    testImplementation(\"$mockbukkitCoord\")")
+          add("    testImplementation(\"org.junit.jupiter:junit-jupiter:${Versions.JUNIT}\")")
+          add(
+              "    testRuntimeOnly(\"org.junit.platform:junit-platform-launcher:${Versions.JUNIT}\")"
+          )
+          if (isKotlin) add("    testImplementation(\"org.jetbrains.kotlin:kotlin-test\")")
+        }
+        .joinToString("\n")
+  }
 
+  private fun renderBuildGradleTemplate(
+      className: String,
+      packageName: String,
+      author: String,
+      plugins: String,
+      kotlinBlock: String,
+      spotlessBlock: String,
+      deps: String,
+  ): String {
     return """
         plugins {
         $plugins

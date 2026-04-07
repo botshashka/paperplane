@@ -256,58 +256,67 @@ object InteractivePrompts {
       default: Int = 0,
   ): Int {
     if (!isTty) return selectFallback(label, options, default)
+    renderSelectHeader(label, note)
+    print("\u001b[?25l") // hide cursor
+    renderSelectOptions(options, default)
+    print("\n".repeat(BOTTOM_PADDING) + "\u001b[${BOTTOM_PADDING}A")
+    System.out.flush()
+    val selected =
+        try {
+          runSelectInputLoop(options, default)
+        } finally {
+          print("\u001b[?25h")
+          System.out.flush()
+        }
+    renderSelectCommitted(label, options, selected)
+    return selected
+  }
 
+  private fun renderSelectHeader(label: String, note: String?) {
     val noteText = if (note != null) "  ${TerminalUI.dim(note)}" else ""
     println()
     println(
         "  ${TerminalUI.cyan("›")}  ${TerminalUI.bold(TerminalUI.brightWhite(label))}:$noteText"
     )
+  }
 
-    var selected = default
-
-    print("\u001b[?25l") // hide cursor
-    renderSelectOptions(options, selected)
-    print("\n".repeat(BOTTOM_PADDING) + "\u001b[${BOTTOM_PADDING}A")
-    System.out.flush()
-
-    try {
-      withRawTty { reader ->
-        loop@ while (true) {
-          val b = reader.read()
-          when (b) {
-            -1,
-            AsciiKeys.CTRL_C -> {
+  private fun runSelectInputLoop(options: List<SelectOption>, initial: Int): Int {
+    var selected = initial
+    withRawTty { reader ->
+      loop@ while (true) {
+        when (reader.read()) {
+          -1,
+          AsciiKeys.CTRL_C -> {
+            print("\u001b[?25h")
+            println()
+            cancelPrompt()
+          }
+          AsciiKeys.CR,
+          AsciiKeys.LF -> break@loop // Enter
+          AsciiKeys.ESC -> { // Escape or escape sequence
+            // Arrow keys send ESC [ A/B; peek briefly for the follow-up bytes.
+            val next = reader.peek(ARROW_KEY_PEEK_TIMEOUT_MS)
+            if (next >= 0 && reader.read() == '['.code) {
+              when (reader.read()) {
+                'A'.code -> selected = (selected - 1 + options.size) % options.size
+                'B'.code -> selected = (selected + 1) % options.size
+              }
+              print("\u001b[${options.size}A")
+              renderSelectOptions(options, selected)
+              System.out.flush()
+            } else {
               print("\u001b[?25h")
               println()
               cancelPrompt()
             }
-            AsciiKeys.CR,
-            AsciiKeys.LF -> break@loop // Enter
-            AsciiKeys.ESC -> { // Escape or escape sequence
-              // Arrow keys send ESC [ A/B; peek briefly for the follow-up bytes.
-              val next = reader.peek(ARROW_KEY_PEEK_TIMEOUT_MS)
-              if (next >= 0 && reader.read() == '['.code) {
-                when (reader.read()) {
-                  'A'.code -> selected = (selected - 1 + options.size) % options.size
-                  'B'.code -> selected = (selected + 1) % options.size
-                }
-                print("\u001b[${options.size}A")
-                renderSelectOptions(options, selected)
-                System.out.flush()
-              } else {
-                print("\u001b[?25h")
-                println()
-                cancelPrompt()
-              }
-            }
           }
         }
       }
-    } finally {
-      print("\u001b[?25h")
-      System.out.flush()
     }
+    return selected
+  }
 
+  private fun renderSelectCommitted(label: String, options: List<SelectOption>, selected: Int) {
     val totalLines = options.size + 1
     print("\u001b[${totalLines}A")
     for (i in 0 until totalLines) {
@@ -326,8 +335,6 @@ object InteractivePrompts {
     }
     if (excess > 0) print("\u001b[${excess}A")
     System.out.flush()
-
-    return selected
   }
 
   /**
