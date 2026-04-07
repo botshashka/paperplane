@@ -75,14 +75,16 @@ class CreateCommand : CliktCommand(name = "create") {
       displayName.trim().lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')
 
   private fun deriveClassName(slug: String): String =
-      slug.split("-").filter { it.isNotEmpty() }.joinToString("") {
-        it.replaceFirstChar { c -> c.uppercase() }
-      }
+      slug
+          .split("-")
+          .filter { it.isNotEmpty() }
+          .joinToString("") { it.replaceFirstChar { c -> c.uppercase() } }
 
   private fun deriveDisplayName(slug: String): String =
-      slug.split("-").filter { it.isNotEmpty() }.joinToString(" ") {
-        it.replaceFirstChar { c -> c.uppercase() }
-      }
+      slug
+          .split("-")
+          .filter { it.isNotEmpty() }
+          .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
 
   private fun derivePackage(author: String, slug: String): String =
       "me.${author.lowercase().replace(Regex("[^a-z0-9]"), "")}.${slug.replace("-", "")}"
@@ -177,7 +179,8 @@ class CreateCommand : CliktCommand(name = "create") {
             useKotlin = isKotlin,
             devMode = devMode,
             jbr = jbr,
-        ))
+        )
+    )
   }
 
   private fun runNonInteractive() {
@@ -217,7 +220,8 @@ class CreateCommand : CliktCommand(name = "create") {
             useKotlin = useKotlin,
             devMode = "hot-reload",
             jbr = "auto",
-        ))
+        )
+    )
   }
 
   /** Detects JBR availability and prompts if needed. Returns the jbr config value. */
@@ -250,8 +254,7 @@ class CreateCommand : CliktCommand(name = "create") {
   }
 
   private fun createProject(config: ProjectConfig) {
-    val wrapperOk =
-        TerminalUI.spin(CREATING_MESSAGES.random()) { scaffoldFiles(config) }
+    val wrapperOk = TerminalUI.spin(CREATING_MESSAGES.random()) { scaffoldFiles(config) }
 
     TerminalUI.beginBlock()
     TerminalUI.success("${SUCCESS_MESSAGES.random()} — ${config.projectName}/")
@@ -261,7 +264,10 @@ class CreateCommand : CliktCommand(name = "create") {
     TerminalUI.endBlock()
 
     TerminalUI.beginBlock()
-    TerminalUI.info("cd", "${config.projectName}  ${TerminalUI.dim("switch to your project folder")}")
+    TerminalUI.info(
+        "cd",
+        "${config.projectName}  ${TerminalUI.dim("switch to your project folder")}",
+    )
     TerminalUI.info("ppl", "dev  ${TerminalUI.dim("launch the dev server")}")
     TerminalUI.endBlock()
   }
@@ -269,10 +275,8 @@ class CreateCommand : CliktCommand(name = "create") {
   /** Writes all template files and runs `gradle wrapper`. Returns true if wrapper succeeded. */
   private fun scaffoldFiles(c: ProjectConfig): Boolean {
     val packagePath = c.packageName.replace(".", "/")
-    val srcMain =
-        if (c.useKotlin) "src/main/kotlin/$packagePath" else "src/main/java/$packagePath"
-    val srcTest =
-        if (c.useKotlin) "src/test/kotlin/$packagePath" else "src/test/java/$packagePath"
+    val srcMain = if (c.useKotlin) "src/main/kotlin/$packagePath" else "src/main/java/$packagePath"
+    val srcTest = if (c.useKotlin) "src/test/kotlin/$packagePath" else "src/test/java/$packagePath"
     val srcResources = "src/main/resources"
 
     File(c.projectDir, srcMain).mkdirs()
@@ -284,10 +288,18 @@ class CreateCommand : CliktCommand(name = "create") {
         c.projectDir,
         "build.gradle.kts",
         ProjectTemplates.buildGradle(
-            c.className, c.packageName, c.author, c.paperVersion, c.useKotlin),
+            c.className,
+            c.packageName,
+            c.author,
+            c.paperVersion,
+            c.useKotlin,
+        ),
     )
     ProjectTemplates.writeTemplate(
-        c.projectDir, "settings.gradle.kts", ProjectTemplates.settingsGradle(c.projectName))
+        c.projectDir,
+        "settings.gradle.kts",
+        ProjectTemplates.settingsGradle(c.projectName),
+    )
 
     if (c.useKotlin) {
       ProjectTemplates.writeTemplate(
@@ -319,13 +331,26 @@ class CreateCommand : CliktCommand(name = "create") {
         "# ${c.displayName} configuration\n",
     )
     ProjectTemplates.writeTemplate(
-        c.projectDir, "paperplane.yml", ProjectTemplates.paperplaneYml(c.paperVersion, c.devMode, c.jbr))
+        c.projectDir,
+        "paperplane.yml",
+        ProjectTemplates.paperplaneYml(c.paperVersion, c.devMode, c.jbr),
+    )
     ProjectTemplates.writeTemplate(c.projectDir, ".gitignore", ProjectTemplates.gitignore())
-    ProjectTemplates.writeTemplate(c.projectDir, "README.md", ProjectTemplates.readme(c.displayName))
     ProjectTemplates.writeTemplate(
-        c.projectDir, ".vscode/extensions.json", ProjectTemplates.vscodeExtensions())
+        c.projectDir,
+        "README.md",
+        ProjectTemplates.readme(c.displayName),
+    )
     ProjectTemplates.writeTemplate(
-        c.projectDir, ".vscode/settings.json", ProjectTemplates.vscodeSettings())
+        c.projectDir,
+        ".vscode/extensions.json",
+        ProjectTemplates.vscodeExtensions(),
+    )
+    ProjectTemplates.writeTemplate(
+        c.projectDir,
+        ".vscode/settings.json",
+        ProjectTemplates.vscodeSettings(),
+    )
 
     val wrapperProcess =
         ProcessBuilder("gradle", "wrapper", "--gradle-version", Versions.GRADLE_WRAPPER)

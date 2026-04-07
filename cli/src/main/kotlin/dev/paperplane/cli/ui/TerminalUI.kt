@@ -231,9 +231,9 @@ object TerminalUI {
   }
 
   /**
-   * Marks the end of a "view" (a full command's output). Emits one trailing blank line so the
-   * shell prompt has breathing room. Idempotent — safe to call multiple times within a single
-   * command. Reset by [header]. Every command should call this at the end of its `run()`.
+   * Marks the end of a "view" (a full command's output). Emits one trailing blank line so the shell
+   * prompt has breathing room. Idempotent — safe to call multiple times within a single command.
+   * Reset by [header]. Every command should call this at the end of its `run()`.
    */
   fun endView() {
     lock.withLock {

@@ -102,12 +102,7 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
     val stdout = ByteArrayOutputStream()
     val stderr = ByteArrayOutputStream()
     return try {
-      connect()
-          .newBuild()
-          .forTasks(task)
-          .setStandardOutput(stdout)
-          .setStandardError(stderr)
-          .run()
+      connect().newBuild().forTasks(task).setStandardOutput(stdout).setStandardError(stderr).run()
       FormatResult(success = true)
     } catch (e: GradleConnectionException) {
       var root: Throwable = e

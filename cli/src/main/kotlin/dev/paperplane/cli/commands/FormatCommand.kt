@@ -35,7 +35,8 @@ class FormatCommand : CliktCommand(name = "format") {
       } else if (result.taskMissing) {
         TerminalUI.error("No formatter configured for this project")
         TerminalUI.status(
-            "ppl format runs Spotless — add the Spotless plugin to build.gradle.kts to enable it")
+            "ppl format runs Spotless — add the Spotless plugin to build.gradle.kts to enable it"
+        )
         TerminalUI.status("See https://github.com/diffplug/spotless for setup")
       } else {
         val summary = result.rootMessage ?: "Format failed"

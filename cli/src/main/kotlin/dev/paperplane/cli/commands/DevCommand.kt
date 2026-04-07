@@ -68,8 +68,8 @@ class DevCommand : CliktCommand(name = "dev") {
   }
 
   /**
-   * Ensures the Minecraft EULA has been accepted for this server dir. Returns true if accepted
-   * (or already accepted), false if the user declined. Persists acceptance as `eula.txt`.
+   * Ensures the Minecraft EULA has been accepted for this server dir. Returns true if accepted (or
+   * already accepted), false if the user declined. Persists acceptance as `eula.txt`.
    */
   private fun ensureEulaAccepted(serverDir: File): Boolean {
     val eulaFile = File(serverDir, "eula.txt")

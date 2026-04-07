@@ -107,10 +107,10 @@ internal object ProjectTemplates {
   }
 
   /**
-   * Returns true if the dev.paperplane gradle plugin is available in the local Maven repo
-   * for the current paperplane version. When true, generated projects need `mavenLocal()` in
-   * their pluginManagement repositories to resolve it. Released paperplane installs (where
-   * the plugin lives on the Gradle Plugin Portal) won't have it locally → no mavenLocal needed.
+   * Returns true if the dev.paperplane gradle plugin is available in the local Maven repo for the
+   * current paperplane version. When true, generated projects need `mavenLocal()` in their
+   * pluginManagement repositories to resolve it. Released paperplane installs (where the plugin
+   * lives on the Gradle Plugin Portal) won't have it locally → no mavenLocal needed.
    */
   private fun gradlePluginInMavenLocal(): Boolean {
     val home = System.getProperty("user.home") ?: return false
@@ -126,12 +126,12 @@ internal object ProjectTemplates {
     val pluginMgmt =
         if (gradlePluginInMavenLocal()) {
           """
-            pluginManagement {
-                repositories {
-                    mavenLocal()
-                    gradlePluginPortal()
-                }
-            }
+          pluginManagement {
+              repositories {
+                  mavenLocal()
+                  gradlePluginPortal()
+              }
+          }
 
 
           """
@@ -142,7 +142,8 @@ internal object ProjectTemplates {
         """
         rootProject.name = "$projectName"
     """
-            .trimIndent() + "\n"
+            .trimIndent() +
+        "\n"
   }
 
   fun mainPluginJava(packageName: String, className: String, displayName: String) =
@@ -321,21 +322,21 @@ internal object ProjectTemplates {
 
   fun vscodeExtensions() =
       """
-        {
-          "recommendations": [
-            "vscjava.vscode-java-pack",
-            "fwcd.kotlin"
-          ]
-        }
-    """
+      {
+        "recommendations": [
+          "vscjava.vscode-java-pack",
+          "fwcd.kotlin"
+        ]
+      }
+      """
           .trimIndent() + "\n"
 
   fun vscodeSettings() =
       """
-        {
-          "editor.formatOnSave": true,
-          "java.format.settings.profile": "GoogleStyle"
-        }
-    """
+      {
+        "editor.formatOnSave": true,
+        "java.format.settings.profile": "GoogleStyle"
+      }
+      """
           .trimIndent() + "\n"
 }
