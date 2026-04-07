@@ -2,7 +2,6 @@ package dev.paperplane.companion
 
 import java.lang.instrument.ClassFileTransformer
 import java.lang.instrument.Instrumentation
-import java.lang.instrument.UnmodifiableClassException
 import java.security.ProtectionDomain
 import java.util.logging.Logger
 import org.objectweb.asm.ClassReader
@@ -54,23 +53,32 @@ object JavaPluginPatcher {
       return false
     }
 
+    val transformer = JavaPluginTransformer()
+    inst.addTransformer(transformer, true)
     return try {
-      val transformer = JavaPluginTransformer()
-      inst.addTransformer(transformer, true)
       inst.retransformClasses(org.bukkit.plugin.java.JavaPlugin::class.java)
-      inst.removeTransformer(transformer)
       isPatched = true
       logger.info("JavaPlugin constructor patched for dev-mode class loading")
       true
-    } catch (e: UnmodifiableClassException) {
-      logger.warning("Failed to patch JavaPlugin constructor: ${e.message}")
+    } catch (t: Throwable) {
+      // Catch Throwable: JVMTI wraps verifier failures as InternalError, not VerifyError,
+      // and future failure modes may use yet other types. Walk the cause chain so the real
+      // diagnostic (typically a VerifyError nested in an InternalError) reaches the user.
+      val sb = StringBuilder("Failed to patch JavaPlugin constructor: ")
+      var cur: Throwable? = t
+      var depth = 0
+      while (cur != null && depth < 5) {
+        if (depth > 0) sb.append(" -> ")
+        sb.append(cur.javaClass.name).append(": ").append(cur.message ?: "<no message>")
+        cur = cur.cause
+        depth++
+      }
+      logger.warning(sb.toString())
+      t.stackTrace.take(5).forEach { logger.warning("  at $it") }
       false
-    } catch (e: VerifyError) {
-      logger.warning(
-          "Failed to patch JavaPlugin constructor (bytecode verification failed, " +
-              "likely Java version incompatibility): ${e.message}"
-      )
-      false
+    } finally {
+      // Remove transformer on both success and failure — previously the failure path leaked it.
+      inst.removeTransformer(transformer)
     }
   }
 
