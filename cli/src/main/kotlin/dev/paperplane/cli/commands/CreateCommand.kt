@@ -9,6 +9,7 @@ import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import dev.paperplane.cli.Versions
 import dev.paperplane.cli.server.PaperVersionResolver
+import dev.paperplane.cli.ui.Ansi
 import dev.paperplane.cli.ui.EXIT_CANCELLED
 import dev.paperplane.cli.ui.InteractivePrompts
 import dev.paperplane.cli.ui.PromptCancelledException
@@ -273,8 +274,8 @@ class CreateCommand : CliktCommand(name = "create") {
     }
 
     TerminalUI.block {
-      info("cd", "${config.projectName}  ${TerminalUI.dim("switch to your project folder")}")
-      info("ppl", "dev  ${TerminalUI.dim("launch the dev server")}")
+      info("cd", "${config.projectName}  ${Ansi.dim("switch to your project folder")}")
+      info("ppl", "dev  ${Ansi.dim("launch the dev server")}")
     }
   }
 

@@ -1,5 +1,12 @@
 package dev.paperplane.cli.ui
 
+import dev.paperplane.cli.ui.Ansi.bold
+import dev.paperplane.cli.ui.Ansi.brightWhite
+import dev.paperplane.cli.ui.Ansi.cyan
+import dev.paperplane.cli.ui.Ansi.dim
+import dev.paperplane.cli.ui.Ansi.green
+import dev.paperplane.cli.ui.Ansi.red
+import dev.paperplane.cli.ui.Ansi.yellow
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -8,21 +15,10 @@ object TerminalUI {
   private const val SPINNER_FRAME_INTERVAL_MS = 80L
   private const val SPINNER_THREAD_JOIN_TIMEOUT_MS = 200L
 
-  private val noColor = System.getenv("NO_COLOR") != null
   private val isTty = System.console() != null
-  val useColor: Boolean = !noColor
-
-  // ANSI codes
-  private const val RESET = "\u001b[0m"
-  private const val BOLD = "\u001b[1m"
-  private const val DIM = "\u001b[2m"
-  private const val RED = "\u001b[31m"
-  private const val GREEN = "\u001b[32m"
-  private const val YELLOW = "\u001b[33m"
-  private const val BLUE = "\u001b[34m"
-  private const val CYAN = "\u001b[36m"
-  private const val WHITE = "\u001b[37m"
-  private const val BRIGHT_WHITE = "\u001b[97m"
+  /** Backwards-compatible accessor — delegates to [Ansi.useColor]. */
+  val useColor: Boolean
+    get() = Ansi.useColor
 
   @PublishedApi
   internal enum class BlockType {
@@ -70,24 +66,6 @@ object TerminalUI {
 
   private val spinnerFrames = arrayOf("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
-  // ── Color helpers ──────────────────────────────────────────────────
-
-  internal fun color(code: String, text: String): String = if (noColor) text else "$code$text$RESET"
-
-  internal fun bold(text: String) = color(BOLD, text)
-
-  internal fun dim(text: String) = color(DIM, text)
-
-  internal fun green(text: String) = color(GREEN, text)
-
-  internal fun red(text: String) = color(RED, text)
-
-  internal fun yellow(text: String) = color(YELLOW, text)
-
-  internal fun cyan(text: String) = color(CYAN, text)
-
-  internal fun brightWhite(text: String) = color(BRIGHT_WHITE, text)
-
   // ── Sticky footer internals ────────────────────────────────────────
 
   /** Erases the currently displayed footer from the terminal. Must hold [lock]. */
@@ -115,9 +93,7 @@ object TerminalUI {
     }
     val extra =
         if (spinnerMessage != null) {
-          val frame =
-              if (noColor) spinnerFrames[spinnerFrameIndex]
-              else "$CYAN${spinnerFrames[spinnerFrameIndex]}$RESET"
+          val frame = cyan(spinnerFrames[spinnerFrameIndex])
           val sub = spinnerSubstatus
           val detail = if (sub != null) "  ${dim(sub)}" else ""
           println("  $frame  ${dim(spinnerMessage!!)}$detail")

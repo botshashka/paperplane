@@ -1,5 +1,6 @@
 package dev.paperplane.cli.server
 
+import dev.paperplane.cli.ui.Ansi
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import java.util.UUID
@@ -172,6 +173,6 @@ class VelocityManager(private val proxyDir: File) {
     val match = proxyLineRegex.find(line)
     val prefix = if (match != null) "proxy/${match.destructured.component1()}" else "proxy"
     val message = if (match != null) match.destructured.component2() else line
-    return if (TerminalUI.useColor) "\u001b[2m[$prefix]\u001b[0m $message" else "[$prefix] $message"
+    return if (Ansi.useColor) "\u001b[2m[$prefix]\u001b[0m $message" else "[$prefix] $message"
   }
 }

@@ -134,9 +134,9 @@ object InteractivePrompts {
 
   private fun renderPromptActive(label: String, default: String?) {
     println()
-    println("  ${TerminalUI.cyan("›")}  $label:")
+    println("  ${Ansi.cyan("›")}  $label:")
     val placeholder = default ?: ""
-    print("     ${TerminalUI.dim(placeholder)}")
+    print("     ${Ansi.dim(placeholder)}")
     // Add bottom padding, then move cursor back to input line
     print("\n".repeat(BOTTOM_PADDING) + "\u001b[${BOTTOM_PADDING}A\r\u001b[5C")
     System.out.flush()
@@ -145,7 +145,7 @@ object InteractivePrompts {
   private fun renderPromptCommitted(label: String, result: String) {
     // Collapse to completed state: move up to label line, rewrite label + input
     print("\r\u001b[1A\u001b[2K\r")
-    println("  ${TerminalUI.dim("◇")}  $label:")
+    println("  ${Ansi.dim("◇")}  $label:")
     print("\u001b[2K")
     println("     $result")
     // Clear bottom padding lines
@@ -197,7 +197,7 @@ object InteractivePrompts {
           if (input.isEmpty() && !usingDefault && default != null) {
             // Restore placeholder when input is cleared
             usingDefault = true
-            print("\r\u001b[2K     ${TerminalUI.dim(default)}\r\u001b[5C")
+            print("\r\u001b[2K     ${Ansi.dim(default)}\r\u001b[5C")
           } else {
             print("\r\u001b[2K     ${input}")
           }
@@ -223,7 +223,7 @@ object InteractivePrompts {
   /** Fallback prompt for non-TTY environments. */
   private fun promptFallback(label: String, default: String?): String {
     while (true) {
-      val suffix = if (default != null) " ${TerminalUI.dim("($default)")}" else ""
+      val suffix = if (default != null) " ${Ansi.dim("($default)")}" else ""
       print("  $label$suffix: ")
       System.out.flush()
       val input = readlnOrNull()?.trim()
@@ -273,11 +273,9 @@ object InteractivePrompts {
   }
 
   private fun renderSelectHeader(label: String, note: String?) {
-    val noteText = if (note != null) "  ${TerminalUI.dim(note)}" else ""
+    val noteText = if (note != null) "  ${Ansi.dim(note)}" else ""
     println()
-    println(
-        "  ${TerminalUI.cyan("›")}  ${TerminalUI.bold(TerminalUI.brightWhite(label))}:$noteText"
-    )
+    println("  ${Ansi.cyan("›")}  ${Ansi.bold(Ansi.brightWhite(label))}:$noteText")
   }
 
   private fun runSelectInputLoop(options: List<SelectOption>, initial: Int): Int {
@@ -326,7 +324,7 @@ object InteractivePrompts {
     if (totalLines > 1) print("\u001b[${totalLines - 1}A")
     print("\r")
 
-    println("  ${TerminalUI.dim("◇")}  $label:")
+    println("  ${Ansi.dim("◇")}  $label:")
     println("     ${options[selected].label}")
 
     val excess = totalLines - 2 + BOTTOM_PADDING
@@ -345,10 +343,9 @@ object InteractivePrompts {
     val sb = StringBuilder()
     for ((i, option) in options.withIndex()) {
       sb.append("\u001b[2K\r")
-      val marker = if (i == selected) "${TerminalUI.cyan("›")} " else "  "
-      val descText = option.description?.let { " ${TerminalUI.dim("— $it")}" } ?: ""
-      val text =
-          if (i == selected) TerminalUI.brightWhite(option.label) else TerminalUI.dim(option.label)
+      val marker = if (i == selected) "${Ansi.cyan("›")} " else "  "
+      val descText = option.description?.let { " ${Ansi.dim("— $it")}" } ?: ""
+      val text = if (i == selected) Ansi.brightWhite(option.label) else Ansi.dim(option.label)
       sb.append("    ").append(marker).append(text).append(descText)
       sb.append('\n')
     }
