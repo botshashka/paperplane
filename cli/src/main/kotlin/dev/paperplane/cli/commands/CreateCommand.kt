@@ -9,6 +9,7 @@ import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import dev.paperplane.cli.Versions
 import dev.paperplane.cli.server.PaperVersionResolver
+import dev.paperplane.cli.ui.InteractivePrompts
 import dev.paperplane.cli.ui.PromptCancelledException
 import dev.paperplane.cli.ui.TerminalUI
 import dev.paperplane.cli.util.JavaRuntimeUtil
@@ -62,7 +63,7 @@ class CreateCommand : CliktCommand(name = "create") {
   private val useKotlin by option("--kotlin", "-k", help = "Use Kotlin instead of Java").flag()
 
   override fun run() {
-    TerminalUI.beginInteractiveView()
+    InteractivePrompts.beginInteractiveView()
     try {
       if (name == null) {
         runInteractive()
@@ -74,7 +75,7 @@ class CreateCommand : CliktCommand(name = "create") {
       TerminalUI.cancelled()
       throw ProgramResult(130)
     } finally {
-      TerminalUI.endInteractiveView()
+      InteractivePrompts.endInteractiveView()
       TerminalUI.endView()
     }
   }
@@ -131,7 +132,7 @@ class CreateCommand : CliktCommand(name = "create") {
     var slug: String
     var projectDir: File
     while (true) {
-      displayName = TerminalUI.prompt("Plugin name", "My Plugin")
+      displayName = InteractivePrompts.prompt("Plugin name", "My Plugin")
       slug = deriveSlug(displayName)
       if (slug.isEmpty()) {
         TerminalUI.beginBlock()
@@ -149,11 +150,11 @@ class CreateCommand : CliktCommand(name = "create") {
       break
     }
 
-    val resolvedAuthor = TerminalUI.prompt("Author", deriveAuthor())
+    val resolvedAuthor = InteractivePrompts.prompt("Author", deriveAuthor())
     val className = deriveClassName(slug)
     var resolvedPackage: String
     while (true) {
-      resolvedPackage = TerminalUI.prompt("Package", derivePackage(resolvedAuthor, slug))
+      resolvedPackage = InteractivePrompts.prompt("Package", derivePackage(resolvedAuthor, slug))
       if (isValidPackage(resolvedPackage)) break
       TerminalUI.beginBlock()
       TerminalUI.error("Invalid package name (use lowercase segments like com.example.myplugin)")
@@ -166,16 +167,16 @@ class CreateCommand : CliktCommand(name = "create") {
       if (i == versions.lastIndex) "$v (latest)" else v
     }
     val versionIndex =
-        TerminalUI.select("Paper version", versionLabels, default = versions.lastIndex)
+        InteractivePrompts.select("Paper version", versionLabels, default = versions.lastIndex)
     val resolvedPaperVersion = versions[versionIndex]
 
-    val langIndex = TerminalUI.select("Language", listOf("Java", "Kotlin"))
+    val langIndex = InteractivePrompts.select("Language", listOf("Java", "Kotlin"))
     val isKotlin = langIndex == 1
 
     val modeIndex =
-        TerminalUI.select(
+        InteractivePrompts.select(
             "Dev mode",
-            DevMode.entries.map { TerminalUI.SelectOption(it.display, it.description) },
+            DevMode.entries.map { InteractivePrompts.SelectOption(it.display, it.description) },
             note = "change anytime in paperplane.yml",
         )
     val devMode = DevMode.entries[modeIndex]
@@ -256,7 +257,7 @@ class CreateCommand : CliktCommand(name = "create") {
     }
 
     val choice =
-        TerminalUI.select(
+        InteractivePrompts.select(
             "JetBrains Runtime",
             listOf("Yes, use JBR", "No thanks"),
             note = "enables more reliable hot swapping (~200 MB download)",

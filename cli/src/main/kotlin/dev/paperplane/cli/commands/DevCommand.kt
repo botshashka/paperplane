@@ -12,6 +12,7 @@ import dev.paperplane.cli.devserver.HotReloadMode
 import dev.paperplane.cli.devserver.RestartMode
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.server.PaperDownloader
+import dev.paperplane.cli.ui.InteractivePrompts
 import dev.paperplane.cli.ui.PromptCancelledException
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
@@ -29,7 +30,7 @@ class DevCommand : CliktCommand(name = "dev") {
       TerminalUI.cancelled()
       throw ProgramResult(130)
     } finally {
-      TerminalUI.endInteractiveView()
+      InteractivePrompts.endInteractiveView()
       TerminalUI.endView()
     }
   }
@@ -82,7 +83,7 @@ class DevCommand : CliktCommand(name = "dev") {
     if (eulaFile.exists() && eulaFile.readText().contains("eula=true")) return true
 
     val choice =
-        TerminalUI.select(
+        InteractivePrompts.select(
             "Do you accept the Minecraft EULA?",
             listOf("Yes", "No"),
             note = "https://aka.ms/MinecraftEULA",

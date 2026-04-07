@@ -16,6 +16,7 @@ import dev.paperplane.cli.commands.ImplodeCommand
 import dev.paperplane.cli.commands.InitCommand
 import dev.paperplane.cli.commands.TestCommand
 import dev.paperplane.cli.commands.UpgradeCommand
+import dev.paperplane.cli.ui.InteractivePrompts
 import dev.paperplane.cli.ui.TerminalUI
 
 class PaperPlane : CliktCommand(name = "ppl") {
@@ -47,7 +48,7 @@ fun main(args: Array<String>) {
   // Safety net: restore terminal attributes if the JVM exits while still in raw mode
   // (hard SIGTERM, unexpected System.exit, crash during scaffolding).
   Runtime.getRuntime()
-      .addShutdownHook(Thread({ TerminalUI.restoreTerminalIfNeeded() }, "terminal-restore"))
+      .addShutdownHook(Thread({ InteractivePrompts.restoreTerminalIfNeeded() }, "terminal-restore"))
 
 
   if (args.isEmpty()) {

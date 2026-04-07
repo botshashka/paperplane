@@ -3,6 +3,7 @@ package dev.paperplane.cli.commands
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
+import dev.paperplane.cli.ui.InteractivePrompts
 import dev.paperplane.cli.ui.TerminalUI
 import dev.paperplane.cli.util.Platform
 import java.io.File
@@ -64,7 +65,7 @@ class CleanCommand : CliktCommand(name = "clean") {
     TerminalUI.status("Total: ${Platform.formatSize(totalSize)}")
     TerminalUI.endBlock()
 
-    if (!force && !TerminalUI.confirm("Are you sure?")) {
+    if (!force && !InteractivePrompts.confirm("Are you sure?")) {
       TerminalUI.status("Cancelled")
       return
     }
