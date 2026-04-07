@@ -3,6 +3,10 @@ package dev.paperplane.cli.ui
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
+import org.jline.terminal.Attributes
+import org.jline.terminal.Terminal
+import org.jline.terminal.TerminalBuilder
+import org.jline.utils.NonBlockingReader
 
 object TerminalUI {
   private const val SPINNER_FRAME_INTERVAL_MS = 80L
@@ -42,6 +46,99 @@ object TerminalUI {
   private var needsSeparator = true
   private var hasLogOutput = false
   private var viewClosed = false
+
+  // JLine terminal + raw-mode view state
+  private val terminalLock = Any()
+  private var terminalInstance: Terminal? = null
+  private var savedAttributes: Attributes? = null
+  private var viewActive = false
+
+  private fun terminal(): Terminal =
+      synchronized(terminalLock) {
+        terminalInstance
+            ?: TerminalBuilder.builder().system(true).dumb(true).build().also {
+              terminalInstance = it
+            }
+      }
+
+  /**
+   * Enters raw mode for the duration of an interactive wizard. Safe to call once per command; nested
+   * prompts/selects will reuse this single raw-mode session instead of toggling termios per prompt.
+   */
+  fun beginInteractiveView() {
+    if (!isTty) return
+    synchronized(terminalLock) {
+      if (viewActive) return
+      val t = terminal()
+      savedAttributes = t.enterRawMode()
+      viewActive = true
+    }
+  }
+
+  /** Restores terminal attributes saved by [beginInteractiveView]. Idempotent. */
+  fun endInteractiveView() {
+    synchronized(terminalLock) {
+      val saved = savedAttributes ?: return
+      try {
+        terminalInstance?.attributes = saved
+      } catch (_: Exception) {
+        // best-effort
+      }
+      savedAttributes = null
+      viewActive = false
+    }
+  }
+
+  /**
+   * Safety-net for shutdown hooks: forces the terminal back to its pre-wizard state if an
+   * interactive view was ever opened. No-op otherwise.
+   */
+  fun restoreTerminalIfNeeded() {
+    endInteractiveView()
+  }
+
+  /**
+   * Runs [block] with the terminal in raw mode. If an interactive view is active, reuses its
+   * raw-mode state (no per-prompt save/restore). Otherwise saves+restores attributes around [block].
+   */
+  private inline fun <T> withRawTty(block: (reader: NonBlockingReader) -> T): T {
+    val t = terminal()
+    val ownsRawMode: Boolean
+    val localSaved: Attributes?
+    synchronized(terminalLock) {
+      if (viewActive) {
+        ownsRawMode = false
+        localSaved = null
+      } else {
+        ownsRawMode = true
+        localSaved = t.enterRawMode()
+      }
+    }
+    try {
+      return block(t.reader())
+    } finally {
+      if (ownsRawMode && localSaved != null) {
+        try {
+          t.attributes = localSaved
+        } catch (_: Exception) {
+          // best-effort
+        }
+      }
+    }
+  }
+
+  /** Prints a "Cancelled" line after a [PromptCancelledException] bubbles up. */
+  fun cancelled() {
+    lock.withLock {
+      if (blockActive) {
+        clearDisplay()
+        resetBlock()
+      }
+      println()
+      println("  ${yellow("⚠")}  ${dim("Cancelled")}")
+      needsSeparator = true
+    }
+  }
 
   private val spinnerFrames = arrayOf("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
@@ -328,23 +425,22 @@ object TerminalUI {
 
       val input = StringBuilder()
       var usingDefault = default != null
-      val savedStty = sttyCapture("-g")
 
-      try {
-        sttySet("raw", "-echo")
-
+      withRawTty { reader ->
         while (true) {
-          val b = System.`in`.read()
+          val b = reader.read()
           when (b) {
-            3 -> { // Ctrl+C
-              restoreStty(savedStty)
+            -1 -> { // EOF
               println()
-              System.exit(130)
+              throw PromptCancelledException()
+            }
+            3 -> { // Ctrl+C
+              println()
+              throw PromptCancelledException()
             }
             27 -> { // ESC — abort
-              restoreStty(savedStty)
               println()
-              System.exit(130)
+              throw PromptCancelledException()
             }
             13,
             10 -> { // Enter
@@ -356,7 +452,6 @@ object TerminalUI {
                 continue
               }
 
-              restoreStty(savedStty)
               // Collapse to completed state: move up to label line, rewrite label + input
               print("\r\u001b[1A\u001b[2K\r")
               println("  ${dim("◇")}  $label:")
@@ -368,7 +463,7 @@ object TerminalUI {
               }
               print("\u001b[${BOTTOM_PADDING}A")
               System.out.flush()
-              return result
+              return@withRawTty result
             }
             127,
             8 -> { // Backspace
@@ -400,10 +495,8 @@ object TerminalUI {
             }
           }
         }
-      } catch (e: Exception) {
-        restoreStty(savedStty)
-        throw e
-      }
+        @Suppress("UNREACHABLE_CODE") ""
+      }.let { return it }
     }
   }
 
@@ -454,44 +547,44 @@ object TerminalUI {
     print("\n".repeat(BOTTOM_PADDING) + "\u001b[${BOTTOM_PADDING}A")
     System.out.flush()
 
-    val savedStty = sttyCapture("-g")
-
     try {
-      sttySet("raw", "-echo")
-
-      while (true) {
-        val b = System.`in`.read()
-        when (b) {
-          3 -> { // Ctrl+C
-            restoreStty(savedStty)
-            println()
-            System.exit(130)
-            break
-          }
-          13,
-          10 -> break // Enter
-          27 -> { // Escape or escape sequence
-            // Arrow keys send ESC [ A/B; wait briefly for the follow-up bytes.
-            Thread.sleep(20)
-            if (System.`in`.available() > 0 && System.`in`.read() == '['.code) {
-              when (System.`in`.read()) {
-                'A'.code -> selected = (selected - 1 + options.size) % options.size
-                'B'.code -> selected = (selected + 1) % options.size
-              }
-              print("\u001b[${options.size}A")
-              renderSelectOptions(options, selected)
-              System.out.flush()
-            } else {
-              restoreStty(savedStty)
+      withRawTty { reader ->
+        loop@ while (true) {
+          val b = reader.read()
+          when (b) {
+            -1 -> {
               print("\u001b[?25h")
               println()
-              System.exit(130)
+              throw PromptCancelledException()
+            }
+            3 -> { // Ctrl+C
+              print("\u001b[?25h")
+              println()
+              throw PromptCancelledException()
+            }
+            13,
+            10 -> break@loop // Enter
+            27 -> { // Escape or escape sequence
+              // Arrow keys send ESC [ A/B; peek briefly for the follow-up bytes.
+              val next = reader.peek(50)
+              if (next >= 0 && reader.read() == '['.code) {
+                when (reader.read()) {
+                  'A'.code -> selected = (selected - 1 + options.size) % options.size
+                  'B'.code -> selected = (selected + 1) % options.size
+                }
+                print("\u001b[${options.size}A")
+                renderSelectOptions(options, selected)
+                System.out.flush()
+              } else {
+                print("\u001b[?25h")
+                println()
+                throw PromptCancelledException()
+              }
             }
           }
         }
       }
     } finally {
-      restoreStty(savedStty)
       print("\u001b[?25h")
       System.out.flush()
     }
@@ -549,25 +642,6 @@ object TerminalUI {
     val input = readlnOrNull()?.trim()
     if (input.isNullOrEmpty()) return default
     return (input.toIntOrNull()?.minus(1))?.coerceIn(0, options.size - 1) ?: default
-  }
-
-  private fun sttyCapture(vararg args: String): String {
-    val proc = ProcessBuilder("stty", *args).redirectInput(ProcessBuilder.Redirect.INHERIT).start()
-    val result = proc.inputStream.bufferedReader().readText().trim()
-    proc.waitFor()
-    return result
-  }
-
-  private fun sttySet(vararg args: String) {
-    ProcessBuilder("stty", *args).redirectInput(ProcessBuilder.Redirect.INHERIT).start().waitFor()
-  }
-
-  private fun restoreStty(saved: String) {
-    try {
-      sttySet(saved)
-    } catch (_: Exception) {
-      // Best effort restore
-    }
   }
 
   fun fileCreated(path: String) {

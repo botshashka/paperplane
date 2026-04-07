@@ -1,6 +1,7 @@
 package dev.paperplane.cli.commands
 
 import com.github.ajalt.clikt.core.CliktCommand
+import com.github.ajalt.clikt.core.ProgramResult
 import com.github.ajalt.clikt.parameters.arguments.argument
 import com.github.ajalt.clikt.parameters.arguments.optional
 import com.github.ajalt.clikt.parameters.options.default
@@ -8,6 +9,7 @@ import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import dev.paperplane.cli.Versions
 import dev.paperplane.cli.server.PaperVersionResolver
+import dev.paperplane.cli.ui.PromptCancelledException
 import dev.paperplane.cli.ui.TerminalUI
 import dev.paperplane.cli.util.JavaRuntimeUtil
 import dev.paperplane.cli.util.Platform
@@ -60,12 +62,39 @@ class CreateCommand : CliktCommand(name = "create") {
   private val useKotlin by option("--kotlin", "-k", help = "Use Kotlin instead of Java").flag()
 
   override fun run() {
-    if (name == null) {
-      runInteractive()
-    } else {
-      runNonInteractive()
+    TerminalUI.beginInteractiveView()
+    try {
+      if (name == null) {
+        runInteractive()
+      } else {
+        runNonInteractive()
+      }
+    } catch (_: PromptCancelledException) {
+      rollbackScaffold()
+      TerminalUI.cancelled()
+      throw ProgramResult(130)
+    } finally {
+      TerminalUI.endInteractiveView()
+      TerminalUI.endView()
     }
-    TerminalUI.endView()
+  }
+
+  @Volatile private var scaffoldInProgress: File? = null
+  @Volatile private var wrapperProcess: Process? = null
+
+  private fun rollbackScaffold() {
+    val dir = scaffoldInProgress ?: return
+    scaffoldInProgress = null
+    try {
+      wrapperProcess?.destroyForcibly()
+    } catch (_: Exception) {
+      // best-effort
+    }
+    try {
+      if (dir.exists()) dir.deleteRecursively()
+    } catch (_: Exception) {
+      // best-effort
+    }
   }
 
   private fun deriveSlug(displayName: String): String =
@@ -255,6 +284,44 @@ class CreateCommand : CliktCommand(name = "create") {
   }
 
   private fun scaffoldFiles(c: ProjectConfig): Boolean {
+    val createdByUs = !c.projectDir.exists()
+    scaffoldInProgress = if (createdByUs) c.projectDir else null
+    val hook =
+        if (createdByUs) {
+          Thread({
+                val dir = scaffoldInProgress ?: return@Thread
+                try {
+                  wrapperProcess?.destroyForcibly()
+                } catch (_: Exception) {}
+                try {
+                  if (dir.exists()) dir.deleteRecursively()
+                } catch (_: Exception) {}
+              }, "create-scaffold-rollback")
+              .also { Runtime.getRuntime().addShutdownHook(it) }
+        } else null
+    try {
+      return doScaffold(c)
+    } catch (t: Throwable) {
+      if (createdByUs && c.projectDir.exists()) {
+        try {
+          c.projectDir.deleteRecursively()
+        } catch (_: Exception) {}
+      }
+      throw t
+    } finally {
+      scaffoldInProgress = null
+      wrapperProcess = null
+      if (hook != null) {
+        try {
+          Runtime.getRuntime().removeShutdownHook(hook)
+        } catch (_: IllegalStateException) {
+          // JVM already shutting down
+        }
+      }
+    }
+  }
+
+  private fun doScaffold(c: ProjectConfig): Boolean {
     val packagePath = c.packageName.replace(".", "/")
     val srcMain = if (c.useKotlin) "src/main/kotlin/$packagePath" else "src/main/java/$packagePath"
     val srcTest = if (c.useKotlin) "src/test/kotlin/$packagePath" else "src/test/java/$packagePath"
@@ -332,18 +399,18 @@ class CreateCommand : CliktCommand(name = "create") {
         ProjectTemplates.vscodeSettings(),
     )
 
-    val wrapperProcess =
+    val wp =
         ProcessBuilder("gradle", "wrapper", "--gradle-version", Versions.GRADLE_WRAPPER)
             .directory(c.projectDir)
             .redirectErrorStream(true)
             .start()
-    val finished =
-        wrapperProcess.waitFor(WRAPPER_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+    wrapperProcess = wp
+    val finished = wp.waitFor(WRAPPER_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
     return if (!finished) {
-      wrapperProcess.destroyForcibly()
+      wp.destroyForcibly()
       false
     } else {
-      wrapperProcess.exitValue() == 0
+      wp.exitValue() == 0
     }
   }
 }

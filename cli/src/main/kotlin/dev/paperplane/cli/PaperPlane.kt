@@ -44,6 +44,12 @@ class PaperPlane : CliktCommand(name = "ppl") {
 }
 
 fun main(args: Array<String>) {
+  // Safety net: restore terminal attributes if the JVM exits while still in raw mode
+  // (hard SIGTERM, unexpected System.exit, crash during scaffolding).
+  Runtime.getRuntime()
+      .addShutdownHook(Thread({ TerminalUI.restoreTerminalIfNeeded() }, "terminal-restore"))
+
+
   if (args.isEmpty()) {
     val version = Versions.paperplaneVersion()
     TerminalUI.header(version)

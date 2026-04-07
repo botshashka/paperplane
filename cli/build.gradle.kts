@@ -17,6 +17,8 @@ dependencies {
   implementation(libs.gradle.tooling.api)
   implementation(libs.gson)
   implementation(libs.slf4j.nop)
+  implementation(libs.jline.terminal)
+  runtimeOnly(libs.jline.terminal.jni)
 
   testImplementation(libs.junit.jupiter)
   testRuntimeOnly(libs.junit.platform.launcher)

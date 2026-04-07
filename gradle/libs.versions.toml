@@ -15,6 +15,7 @@ mockbukkit = "4.108.0"
 kotlinx-serialization = "1.10.0"
 ktfmt = "0.26.0"
 detekt = "2.0.0-alpha.2"
+jline = "3.30.4"
 
 [libraries]
 kotlinx-serialization-core = { module = "org.jetbrains.kotlinx:kotlinx-serialization-core", version.ref = "kotlinx-serialization" }
@@ -31,6 +32,8 @@ junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher
 mockbukkit = { module = "org.mockbukkit.mockbukkit:mockbukkit-v1.21", version.ref = "mockbukkit" }
 slf4j-nop = { module = "org.slf4j:slf4j-nop", version = "2.0.17" }
 velocity-api = { module = "com.velocitypowered:velocity-api", version.ref = "velocity-api" }
+jline-terminal = { module = "org.jline:jline-terminal", version.ref = "jline" }
+jline-terminal-jni = { module = "org.jline:jline-terminal-jni", version.ref = "jline" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
