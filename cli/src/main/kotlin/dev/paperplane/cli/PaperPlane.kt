@@ -11,6 +11,7 @@ import com.github.ajalt.mordant.rendering.TextStyles
 import dev.paperplane.cli.commands.CleanCommand
 import dev.paperplane.cli.commands.CreateCommand
 import dev.paperplane.cli.commands.DevCommand
+import dev.paperplane.cli.commands.FormatCommand
 import dev.paperplane.cli.commands.ImplodeCommand
 import dev.paperplane.cli.commands.InitCommand
 import dev.paperplane.cli.commands.TestCommand
@@ -18,7 +19,8 @@ import dev.paperplane.cli.commands.UpgradeCommand
 import dev.paperplane.cli.ui.TerminalUI
 
 class PaperPlane : CliktCommand(name = "ppl") {
-  override fun aliases() = mapOf("new" to listOf("create"), "setup" to listOf("init"))
+  override fun aliases() =
+      mapOf("new" to listOf("create"), "setup" to listOf("init"), "fmt" to listOf("format"))
 
   init {
     context {
@@ -49,6 +51,7 @@ fun main(args: Array<String>) {
     TerminalUI.info("create", "Scaffold a new Paper plugin project")
     TerminalUI.info("init", "Add PaperPlane to an existing project")
     TerminalUI.info("test", "Run tests via Gradle")
+    TerminalUI.info("format", "Format source code with Spotless")
     TerminalUI.info("clean", "Clean .paperplane directory")
     TerminalUI.info("upgrade", "Update ppl to the latest version")
     TerminalUI.info("implode", "Uninstall ppl completely")
@@ -64,6 +67,7 @@ fun main(args: Array<String>) {
           InitCommand(),
           DevCommand(),
           TestCommand(),
+          FormatCommand(),
           CleanCommand(),
           UpgradeCommand(),
           ImplodeCommand(),

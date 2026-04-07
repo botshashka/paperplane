@@ -16,6 +16,7 @@ object Versions {
   const val SHADOW = "9.4.1"
   const val MOCKBUKKIT = "4.108.0"
   const val JUNIT = "5.11.4"
+  const val SPOTLESS = "7.0.2"
 
   /** PaperPlane's own version, read from JAR manifest at runtime. */
   fun paperplaneVersion(): String = Versions::class.java.`package`?.implementationVersion ?: "dev"

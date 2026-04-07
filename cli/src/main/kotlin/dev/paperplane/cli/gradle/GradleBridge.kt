@@ -8,6 +8,7 @@ import java.io.File
 import org.gradle.tooling.GradleConnectionException
 import org.gradle.tooling.GradleConnector
 import org.gradle.tooling.ProjectConnection
+import org.gradle.tooling.model.GradleProject
 
 data class ProjectMetadata(
     val jarPath: String,
@@ -63,6 +64,67 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
       val output = stderr.toString() + stdout.toString()
       parseBuildErrors(output)
       false
+    }
+  }
+
+  data class FormatResult(
+      val success: Boolean,
+      val taskMissing: Boolean = false,
+      val rootMessage: String? = null,
+      val outputLines: List<String> = emptyList(),
+  )
+
+  /** Returns true if a task with the given name exists anywhere in the project tree. */
+  fun hasTask(taskName: String): Boolean {
+    return try {
+      val project = connect().getModel(GradleProject::class.java)
+      projectContainsTask(project, taskName)
+    } catch (_: GradleConnectionException) {
+      // If we can't even load the project model, let the normal build path surface the error.
+      true
+    }
+  }
+
+  private fun projectContainsTask(project: GradleProject, taskName: String): Boolean {
+    if (project.tasks.any { it.name == taskName }) return true
+    return project.children.any { projectContainsTask(it, taskName) }
+  }
+
+  fun format(check: Boolean = false): FormatResult {
+    val task = if (check) "spotlessCheck" else "spotlessApply"
+    if (!hasTask(task)) {
+      return FormatResult(success = false, taskMissing = true)
+    }
+    return runFormat(task)
+  }
+
+  private fun runFormat(task: String): FormatResult {
+    val stdout = ByteArrayOutputStream()
+    val stderr = ByteArrayOutputStream()
+    return try {
+      connect()
+          .newBuild()
+          .forTasks(task)
+          .setStandardOutput(stdout)
+          .setStandardError(stderr)
+          .run()
+      FormatResult(success = true)
+    } catch (e: GradleConnectionException) {
+      var root: Throwable = e
+      while (root.cause != null && root.cause !== root) root = root.cause!!
+      val rootMsg = root.message?.lines()?.firstOrNull { it.isNotBlank() }
+
+      val combined = stderr.toString() + stdout.toString()
+      val errorLines =
+          combined
+              .lines()
+              .map { it.trimEnd() }
+              .dropWhile {
+                !it.startsWith("FAILURE") && !it.contains("error:") && !it.contains("Exception")
+              }
+              .filter { it.isNotBlank() }
+              .take(30)
+      FormatResult(success = false, rootMessage = rootMsg, outputLines = errorLines)
     }
   }
 

@@ -24,6 +24,7 @@ internal object ProjectTemplates {
               if (isKotlin) {
                 add("kotlin(\"jvm\") version \"${Versions.KOTLIN}\"")
                 add("id(\"com.gradleup.shadow\") version \"${Versions.SHADOW}\"")
+                add("id(\"com.diffplug.spotless\") version \"${Versions.SPOTLESS}\"")
               }
               add("id(\"dev.paperplane\") version \"${Versions.paperplaneVersion()}\"")
             }
@@ -32,6 +33,22 @@ internal object ProjectTemplates {
     val kotlinBlock =
         if (isKotlin) {
           "\n\n        kotlin {\n            jvmToolchain(21)\n        }"
+        } else ""
+
+    val spotlessBlock =
+        if (isKotlin) {
+          buildString {
+            append("\n\n        spotless {")
+            append("\n            kotlin {")
+            append("\n                target(\"src/**/*.kt\")")
+            append("\n                ktfmt()")
+            append("\n            }")
+            append("\n            kotlinGradle {")
+            append("\n                target(\"*.gradle.kts\")")
+            append("\n                ktfmt()")
+            append("\n            }")
+            append("\n        }")
+          }
         } else ""
 
     val deps =
@@ -65,7 +82,7 @@ internal object ProjectTemplates {
             toolchain {
                 languageVersion.set(JavaLanguageVersion.of(21))
             }
-        }$kotlinBlock
+        }$kotlinBlock$spotlessBlock
 
         repositories {
             mavenCentral()
@@ -284,6 +301,12 @@ internal object ProjectTemplates {
 
         ```bash
         ppl test
+        ```
+
+        ## Format
+
+        ```bash
+        ppl format
         ```
 
         ## Build
