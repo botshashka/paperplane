@@ -17,6 +17,7 @@ internal class BlueGreenMode(private val session: DevSession) {
     internal const val SERVER_A_PORT = 25566
     internal const val SERVER_B_PORT = 25567
     private const val TRANSFER_SETTLE_DELAY_MS = 200L
+    private const val PREWARM_JOIN_TIMEOUT_MS = 2000L
   }
 
   internal enum class Slot(val serverName: String, val port: Int) {
@@ -46,10 +47,47 @@ internal class BlueGreenMode(private val session: DevSession) {
   private val velocityManager = VelocityManager(File(session.ppDir, "proxy"))
   private var activeSlot = Slot.SERVER
 
+  /**
+   * Post-swap pre-warm runs in the background so the main loop can return to "Watching" quickly. If
+   * another rebuild triggers before this finishes, we must wait for it — otherwise rebuild's
+   * `standby.stop()` can race with the pre-warm's `standby.start()` and leave the port in a
+   * half-bound state that crashes the next boot with "Address already in use".
+   */
+  @Volatile private var preWarmThread: Thread? = null
+
+  private val shuttingDown = AtomicBoolean(false)
+  private val shutdownDone = AtomicBoolean(false)
+
+  /**
+   * Idempotent shutdown: joins any in-flight pre-warm, stops both backends in parallel, then the
+   * proxy and gradle. Called from both the JVM shutdown hook and the main loop's cleanup lambda —
+   * whichever runs first wins; the second call is a no-op.
+   */
+  private fun shutdownAll() {
+    if (!shutdownDone.compareAndSet(false, true)) return
+    shuttingDown.set(true)
+    // Let any in-flight post-swap pre-warm finish its current step before we tear down; a short
+    // cap keeps Ctrl+C responsive even if the background thread is stuck.
+    try {
+      preWarmThread?.join(PREWARM_JOIN_TIMEOUT_MS)
+    } catch (_: InterruptedException) {
+      Thread.currentThread().interrupt()
+    }
+    preWarmThread = null
+
+    // Stop both backends in parallel so shutdown doesn't wait 2 × graceful-stop-timeout.
+    val stopThreads =
+        servers.values.map { mgr ->
+          Thread({ mgr.stop() }, "shutdown-stop-${mgr.serverDir.name}").apply { start() }
+        }
+    stopThreads.forEach { it.join() }
+    velocityManager.stop()
+    session.gradle.close()
+  }
+
   private data class RunningState(val metadata: ProjectMetadata, val paperJar: File)
 
   fun run() {
-    val shuttingDown = AtomicBoolean(false)
     Runtime.getRuntime()
         .addShutdownHook(
             Thread {
@@ -57,9 +95,7 @@ internal class BlueGreenMode(private val session: DevSession) {
                 TerminalUI.clearPinnedFooter()
                 println()
               }
-              servers.values.forEach { it.stop() }
-              velocityManager.stop()
-              session.gradle.close()
+              shutdownAll()
             }
         )
 
@@ -82,11 +118,7 @@ internal class BlueGreenMode(private val session: DevSession) {
             false
           } else true
         },
-        cleanup = {
-          servers.values.forEach { it.stop() }
-          velocityManager.stop()
-          session.gradle.close()
-        },
+        cleanup = { shutdownAll() },
     )
   }
 
@@ -117,13 +149,7 @@ internal class BlueGreenMode(private val session: DevSession) {
   }
 
   private fun enterFixRecovery(): Nothing {
-    session.runFixWatcher(
-        cleanup = {
-          servers.values.forEach { it.stop() }
-          velocityManager.stop()
-          session.gradle.close()
-        },
-    ) {
+    session.runFixWatcher(cleanup = { shutdownAll() }) {
       when (val attempt = session.handleFixAttempt(null)) {
         is DevSession.FixAttempt.BuildFailed -> PhaseEnd.Waiting
         is DevSession.FixAttempt.Success -> {
@@ -215,15 +241,18 @@ internal class BlueGreenMode(private val session: DevSession) {
     }
 
     // Pre-warm old active as next standby
-    Thread(
-            {
-              active.stop()
-              preWarmStandby(active, standby, activeSlot.port, builtJar, paperJar)
-            },
-            "stop-and-prewarm-${activeSlot.serverName}",
-        )
-        .apply { isDaemon = true }
-        .start()
+    preWarmThread =
+        Thread(
+                {
+                  active.stop()
+                  preWarmStandby(active, standby, activeSlot.port, builtJar, paperJar)
+                },
+                "stop-and-prewarm-${activeSlot.serverName}",
+            )
+            .apply {
+              isDaemon = true
+              start()
+            }
 
     return standbySlot to PhaseEnd.Watching
   }
@@ -234,6 +263,11 @@ internal class BlueGreenMode(private val session: DevSession) {
       standbySlot: Slot,
       builtJar: File,
   ): Boolean {
+    // Wait for any in-flight post-swap pre-warm to finish before touching the standby — see
+    // preWarmThread.
+    preWarmThread?.join()
+    preWarmThread = null
+
     active.writeCompanionStatus("saving")
     TerminalUI.spin("Saving world...") { active.waitForSave() }
 
@@ -280,6 +314,14 @@ internal class BlueGreenMode(private val session: DevSession) {
     standby.copyPlugin(builtJar)
     standby.copyCompanion()
 
+    // The standby is about to become the active server — surface its logs.
+    standby.logSuppressed = false
+    active.logSuppressed = true
+
+    // Safety net: ensure nothing is holding the port before we bind. stop() should have already
+    // released it, but this guards against slow kernel unbind and leftover processes.
+    standby.cleanupStale()
+
     val serverStart = System.currentTimeMillis()
     standby.start(paperJar, session.config.server.jvmArgs)
     val ready =
@@ -322,6 +364,8 @@ internal class BlueGreenMode(private val session: DevSession) {
       ServerSync.syncServerState(source.serverDir, standby.serverDir, standbyPort, pluginJar.name)
       standby.copyPlugin(pluginJar)
       standby.copyCompanion()
+      // Pre-warmed standby runs silently — its logs would interleave with the active server's.
+      standby.logSuppressed = true
       standby.start(paperJar, session.config.server.jvmArgs)
       standby.waitForReady()
     } catch (_: Exception) {
