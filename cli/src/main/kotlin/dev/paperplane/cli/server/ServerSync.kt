@@ -14,31 +14,18 @@ object ServerSync {
    * after sync).
    */
   fun syncServerState(sourceDir: File, targetDir: File, targetPort: Int, devPluginJarName: String) {
-    targetDir.mkdirs()
-    val srcChildren = (sourceDir.listFiles() ?: emptyArray()).associateBy { it.name }
-    val dstChildren = (targetDir.listFiles() ?: emptyArray()).associateBy { it.name }
+    syncChildren(
+        sourceDir,
+        targetDir,
+        skipName = { it.endsWith(".lock") || it == ".paperplane" },
+        onDirectory = { s, d ->
+          if (s.name == "plugins") syncPlugins(s, d, devPluginJarName) else incrementalSyncDir(s, d)
+        },
+    )
+    patchServerPort(targetDir, targetPort)
+  }
 
-    // Remove files in target that don't exist in source (respecting skip rules)
-    for ((name, dstChild) in dstChildren) {
-      if (name !in srcChildren) {
-        if (dstChild.isDirectory) deleteDir(dstChild) else dstChild.delete()
-      }
-    }
-
-    for ((name, child) in srcChildren) {
-      if (child.name.endsWith(".lock")) continue
-      if (child.name == ".paperplane") continue // CLI state, not server data
-
-      val dst = File(targetDir, child.name)
-      if (child.name == "plugins") {
-        syncPlugins(child, dst, devPluginJarName)
-      } else if (child.isDirectory) {
-        incrementalSyncDir(child, dst)
-      } else {
-        copyIfChanged(child, dst)
-      }
-    }
-    // Patch port — the only config difference between blue and green
+  private fun patchServerPort(targetDir: File, targetPort: Int) {
     val props = File(targetDir, "server.properties")
     if (props.exists()) {
       props.writeText(
@@ -48,54 +35,44 @@ object ServerSync {
   }
 
   private fun syncPlugins(srcPlugins: File, dstPlugins: File, devPluginJarName: String) {
-    dstPlugins.mkdirs()
-    val srcChildren = (srcPlugins.listFiles() ?: emptyArray()).associateBy { it.name }
-    val dstChildren = (dstPlugins.listFiles() ?: emptyArray()).associateBy { it.name }
-
-    // Remove files in target that don't exist in source (respecting skip rules)
-    for ((name, dstChild) in dstChildren) {
-      if (name == devPluginJarName || name == "paperplane-companion.jar") continue
-      if (name !in srcChildren) {
-        if (dstChild.isDirectory) deleteDir(dstChild) else dstChild.delete()
-      }
-    }
-
-    for ((name, child) in srcChildren) {
-      if (
-          child.isFile &&
-              (child.name == devPluginJarName || child.name == "paperplane-companion.jar")
-      )
-          continue
-      val dst = File(dstPlugins, name)
-      if (child.isDirectory) {
-        incrementalSyncDir(child, dst)
-      } else {
-        copyIfChanged(child, dst)
-      }
-    }
+    syncChildren(
+        srcPlugins,
+        dstPlugins,
+        skipName = { it == devPluginJarName || it == "paperplane-companion.jar" },
+    )
   }
 
   private fun incrementalSyncDir(src: File, dst: File) {
+    syncChildren(src, dst, skipName = { it.endsWith(".lock") })
+  }
+
+  /**
+   * Two-pass directory sync: removes orphans in [dst] that aren't in [src] (skipping any name
+   * matching [skipName]), then walks [src] and either recurses on directories ([onDirectory]) or
+   * copies files ([onFile]). Skip predicate is applied to both passes.
+   */
+  private fun syncChildren(
+      src: File,
+      dst: File,
+      skipName: (String) -> Boolean,
+      onFile: (File, File) -> Unit = ::copyIfChanged,
+      onDirectory: (File, File) -> Unit = ::incrementalSyncDir,
+  ) {
     dst.mkdirs()
     val srcChildren = (src.listFiles() ?: emptyArray()).associateBy { it.name }
     val dstChildren = (dst.listFiles() ?: emptyArray()).associateBy { it.name }
 
-    // Remove files in dst that don't exist in src
     for ((name, dstChild) in dstChildren) {
+      if (skipName(name)) continue
       if (name !in srcChildren) {
         if (dstChild.isDirectory) deleteDir(dstChild) else dstChild.delete()
       }
     }
 
-    // Copy/update from src to dst
     for ((name, srcChild) in srcChildren) {
-      if (srcChild.name.endsWith(".lock")) continue
+      if (skipName(name)) continue
       val dstChild = File(dst, name)
-      if (srcChild.isDirectory) {
-        incrementalSyncDir(srcChild, dstChild)
-      } else {
-        copyIfChanged(srcChild, dstChild)
-      }
+      if (srcChild.isDirectory) onDirectory(srcChild, dstChild) else onFile(srcChild, dstChild)
     }
   }
 
