@@ -17,15 +17,6 @@ class CreateCommand : CliktCommand(name = "create") {
   companion object {
     private const val WRAPPER_TIMEOUT_SECONDS = 60L
 
-    private val DEV_MODE_OPTIONS = listOf("Hot reload", "Blue-green", "Restart")
-    private val DEV_MODE_DESCRIPTIONS =
-        listOf(
-            "fastest iteration, reloads plugin in-place",
-            "zero-downtime via Velocity proxy",
-            "stop, rebuild, restart",
-        )
-    private val DEV_MODE_VALUES = listOf("hot-reload", "blue-green", "restart")
-
     private val CREATING_MESSAGES =
         listOf(
             "Folding your plugin...",
@@ -41,6 +32,12 @@ class CreateCommand : CliktCommand(name = "create") {
             "Good to go!",
             "All yours!",
         )
+  }
+
+  private enum class DevMode(val display: String, val description: String, val value: String) {
+    HOT_RELOAD("Hot reload", "fastest iteration, reloads plugin in-place", "hot-reload"),
+    BLUE_GREEN("Blue-green", "zero-downtime via Velocity proxy", "blue-green"),
+    RESTART("Restart", "stop, rebuild, restart", "restart"),
   }
 
   private data class ProjectConfig(
@@ -74,17 +71,12 @@ class CreateCommand : CliktCommand(name = "create") {
   private fun deriveSlug(displayName: String): String =
       displayName.trim().lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')
 
-  private fun deriveClassName(slug: String): String =
-      slug
-          .split("-")
-          .filter { it.isNotEmpty() }
-          .joinToString("") { it.replaceFirstChar { c -> c.uppercase() } }
+  private fun slugWords(slug: String): List<String> =
+      slug.split("-").filter { it.isNotEmpty() }.map { it.replaceFirstChar { c -> c.uppercase() } }
 
-  private fun deriveDisplayName(slug: String): String =
-      slug
-          .split("-")
-          .filter { it.isNotEmpty() }
-          .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+  private fun deriveClassName(slug: String): String = slugWords(slug).joinToString("")
+
+  private fun deriveDisplayName(slug: String): String = slugWords(slug).joinToString(" ")
 
   private fun derivePackage(author: String, slug: String): String =
       "me.${author.lowercase().replace(Regex("[^a-z0-9]"), "")}.${slug.replace("-", "")}"
@@ -154,18 +146,12 @@ class CreateCommand : CliktCommand(name = "create") {
     val modeIndex =
         TerminalUI.select(
             "Dev mode",
-            DEV_MODE_OPTIONS,
-            DEV_MODE_DESCRIPTIONS,
+            DevMode.entries.map { TerminalUI.SelectOption(it.display, it.description) },
             note = "change anytime in paperplane.yml",
         )
-    val devMode = DEV_MODE_VALUES[modeIndex]
+    val devMode = DevMode.entries[modeIndex]
 
-    val jbr =
-        if (devMode == "hot-reload") {
-          resolveJbrSetting()
-        } else {
-          "auto"
-        }
+    val jbr = if (devMode == DevMode.HOT_RELOAD) resolveJbrSetting() else "auto"
 
     createProject(
         ProjectConfig(
@@ -177,7 +163,7 @@ class CreateCommand : CliktCommand(name = "create") {
             author = resolvedAuthor,
             paperVersion = resolvedPaperVersion,
             useKotlin = isKotlin,
-            devMode = devMode,
+            devMode = devMode.value,
             jbr = jbr,
         )
     )
@@ -218,15 +204,13 @@ class CreateCommand : CliktCommand(name = "create") {
             author = resolvedAuthor,
             paperVersion = resolvedPaperVersion,
             useKotlin = useKotlin,
-            devMode = "hot-reload",
+            devMode = DevMode.HOT_RELOAD.value,
             jbr = "auto",
         )
     )
   }
 
-  /** Detects JBR availability and prompts if needed. Returns the jbr config value. */
   private fun resolveJbrSetting(): String {
-    // Check if system java is already JBR
     if (JavaRuntimeUtil.checkIsJbr("java")) {
       TerminalUI.beginBlock()
       TerminalUI.success("JetBrains Runtime detected")
@@ -234,7 +218,6 @@ class CreateCommand : CliktCommand(name = "create") {
       return "auto"
     }
 
-    // Check if JBR is cached
     val jbrCache = File(Platform.paperplaneHome, "jbr")
     if (jbrCache.exists() && jbrCache.listFiles()?.isNotEmpty() == true) {
       TerminalUI.beginBlock()
@@ -243,7 +226,6 @@ class CreateCommand : CliktCommand(name = "create") {
       return "auto"
     }
 
-    // Prompt user
     val choice =
         TerminalUI.select(
             "JetBrains Runtime",
@@ -272,16 +254,14 @@ class CreateCommand : CliktCommand(name = "create") {
     TerminalUI.endBlock()
   }
 
-  /** Writes all template files and runs `gradle wrapper`. Returns true if wrapper succeeded. */
   private fun scaffoldFiles(c: ProjectConfig): Boolean {
     val packagePath = c.packageName.replace(".", "/")
     val srcMain = if (c.useKotlin) "src/main/kotlin/$packagePath" else "src/main/java/$packagePath"
     val srcTest = if (c.useKotlin) "src/test/kotlin/$packagePath" else "src/test/java/$packagePath"
     val srcResources = "src/main/resources"
 
-    File(c.projectDir, srcMain).mkdirs()
-    File(c.projectDir, srcTest).mkdirs()
-    File(c.projectDir, srcResources).mkdirs()
+    // writeTemplate creates parent directories for each file, so only the standalone .paperplane
+    // directory (which has no files written into it here) needs an explicit mkdirs.
     File(c.projectDir, ".paperplane").mkdirs()
 
     ProjectTemplates.writeTemplate(

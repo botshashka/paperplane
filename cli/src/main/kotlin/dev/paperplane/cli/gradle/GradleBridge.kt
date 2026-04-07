@@ -8,7 +8,6 @@ import java.io.File
 import org.gradle.tooling.GradleConnectionException
 import org.gradle.tooling.GradleConnector
 import org.gradle.tooling.ProjectConnection
-import org.gradle.tooling.model.GradleProject
 
 data class ProjectMetadata(
     val jarPath: String,
@@ -33,6 +32,20 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
     private const val MAX_DISPLAYED_ERRORS = 5
     private const val MAX_FALLBACK_LINES = 10
     internal val BUILD_ERROR_PATTERN = Regex("""(.+\.(?:java|kt)):(\d+): error: (.+)""")
+
+    /**
+     * True if [message] is a Gradle "task does not exist" error for [task]. Factored out so the
+     * specific wordings (which can drift across Gradle versions) are covered by unit tests — if
+     * Gradle changes its message, the tests break loudly instead of silently routing a missing-task
+     * error down the generic "format failed" path.
+     */
+    internal fun isTaskNotFoundMessage(message: String?, task: String): Boolean {
+      if (message == null) return false
+      return message.contains("Task '$task' not found") ||
+          message.contains("Cannot locate tasks that match '$task'") ||
+          message.contains("Task '$task' is ambiguous") ||
+          message.contains("task '$task' not found", ignoreCase = true)
+    }
   }
 
   private var connection: ProjectConnection? = null
@@ -74,31 +87,8 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
       val outputLines: List<String> = emptyList(),
   )
 
-  /** Returns true if a task with the given name exists anywhere in the project tree. */
-  fun hasTask(taskName: String): Boolean {
-    return try {
-      val project = connect().getModel(GradleProject::class.java)
-      projectContainsTask(project, taskName)
-    } catch (_: GradleConnectionException) {
-      // If we can't even load the project model, let the normal build path surface the error.
-      true
-    }
-  }
-
-  private fun projectContainsTask(project: GradleProject, taskName: String): Boolean {
-    if (project.tasks.any { it.name == taskName }) return true
-    return project.children.any { projectContainsTask(it, taskName) }
-  }
-
   fun format(check: Boolean = false): FormatResult {
     val task = if (check) "spotlessCheck" else "spotlessApply"
-    if (!hasTask(task)) {
-      return FormatResult(success = false, taskMissing = true)
-    }
-    return runFormat(task)
-  }
-
-  private fun runFormat(task: String): FormatResult {
     val stdout = ByteArrayOutputStream()
     val stderr = ByteArrayOutputStream()
     return try {
@@ -108,6 +98,12 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
       var root: Throwable = e
       while (root.cause != null && root.cause !== root) root = root.cause!!
       val rootMsg = root.message?.lines()?.firstOrNull { it.isNotBlank() }
+
+      // Detecting "task not found" from the exception (rather than pre-loading the GradleProject
+      // model via Tooling API) skips a full configuration phase on the happy path.
+      if (isTaskNotFoundMessage(root.message, task) || isTaskNotFoundMessage(e.message, task)) {
+        return FormatResult(success = false, taskMissing = true)
+      }
 
       val combined = stderr.toString() + stdout.toString()
       val errorLines =

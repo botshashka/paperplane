@@ -25,7 +25,6 @@ class InitCommand : CliktCommand(name = "init") {
     val version = Versions.paperplaneVersion()
     TerminalUI.header(version)
 
-    // Detect build file
     val buildFileKts = File(projectDir, "build.gradle.kts")
     val buildFileGroovy = File(projectDir, "build.gradle")
 
@@ -46,7 +45,6 @@ class InitCommand : CliktCommand(name = "init") {
     TerminalUI.beginBlock()
     TerminalUI.status("Found ${buildFile.name}")
 
-    // Add plugin to build file if not already present
     val buildContent = buildFile.readText()
     if (buildContent.contains("dev.paperplane")) {
       TerminalUI.status("PaperPlane plugin already applied")
@@ -68,7 +66,6 @@ class InitCommand : CliktCommand(name = "init") {
       TerminalUI.fileCreated("Added PaperPlane plugin to ${buildFile.name}")
     }
 
-    // Add pluginManagement to settings if needed
     val settingsKts = File(projectDir, "settings.gradle.kts")
     val settingsGroovy = File(projectDir, "settings.gradle")
     val settingsFile =
@@ -78,47 +75,25 @@ class InitCommand : CliktCommand(name = "init") {
           else -> null
         }
 
-    if (settingsFile != null) {
+    if (settingsFile != null && ProjectTemplates.gradlePluginInMavenLocal()) {
       val settingsContent = settingsFile.readText()
       if (!settingsContent.contains("mavenLocal")) {
-        val pluginMgmt =
-            """
-            pluginManagement {
-                repositories {
-                    mavenLocal()
-                    gradlePluginPortal()
-                }
-            }
-
-            """
-                .trimIndent()
-        settingsFile.writeText(pluginMgmt + settingsContent)
+        settingsFile.writeText(ProjectTemplates.PLUGIN_MANAGEMENT_BLOCK + settingsContent)
         TerminalUI.fileCreated("Added mavenLocal() to ${settingsFile.name}")
       }
     }
 
-    // Detect Paper version from dependencies, fall back to latest supported
     val match = PAPER_VERSION_PATTERN.find(buildContent)
     val detectedVersion = match?.groupValues?.get(1) ?: PaperVersionResolver().resolveLatest()
 
-    // Create paperplane.yml
     val configFile = File(projectDir, "paperplane.yml")
     if (!configFile.exists()) {
-      configFile.writeText(
-          """
-                server:
-                  version: "$detectedVersion"
-                  jvm-args:
-                    - "-Xmx2G"
-            """
-              .trimIndent() + "\n"
-      )
+      configFile.writeText(ProjectTemplates.paperplaneYml(detectedVersion, "hot-reload", "auto"))
       TerminalUI.fileCreated("paperplane.yml")
     } else {
       TerminalUI.status("paperplane.yml already exists")
     }
 
-    // Create .paperplane dir and gitignore it
     File(projectDir, ".paperplane").mkdirs()
     val gitignore = File(projectDir, ".gitignore")
     if (gitignore.exists()) {

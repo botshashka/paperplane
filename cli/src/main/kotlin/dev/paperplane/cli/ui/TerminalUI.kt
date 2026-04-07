@@ -419,20 +419,29 @@ object TerminalUI {
     }
   }
 
+  /** A single option in a [select] menu. */
+  data class SelectOption(val label: String, val description: String? = null)
+
   /**
-   * Displays an arrow-key selection menu. Must be called outside any block with no spinner active.
-   * Returns the selected index.
+   * Convenience overload taking plain string labels. Returns the selected index.
    *
    * On non-TTY terminals, falls back to a numbered list with line input.
    */
+  @JvmName("selectStrings")
+  fun select(label: String, options: List<String>, note: String? = null, default: Int = 0): Int =
+      select(label, options.map { SelectOption(it) }, note, default)
+
+  /**
+   * Displays an arrow-key selection menu. Must be called outside any block with no spinner active.
+   * Returns the selected index.
+   */
   fun select(
       label: String,
-      options: List<String>,
-      descriptions: List<String> = emptyList(),
+      options: List<SelectOption>,
       note: String? = null,
       default: Int = 0,
   ): Int {
-    if (!isTty) return selectFallback(label, options, descriptions, default)
+    if (!isTty) return selectFallback(label, options, default)
 
     val noteText = if (note != null) "  ${dim(note)}" else ""
     println()
@@ -440,14 +449,11 @@ object TerminalUI {
 
     var selected = default
 
-    // Initial render
     print("\u001b[?25l") // hide cursor
-    renderSelectOptions(options, descriptions, selected)
-    // Add bottom padding, then move cursor back
+    renderSelectOptions(options, selected)
     print("\n".repeat(BOTTOM_PADDING) + "\u001b[${BOTTOM_PADDING}A")
     System.out.flush()
 
-    // Save terminal settings and enter raw mode
     val savedStty = sttyCapture("-g")
 
     try {
@@ -465,19 +471,17 @@ object TerminalUI {
           13,
           10 -> break // Enter
           27 -> { // Escape or escape sequence
-            // Wait briefly for follow-up bytes (arrow keys send ESC [ A/B)
+            // Arrow keys send ESC [ A/B; wait briefly for the follow-up bytes.
             Thread.sleep(20)
             if (System.`in`.available() > 0 && System.`in`.read() == '['.code) {
               when (System.`in`.read()) {
                 'A'.code -> selected = (selected - 1 + options.size) % options.size
                 'B'.code -> selected = (selected + 1) % options.size
               }
-              // Move cursor to first option line, redraw all
               print("\u001b[${options.size}A")
-              renderSelectOptions(options, descriptions, selected)
+              renderSelectOptions(options, selected)
               System.out.flush()
             } else {
-              // Bare ESC — abort
               restoreStty(savedStty)
               print("\u001b[?25h")
               println()
@@ -488,69 +492,57 @@ object TerminalUI {
       }
     } finally {
       restoreStty(savedStty)
-      print("\u001b[?25h") // show cursor
+      print("\u001b[?25h")
       System.out.flush()
     }
 
-    // Collapse: move up to label line (options + 1 for label), clear all, write two-line result
-    val totalLines = options.size + 1 // label + options
+    val totalLines = options.size + 1
     print("\u001b[${totalLines}A")
     for (i in 0 until totalLines) {
-      print("\u001b[2K") // clear line
-      if (i < totalLines - 1) print("\u001b[1B") // move down
+      print("\u001b[2K")
+      if (i < totalLines - 1) print("\u001b[1B")
     }
-    // Cursor is on the last line — move back to first (label line)
     if (totalLines > 1) print("\u001b[${totalLines - 1}A")
     print("\r")
 
-    // Write completed state: ◇ label + answer
     println("  ${dim("◇")}  $label:")
-    println("     ${options[selected]}")
+    println("     ${options[selected].label}")
 
-    // Erase any remaining lines below (excess option lines + bottom padding)
     val excess = totalLines - 2 + BOTTOM_PADDING
     for (i in 0 until excess) {
       print("\u001b[2K\n")
     }
-    // Move cursor back up to right after the result lines
     if (excess > 0) print("\u001b[${excess}A")
     System.out.flush()
 
     return selected
   }
 
-  /** Renders option lines, clearing each line first. Cursor ends after the last line. */
-  private fun renderSelectOptions(
-      options: List<String>,
-      descriptions: List<String>,
-      selected: Int,
-  ) {
+  /**
+   * Renders option lines into a single buffered `print`, clearing each line first. Cursor ends
+   * after the last line. Buffering avoids 2-3 syscalls per option on every arrow-key redraw.
+   */
+  private fun renderSelectOptions(options: List<SelectOption>, selected: Int) {
+    val sb = StringBuilder()
     for ((i, option) in options.withIndex()) {
-      print("\u001b[2K\r") // clear line, carriage return
+      sb.append("\u001b[2K\r")
       val marker = if (i == selected) "${cyan("›")} " else "  "
-      val desc = descriptions.getOrNull(i)
-      val descText = if (desc != null) " ${dim("— $desc")}" else ""
-      val text = if (i == selected) brightWhite(option) else dim(option)
-      print("    $marker$text$descText")
-      if (i < options.size - 1) println() // newline between options, not after last
+      val descText = option.description?.let { " ${dim("— $it")}" } ?: ""
+      val text = if (i == selected) brightWhite(option.label) else dim(option.label)
+      sb.append("    ").append(marker).append(text).append(descText)
+      sb.append('\n')
     }
-    println() // final newline after last option
+    print(sb.toString())
   }
 
   /** Fallback selection for non-TTY environments: numbered list with line input. */
-  private fun selectFallback(
-      label: String,
-      options: List<String>,
-      descriptions: List<String>,
-      default: Int,
-  ): Int {
+  private fun selectFallback(label: String, options: List<SelectOption>, default: Int): Int {
     println()
     println("  $label")
     for ((i, option) in options.withIndex()) {
-      val desc = descriptions.getOrNull(i)
-      val descText = if (desc != null) " — $desc" else ""
+      val descText = option.description?.let { " — $it" } ?: ""
       val marker = if (i == default) " (default)" else ""
-      println("    ${i + 1}. $option$descText$marker")
+      println("    ${i + 1}. ${option.label}$descText$marker")
     }
     print("  Choice [${default + 1}]: ")
     System.out.flush()

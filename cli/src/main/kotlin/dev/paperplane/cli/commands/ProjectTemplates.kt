@@ -5,6 +5,35 @@ import java.io.File
 
 internal object ProjectTemplates {
 
+  /**
+   * `pluginManagement` block that lets a generated project resolve the `dev.paperplane` Gradle
+   * plugin from `~/.m2`. Shared between [settingsGradle] (new projects) and [InitCommand] (existing
+   * projects) so the two sources of truth stay in sync.
+   */
+  const val PLUGIN_MANAGEMENT_BLOCK =
+      """pluginManagement {
+    repositories {
+        mavenLocal()
+        gradlePluginPortal()
+    }
+}
+
+"""
+
+  /**
+   * Returns true if the dev.paperplane gradle plugin is available in the local Maven repo for the
+   * current paperplane version. When true, generated projects need `mavenLocal()` in their
+   * pluginManagement repositories to resolve it. Released paperplane installs (where the plugin
+   * lives on the Gradle Plugin Portal) won't have it locally → no mavenLocal needed.
+   */
+  fun gradlePluginInMavenLocal(): Boolean {
+    val home = System.getProperty("user.home") ?: return false
+    val version = Versions.paperplaneVersion()
+    val artifactDir =
+        File("$home/.m2/repository/dev/paperplane/dev.paperplane.gradle.plugin/$version")
+    return artifactDir.isDirectory
+  }
+
   fun writeTemplate(projectDir: File, path: String, content: String) {
     val file = File(projectDir, path)
     file.parentFile.mkdirs()
@@ -106,44 +135,9 @@ internal object ProjectTemplates {
         .trimIndent() + "\n"
   }
 
-  /**
-   * Returns true if the dev.paperplane gradle plugin is available in the local Maven repo for the
-   * current paperplane version. When true, generated projects need `mavenLocal()` in their
-   * pluginManagement repositories to resolve it. Released paperplane installs (where the plugin
-   * lives on the Gradle Plugin Portal) won't have it locally → no mavenLocal needed.
-   */
-  private fun gradlePluginInMavenLocal(): Boolean {
-    val home = System.getProperty("user.home") ?: return false
-    val version = Versions.paperplaneVersion()
-    val artifactDir =
-        File(
-            "$home/.m2/repository/dev/paperplane/dev.paperplane.gradle.plugin/$version",
-        )
-    return artifactDir.isDirectory
-  }
-
   fun settingsGradle(projectName: String): String {
-    val pluginMgmt =
-        if (gradlePluginInMavenLocal()) {
-          """
-          pluginManagement {
-              repositories {
-                  mavenLocal()
-                  gradlePluginPortal()
-              }
-          }
-
-
-          """
-              .trimIndent() + "\n"
-        } else ""
-
-    return pluginMgmt +
-        """
-        rootProject.name = "$projectName"
-    """
-            .trimIndent() +
-        "\n"
+    val pluginMgmt = if (gradlePluginInMavenLocal()) PLUGIN_MANAGEMENT_BLOCK else ""
+    return pluginMgmt + "rootProject.name = \"$projectName\"\n"
   }
 
   fun mainPluginJava(packageName: String, className: String, displayName: String) =

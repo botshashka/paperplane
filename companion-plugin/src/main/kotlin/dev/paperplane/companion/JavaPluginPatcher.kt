@@ -77,7 +77,6 @@ object JavaPluginPatcher {
       t.stackTrace.take(5).forEach { logger.warning("  at $it") }
       false
     } finally {
-      // Remove transformer on both success and failure — previously the failure path leaked it.
       inst.removeTransformer(transformer)
     }
   }
@@ -134,16 +133,11 @@ internal class JavaPluginTransformer : ClassFileTransformer {
     val writer =
         object : ClassWriter(reader, COMPUTE_FRAMES) {
           override fun getCommonSuperClass(type1: String, type2: String): String {
-            // Default implementation uses Class.forName() which fails across classloader
-            // boundaries. Use the classloader that loaded JavaPlugin to resolve server types.
-            //
-            // Defensive: the current rewritten <init>()V body has no reference-type merge points
-            // that exercise this path, so removing it would not break today's tests. But the
-            // moment anyone adds a try/catch or a second branch storing a different reference
-            // type in the same local, ASM's frame computation will call getCommonSuperClass on
-            // a Paper-internal type the agent's loader can't see, and the transformer will
-            // crash before producing bytes. That is exactly the failure f374fce shipped to fix.
-            // Keeping the override avoids re-walking that ground.
+            // Default impl uses Class.forName() on the agent's loader, which can't see
+            // Paper-internal types. Resolve via the classloader that loaded JavaPlugin so
+            // frame computation works for any future rewrite that introduces reference-type
+            // merge points in <init>()V. See git log for f374fce — this guards against the
+            // regression that fix shipped for.
             val cl =
                 classBeingRedefined?.classLoader ?: return super.getCommonSuperClass(type1, type2)
             return try {
@@ -177,9 +171,9 @@ internal class JavaPluginTransformer : ClassFileTransformer {
               signature: String?,
               exceptions: Array<out String>?,
           ): MethodVisitor? {
-            // Drop the original no-arg constructor entirely; we emit a fresh one in visitEnd().
-            // Returning null here means ASM never traverses the original instructions, so there's
-            // no chance of leftover invokedynamic or other ops leaking into the rewritten body.
+            // Drop the original no-arg constructor entirely so ASM never traverses its
+            // instructions — prevents leftover ops from leaking into the rewritten body
+            // emitted in visitEnd().
             if (name == "<init>" && descriptor == "()V") return null
             return super.visitMethod(access, name, descriptor, signature, exceptions)
           }

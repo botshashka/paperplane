@@ -21,31 +21,39 @@ class PaperVersionResolver(
 
   private val gson = Gson()
 
-  fun resolveLatest(): String {
-    return try {
-      val json = gson.fromJson(fetch(baseUrl), JsonObject::class.java)
-      val versions = json.getAsJsonArray("versions").map { it.asString }
-      val supported = versions.filter {
-        Versions.apiVersion(it) in Versions.SUPPORTED_API_VERSIONS && !it.contains("-")
-      }
-      supported.lastOrNull() ?: Versions.PAPER_FALLBACK
-    } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
-      Versions.PAPER_FALLBACK
-    }
-  }
+  @Volatile private var cachedVersions: List<String>? = null
+
+  fun resolveLatest(): String = fetchSupportedVersions().lastOrNull() ?: Versions.PAPER_FALLBACK
 
   /** Returns the last [count] supported stable Paper versions, latest last. */
   fun resolveRecent(count: Int = 3): List<String> {
-    return try {
-      val json = gson.fromJson(fetch(baseUrl), JsonObject::class.java)
-      val versions = json.getAsJsonArray("versions").map { it.asString }
-      val supported = versions.filter {
-        Versions.apiVersion(it) in Versions.SUPPORTED_API_VERSIONS && !it.contains("-")
-      }
-      if (supported.isEmpty()) listOf(Versions.PAPER_FALLBACK) else supported.takeLast(count)
-    } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
-      listOf(Versions.PAPER_FALLBACK)
+    val supported = fetchSupportedVersions()
+    return if (supported.isEmpty()) listOf(Versions.PAPER_FALLBACK) else supported.takeLast(count)
+  }
+
+  /**
+   * Fetches and filters the supported stable Paper versions. Successful results are memoized for
+   * the lifetime of this resolver instance so a single wizard run can call [resolveLatest] and
+   * [resolveRecent] without a second HTTP round-trip. Failures are NOT cached — a transient network
+   * blip should not permanently stick the resolver to fallback mode if the instance happens to be
+   * reused.
+   */
+  private fun fetchSupportedVersions(): List<String> {
+    cachedVersions?.let {
+      return it
     }
+    val result =
+        try {
+          val json = gson.fromJson(fetch(baseUrl), JsonObject::class.java)
+          val versions = json.getAsJsonArray("versions").map { it.asString }
+          versions.filter {
+            Versions.apiVersion(it) in Versions.SUPPORTED_API_VERSIONS && !it.contains("-")
+          }
+        } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+          emptyList()
+        }
+    if (result.isNotEmpty()) cachedVersions = result
+    return result
   }
 
   private fun fetch(url: String): String {
