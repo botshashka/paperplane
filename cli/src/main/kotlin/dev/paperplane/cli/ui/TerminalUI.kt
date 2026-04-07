@@ -219,13 +219,15 @@ object TerminalUI {
   inline fun phase(body: TerminalUI.() -> PhaseEnd) {
     discardBlock()
     beginBlock(BlockType.PERSIST)
-    val end =
-        try {
-          body()
-        } catch (t: Throwable) {
-          discardBlock()
-          throw t
-        }
+    var completed = false
+    val end: PhaseEnd
+    try {
+      end = body()
+      completed = true
+    } finally {
+      // body threw → discard the partial block before the throw propagates through finally
+      if (!completed) discardBlock()
+    }
     endBlock()
     when (end) {
       PhaseEnd.Watching -> {

@@ -294,16 +294,17 @@ class CreateCommand : CliktCommand(name = "create") {
               )
               .also { Runtime.getRuntime().addShutdownHook(it) }
         } else null
+    var completed = false
     try {
-      return doScaffold(c)
-    } catch (t: Throwable) {
-      if (createdByUs && c.projectDir.exists()) {
+      return doScaffold(c).also { completed = true }
+    } finally {
+      if (!completed && createdByUs && c.projectDir.exists()) {
         try {
           c.projectDir.deleteRecursively()
-        } catch (_: Exception) {}
+        } catch (_: java.io.IOException) {
+          // best-effort
+        }
       }
-      throw t
-    } finally {
       scaffoldInProgress = null
       wrapperProcess = null
       if (hook != null) {
