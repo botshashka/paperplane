@@ -37,6 +37,8 @@ class DevCommand : CliktCommand(name = "dev") {
 
     migrateOldLayout(ppDir)
 
+    if (!ensureEulaAccepted(File(ppDir, "server"))) return
+
     val session =
         DevSession(
             config = config,
@@ -63,6 +65,32 @@ class DevCommand : CliktCommand(name = "dev") {
       DevMode.BLUE_GREEN -> BlueGreenMode(session).run()
       DevMode.RESTART -> RestartMode(session).run()
     }
+  }
+
+  /**
+   * Ensures the Minecraft EULA has been accepted for this server dir. Returns true if accepted
+   * (or already accepted), false if the user declined. Persists acceptance as `eula.txt`.
+   */
+  private fun ensureEulaAccepted(serverDir: File): Boolean {
+    val eulaFile = File(serverDir, "eula.txt")
+    if (eulaFile.exists() && eulaFile.readText().contains("eula=true")) return true
+
+    val choice =
+        TerminalUI.select(
+            "Do you accept the Minecraft EULA?",
+            listOf("Yes", "No"),
+            note = "https://aka.ms/MinecraftEULA",
+        )
+    if (choice != 0) {
+      TerminalUI.beginBlock()
+      TerminalUI.error("You must accept the Minecraft EULA to run a server")
+      TerminalUI.endBlock()
+      return false
+    }
+
+    serverDir.mkdirs()
+    eulaFile.writeText("eula=true\n")
+    return true
   }
 
   private fun migrateOldLayout(ppDir: File) {

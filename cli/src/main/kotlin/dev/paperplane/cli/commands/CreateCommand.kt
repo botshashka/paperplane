@@ -165,19 +165,6 @@ class CreateCommand : CliktCommand(name = "create") {
           "auto"
         }
 
-    val eulaChoice =
-        TerminalUI.select(
-            "Do you accept the Minecraft EULA?",
-            listOf("Yes", "No"),
-            note = "https://aka.ms/MinecraftEULA",
-        )
-    if (eulaChoice != 0) {
-      TerminalUI.beginBlock()
-      TerminalUI.error("You must accept the Minecraft EULA to run a server")
-      TerminalUI.endBlock()
-      return
-    }
-
     createProject(
         ProjectConfig(
             projectDir = projectDir,

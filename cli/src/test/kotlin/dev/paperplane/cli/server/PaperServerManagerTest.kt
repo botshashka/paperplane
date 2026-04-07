@@ -27,7 +27,6 @@ class PaperServerManagerTest {
     assertTrue(props.contains("server-port=25566"))
     assertTrue(props.contains("online-mode=false"))
     assertTrue(props.contains("accepts-transfers=true"))
-    assertTrue(File(manager.serverDir, "eula.txt").exists())
     assertTrue(File(manager.serverDir, "bukkit.yml").exists())
     assertTrue(File(manager.serverDir, "spigot.yml").exists())
   }

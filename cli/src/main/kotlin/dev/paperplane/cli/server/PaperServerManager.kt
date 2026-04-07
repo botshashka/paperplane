@@ -61,8 +61,6 @@ class PaperServerManager(
     serverDir.mkdirs()
     pluginsDir.mkdirs()
 
-    writeIfMissing("eula.txt", "eula=true\n")
-
     // Always overwrite — PaperPlane manages these settings, and Paper rewrites
     // the file on first boot (making writeIfMissing a no-op for new properties)
     File(serverDir, "server.properties")
