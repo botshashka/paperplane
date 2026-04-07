@@ -13,7 +13,8 @@ class PaperServerManager(
 ) {
   companion object {
     internal const val DEFAULT_PORT = 25565
-    private const val STOP_TIMEOUT_SECONDS = 5L
+    private const val GRACEFUL_STOP_TIMEOUT_SECONDS = 30L
+    private const val SIGTERM_TIMEOUT_SECONDS = 5L
     private const val FORCE_STOP_TIMEOUT_SECONDS = 2L
     private const val SAVE_POLL_INTERVAL_MS = 200L
     private const val SERVER_READY_TIMEOUT_MS = 120_000L
@@ -24,6 +25,13 @@ class PaperServerManager(
   private var processStdin: java.io.OutputStream? = null
   private val pluginsDir = File(serverDir, "plugins")
   private val gson = com.google.gson.Gson()
+
+  /**
+   * When true, log lines from this server's output thread are dropped instead of forwarded to the
+   * TUI. Used by blue-green mode to silence the standby server while it's pre-warmed — otherwise
+   * both backends' logs would interleave in the CLI output.
+   */
+  @Volatile var logSuppressed: Boolean = false
 
   /**
    * Cleans up stale state from a previous run that wasn't shut down cleanly. Kills any process
@@ -171,7 +179,7 @@ class PaperServerManager(
     Thread(
             {
               proc.inputStream.bufferedReader().forEachLine { line ->
-                TerminalUI.serverLog("  ${formatServerLine(line)}")
+                if (!logSuppressed) TerminalUI.serverLog("  ${formatServerLine(line)}")
               }
             },
             "server-$port-output",
@@ -185,12 +193,32 @@ class PaperServerManager(
   fun stop() {
     val proc = process ?: return
     if (!proc.isAlive) return
+    val unit = java.util.concurrent.TimeUnit.SECONDS
 
+    // Prefer Paper's own "stop" command — it runs the full shutdown sequence on the main thread
+    // (disable plugins, save worlds, halt) which is more reliable and quieter than SIGTERM.
+    val stdinSent =
+        try {
+          processStdin?.let {
+            it.write("stop\n".toByteArray())
+            it.flush()
+            true
+          } ?: false
+        } catch (_: IOException) {
+          false
+        }
+
+    if (stdinSent && proc.waitFor(GRACEFUL_STOP_TIMEOUT_SECONDS, unit)) {
+      process = null
+      processStdin = null
+      return
+    }
+
+    // Graceful path didn't work — fall back to SIGTERM, then SIGKILL.
     proc.destroy()
-    val exited = proc.waitFor(STOP_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
-    if (!exited) {
+    if (!proc.waitFor(SIGTERM_TIMEOUT_SECONDS, unit)) {
       proc.destroyForcibly()
-      proc.waitFor(FORCE_STOP_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+      proc.waitFor(FORCE_STOP_TIMEOUT_SECONDS, unit)
     }
     process = null
     processStdin = null
