@@ -20,7 +20,14 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
   // All mutable state is accessed exclusively from the main server thread
   // (Bukkit scheduler tasks and event handlers are single-threaded)
   private var lastState: String? = null
-  var isSaving: Boolean = false
+
+  /**
+   * True while the active server's world is no longer authoritative — either the save is in
+   * progress or the CLI has moved on to building/transferring and any further edits will be
+   * discarded when the standby takes over. Consumed by [SaveProtectionListener] to cancel
+   * block edits for the entire rebuild window.
+   */
+  var blockWorldEdits: Boolean = false
     private set
 
   private var reloader: PluginReloader? = null
@@ -55,7 +62,7 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
 
       if (state == lastState) return
       lastState = state
-      isSaving = (state == "saving")
+      blockWorldEdits = state == "saving" || state == "building"
 
       when (state) {
         "saving" -> {
