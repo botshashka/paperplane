@@ -145,8 +145,10 @@ object InteractivePrompts {
    * Reads keystrokes until Enter with non-empty content (→ returns String), Enter with empty
    * content and no default (→ returns null for caller to loop), or Ctrl+C / ESC / EOF (→ throws
    * [PromptCancelledException]).
+   *
+   * Visible for testing — exposes the input-loop state machine without requiring a real terminal.
    */
-  private fun readPromptLine(default: String?, reader: NonBlockingReader): String? {
+  internal fun readPromptLine(default: String?, reader: NonBlockingReader): String? {
     val input = StringBuilder()
     var usingDefault = default != null
     while (true) {
