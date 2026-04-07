@@ -5,6 +5,7 @@ import dev.paperplane.cli.gradle.ClassChanges
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.TerminalUI
+import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -21,13 +22,15 @@ internal class HotReloadMode(private val session: DevSession) {
   private var lastPostBuildSnapshot: Map<String, Long>? = null
   private val javaRuntime by lazy { session.resolveJava() }
 
+  private data class RunningState(val metadata: ProjectMetadata, val paperJar: File)
+
   fun run() {
     val shuttingDown = AtomicBoolean(false)
     Runtime.getRuntime()
         .addShutdownHook(
             Thread {
               if (!shuttingDown.get()) {
-                TerminalUI.discardBlock()
+                TerminalUI.clearPinnedFooter()
                 println()
               }
               serverManager.stop()
@@ -35,28 +38,10 @@ internal class HotReloadMode(private val session: DevSession) {
             }
         )
 
-    val metadata = session.resolveMetadataOrAbort(shuttingDown) ?: return
-    val paperJar =
-        session.initialBuild(metadata, serverManager) {
-          session.runFixWatcher(
-              cleanup = {
-                serverManager.stop()
-                session.gradle.close()
-              }
-          ) {
-            session.handleFixAttempt(serverManager) { meta, jar -> startAndReport(meta, jar) }
-          }
-        } ?: return
-    if (!startServer(metadata, paperJar)) return
-
-    session.showServerInfo(
-        metadata,
-        "localhost:${PaperServerManager.DEFAULT_PORT}",
-        if (javaRuntime.isJbr) "hot-reload (enhanced — JBR)" else "hot-reload",
-    )
+    val state = runStartup(shuttingDown) ?: return
 
     session.runMainWatchLoop(
-        onChanged = { rebuild(metadata) },
+        onChanged = { _ -> rebuild(state.metadata) },
         healthCheck = {
           if (!serverManager.isRunning()) {
             TerminalUI.error("Server process exited unexpectedly")
@@ -68,6 +53,47 @@ internal class HotReloadMode(private val session: DevSession) {
           session.gradle.close()
         },
     )
+  }
+
+  private fun runStartup(shuttingDown: AtomicBoolean): RunningState? {
+    var state: RunningState? = null
+    TerminalUI.phase {
+      val metadata = session.resolveMetadataOrAbort(shuttingDown) ?: return@phase PhaseEnd.None
+      val paperJar =
+          when (val outcome = session.initialBuild(metadata, serverManager)) {
+            is DevSession.BuildOutcome.Success -> outcome.paperJar
+            is DevSession.BuildOutcome.BuildFailed -> {
+              enterFixRecovery()
+              return@phase PhaseEnd.Waiting
+            }
+          }
+      if (!startServer(metadata, paperJar)) return@phase PhaseEnd.None
+      session.showServerInfo(
+          metadata,
+          "localhost:${PaperServerManager.DEFAULT_PORT}",
+          if (javaRuntime.isJbr) "hot-reload (enhanced — JBR)" else "hot-reload",
+      )
+      state = RunningState(metadata, paperJar)
+      PhaseEnd.Watching
+    }
+    return state
+  }
+
+  private fun enterFixRecovery(): Nothing {
+    session.runFixWatcher(
+        cleanup = {
+          serverManager.stop()
+          session.gradle.close()
+        },
+    ) {
+      when (val attempt = session.handleFixAttempt(serverManager)) {
+        is DevSession.FixAttempt.BuildFailed -> PhaseEnd.Waiting
+        is DevSession.FixAttempt.Success -> {
+          session.startServerAndReport(serverManager, attempt.metadata, attempt.paperJar)
+        }
+      }
+    }
+    error("fix recovery loop returned")
   }
 
   private fun startServer(metadata: ProjectMetadata, paperJar: File): Boolean {
@@ -88,20 +114,20 @@ internal class HotReloadMode(private val session: DevSession) {
         TerminalUI.spin("Starting Paper $mcVersion server...") { serverManager.waitForReady() }
     val serverDuration = session.formatDuration(System.currentTimeMillis() - serverStart)
 
-    if (ready) {
+    return if (ready) {
       TerminalUI.success("Paper $mcVersion server ready", serverDuration)
       serverManager.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
+      true
     } else {
       TerminalUI.error("Server failed to start", serverDuration)
       serverManager.writeCompanionStatus("error", mapOf("message" to "Server failed to start"))
-      TerminalUI.endBlock()
+      false
     }
-    return ready
   }
 
   // ── Rebuild ──────────────────────────────────────────────────────────
 
-  private fun rebuild(metadata: ProjectMetadata) {
+  private fun rebuild(metadata: ProjectMetadata): PhaseEnd {
     val totalStart = System.currentTimeMillis()
     val preBuildSnapshot = snapshotBeforeBuild(metadata)
 
@@ -115,8 +141,7 @@ internal class HotReloadMode(private val session: DevSession) {
     if (!buildSuccess) {
       TerminalUI.error("Build failed", buildDuration)
       serverManager.writeCompanionStatus("error", mapOf("message" to "Build failed"))
-      TerminalUI.awaitChanges(watching = false)
-      return
+      return PhaseEnd.Waiting
     }
     TerminalUI.success("Build succeeded", buildDuration)
 
@@ -124,7 +149,8 @@ internal class HotReloadMode(private val session: DevSession) {
     lastPostBuildSnapshot = postBuildSnapshot
     val changes = BuildSnapshot.diff(preBuildSnapshot, postBuildSnapshot)
 
-    triggerReload(metadata, changes, totalStart)
+    triggerReload(metadata, changes)
+    return waitAndReport(metadata, totalStart)
   }
 
   private fun snapshotBeforeBuild(metadata: ProjectMetadata): Map<String, Long> {
@@ -143,7 +169,7 @@ internal class HotReloadMode(private val session: DevSession) {
     return lastPostBuildSnapshot ?: buildSnapshot!!.take()
   }
 
-  private fun triggerReload(metadata: ProjectMetadata, changes: ClassChanges, totalStart: Long) {
+  private fun triggerReload(metadata: ProjectMetadata, changes: ClassChanges) {
     val ppDir = File(serverManager.serverDir, ".paperplane")
     ppDir.mkdirs()
     File(ppDir, "reload-complete").delete()
@@ -155,8 +181,6 @@ internal class HotReloadMode(private val session: DevSession) {
     } else {
       triggerJarReload(metadata)
     }
-
-    waitAndReport(metadata, ppDir, totalStart)
   }
 
   private fun triggerDirectoryReload(
@@ -204,7 +228,8 @@ internal class HotReloadMode(private val session: DevSession) {
     )
   }
 
-  private fun waitAndReport(metadata: ProjectMetadata, ppDir: File, totalStart: Long) {
+  private fun waitAndReport(metadata: ProjectMetadata, totalStart: Long): PhaseEnd {
+    val ppDir = File(serverManager.serverDir, ".paperplane")
     val reloadStart = System.currentTimeMillis()
     val success =
         TerminalUI.spin("Reloading ${metadata.pluginName}...") {
@@ -212,16 +237,17 @@ internal class HotReloadMode(private val session: DevSession) {
         }
     val reloadDuration = session.formatDuration(System.currentTimeMillis() - reloadStart)
 
-    if (success) {
+    return if (success) {
       val totalDuration = session.formatDuration(System.currentTimeMillis() - totalStart)
       TerminalUI.success("Plugin reloaded", reloadDuration)
       TerminalUI.totalTime(totalDuration)
       serverManager.writeCompanionStatus("ready", mapOf("duration" to totalDuration))
+      PhaseEnd.Watching
     } else {
       TerminalUI.error("Hot-reload failed (server still running with old plugin)", reloadDuration)
       serverManager.writeCompanionStatus("error", mapOf("message" to "Hot-reload failed"))
+      PhaseEnd.Watching
     }
-    TerminalUI.awaitChanges()
   }
 
   private fun waitForReloadResult(ppDir: File, timeoutMs: Long): Boolean {
@@ -242,9 +268,5 @@ internal class HotReloadMode(private val session: DevSession) {
       Thread.sleep(RELOAD_POLL_INTERVAL_MS)
     }
     return false
-  }
-
-  private fun startAndReport(metadata: ProjectMetadata, paperJar: File) {
-    session.startServerAndReport(serverManager, metadata, paperJar)
   }
 }

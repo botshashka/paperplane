@@ -8,6 +8,7 @@ import dev.paperplane.cli.server.JbrDownloader
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.TerminalUI
+import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
 import dev.paperplane.cli.util.JavaRuntimeUtil
 import dev.paperplane.cli.watcher.FileWatcher
 import java.io.File
@@ -24,12 +25,27 @@ internal class DevSession(
     private const val MAIN_LOOP_POLL_INTERVAL_MS = 1000L
   }
 
+  /** Result of an initial-build-and-resolve attempt used during startup or fix recovery. */
+  sealed class BuildOutcome {
+    data class Success(val paperJar: File) : BuildOutcome()
+    object BuildFailed : BuildOutcome()
+  }
+
+  /** Result of a fix-watcher build attempt. */
+  sealed class FixAttempt {
+    data class Success(val metadata: ProjectMetadata, val paperJar: File) : FixAttempt()
+    object BuildFailed : FixAttempt()
+  }
+
+  /**
+   * Runs the metadata-resolution step. Emits directly into whatever block/phase the caller has
+   * open; never touches block lifecycle. Returns null if the metadata can't be resolved (plugin
+   * not applied) and signals shutdown via [shuttingDown].
+   */
   fun resolveMetadataOrAbort(shuttingDown: AtomicBoolean): ProjectMetadata? {
-    TerminalUI.beginBlock()
     val metadata = TerminalUI.spin("Reading project metadata...") { gradle.metadata() }
     if (metadata == null) {
       pluginNotFoundError()
-      TerminalUI.endBlock()
       shuttingDown.set(true)
       gradle.close()
       return null
@@ -51,11 +67,15 @@ internal class DevSession(
     return mcVersion
   }
 
+  /**
+   * Runs the initial build + Paper download. Returns [BuildOutcome.Success] with the resolved
+   * Paper jar on success, or [BuildOutcome.BuildFailed] if the build failed. Emits directly
+   * into the caller's phase; never touches block lifecycle.
+   */
   fun initialBuild(
       metadata: ProjectMetadata,
       serverManager: PaperServerManager,
-      onBuildFailure: () -> Unit,
-  ): File? {
+  ): BuildOutcome {
     val buildStart = System.currentTimeMillis()
     serverManager.writeCompanionStatus("building")
     val buildSuccess = TerminalUI.spin("Building...") { gradle.build() }
@@ -64,37 +84,42 @@ internal class DevSession(
     if (!buildSuccess) {
       TerminalUI.error("Build failed", buildDuration)
       serverManager.writeCompanionStatus("error", mapOf("message" to "Build failed"))
-      TerminalUI.awaitChanges(watching = false)
-      onBuildFailure()
-      return null
+      return BuildOutcome.BuildFailed
     }
     TerminalUI.success("Build succeeded", buildDuration)
 
     val mcVersion = resolveMcVersion(metadata)
-    return downloadPaper(mcVersion)
+    val paperJar = downloadPaper(mcVersion)
+    return BuildOutcome.Success(paperJar)
   }
 
   fun downloadPaper(mcVersion: String): File =
       TerminalUI.spin("Downloading Paper $mcVersion...") { downloader.download(mcVersion) }
 
+  /**
+   * Emits the three-line server summary (address / plugin / mode). Caller is inside a phase;
+   * this function just appends to it.
+   */
   fun showServerInfo(metadata: ProjectMetadata, serverAddress: String, modeLabel: String) {
-    TerminalUI.endBlock()
-    TerminalUI.beginBlock()
     TerminalUI.info("Server:", serverAddress)
     TerminalUI.info("Plugin:", "${metadata.pluginName} v${metadata.version}")
     TerminalUI.info("Mode:", modeLabel)
-    TerminalUI.awaitChanges()
   }
 
-  fun runFixWatcher(cleanup: () -> Unit, onFix: () -> Unit) {
+  /**
+   * Blocks on the fix-recovery file watcher. On every change, wraps the [onFix] callback in a
+   * phase whose trailing footer is determined by [onFix]'s returned [PhaseEnd]. A "Change
+   * detected" change() line is prepended automatically inside the phase.
+   */
+  fun runFixWatcher(cleanup: () -> Unit, onFix: TerminalUI.() -> PhaseEnd) {
     val srcDir = File(projectDir, "src")
     val watcher =
         FileWatcher(srcDir, config.dev.debounceMs) { changedFiles ->
-          TerminalUI.discardBlock()
-          TerminalUI.beginBlock()
-          val shortName = changedFiles.firstOrNull()?.let { File(it).name } ?: "files"
-          TerminalUI.change("Change detected: $shortName")
-          onFix()
+          TerminalUI.phase {
+            val shortName = changedFiles.firstOrNull()?.let { File(it).name } ?: "files"
+            change("Change detected: $shortName")
+            onFix()
+          }
         }
     watcher.start()
 
@@ -106,10 +131,11 @@ internal class DevSession(
     }
   }
 
-  fun handleFixAttempt(
-      serverManager: PaperServerManager?,
-      onReady: (metadata: ProjectMetadata, paperJar: File) -> Unit,
-  ) {
+  /**
+   * Runs a fix-watcher iteration body: rebuild, download the Paper jar if needed, return a
+   * [FixAttempt] describing the outcome. Emits directly into the current phase.
+   */
+  fun handleFixAttempt(serverManager: PaperServerManager?): FixAttempt {
     val buildStart = System.currentTimeMillis()
     serverManager?.writeCompanionStatus("building")
     val buildSuccess = gradle.build()
@@ -117,31 +143,35 @@ internal class DevSession(
 
     if (!buildSuccess) {
       TerminalUI.error("Build failed", buildDuration)
-      TerminalUI.awaitChanges(watching = false)
-      return
+      return FixAttempt.BuildFailed
     }
     TerminalUI.success("Build succeeded", buildDuration)
 
-    val metadata = gradle.metadata() ?: return
+    val metadata = gradle.metadata() ?: return FixAttempt.BuildFailed
     val mcVersion = resolveMcVersion(metadata)
     val paperJar = downloader.download(mcVersion)
-    onReady(metadata, paperJar)
+    return FixAttempt.Success(metadata, paperJar)
   }
 
+  /**
+   * Blocks on the main file watcher. On every change, wraps [onChanged] in a phase with an
+   * automatic "Change detected" prefix. [healthCheck] runs between phases and can emit an
+   * error into the pinned watching footer if it decides to exit the loop.
+   */
   fun runMainWatchLoop(
-      onChanged: (changedFiles: List<String>) -> Unit,
+      onChanged: TerminalUI.(changedFiles: List<String>) -> PhaseEnd,
       healthCheck: () -> Boolean,
       cleanup: () -> Unit,
   ) {
     val srcDir = File(projectDir, "src")
     val watcher =
         FileWatcher(srcDir, config.dev.debounceMs) { changedFiles ->
-          TerminalUI.discardBlock()
-          TerminalUI.beginBlock()
-          val shortName = changedFiles.firstOrNull()?.let { File(it).name } ?: "files"
-          val extra = if (changedFiles.size > 1) " (+${changedFiles.size - 1} more)" else ""
-          TerminalUI.change("Change detected: $shortName$extra")
-          onChanged(changedFiles)
+          TerminalUI.phase {
+            val shortName = changedFiles.firstOrNull()?.let { File(it).name } ?: "files"
+            val extra = if (changedFiles.size > 1) " (+${changedFiles.size - 1} more)" else ""
+            change("Change detected: $shortName$extra")
+            onChanged(changedFiles)
+          }
         }
     watcher.start()
 
@@ -155,15 +185,19 @@ internal class DevSession(
     } catch (_: InterruptedException) {} finally {
       watcher.stop()
       cleanup()
-      TerminalUI.discardBlock()
+      TerminalUI.clearPinnedFooter()
     }
   }
 
+  /**
+   * Starts a server after a successful fix-recovery build and transitions to the main loop.
+   * Returns the [PhaseEnd] that the caller should emit.
+   */
   fun startServerAndReport(
       serverManager: PaperServerManager,
       metadata: ProjectMetadata,
       paperJar: File,
-  ) {
+  ): PhaseEnd {
     serverManager.cleanupStale()
     serverManager.configure()
     val builtJar = File(projectDir, metadata.jarPath)
@@ -174,11 +208,15 @@ internal class DevSession(
     serverManager.start(paperJar, config.server.jvmArgs)
     val ready = serverManager.waitForReady()
     val serverDuration = formatDuration(System.currentTimeMillis() - serverStart)
-    if (ready) {
+    return if (ready) {
       TerminalUI.success("Server ready", serverDuration)
       serverManager.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
+      PhaseEnd.Watching
+    } else {
+      TerminalUI.error("Server failed to start", serverDuration)
+      serverManager.writeCompanionStatus("error", mapOf("message" to "Server failed to start"))
+      PhaseEnd.Waiting
     }
-    TerminalUI.awaitChanges()
   }
 
   fun formatDuration(ms: Long): String = formatDurationMs(ms)
@@ -202,8 +240,6 @@ internal class DevSession(
 
   private fun pluginNotFoundError() {
     TerminalUI.error("PaperPlane Gradle plugin not found.")
-    TerminalUI.endBlock()
-    TerminalUI.beginBlock()
     TerminalUI.info("ppl init", "add PaperPlane to this project")
     TerminalUI.info("ppl create", "scaffold a new plugin")
   }

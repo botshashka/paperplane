@@ -24,9 +24,22 @@ object TerminalUI {
   private const val WHITE = "\u001b[37m"
   private const val BRIGHT_WHITE = "\u001b[97m"
 
-  enum class BlockType {
+  @PublishedApi
+  internal enum class BlockType {
     PERSIST, // printed to scroll when ended (startup, rebuild, info blocks)
     TRANSIENT, // erased silently when ended (watching/waiting status)
+  }
+
+  /**
+   * Controls what trailing footer [phase] opens after its body returns.
+   * - [Watching]: "Watching for changes..." transient footer (normal success flow)
+   * - [Waiting]: "Waiting for changes..." transient footer (build/server failure flow)
+   * - [None]: no trailing footer (terminal states — shutdown, unrecoverable error)
+   */
+  enum class PhaseEnd {
+    Watching,
+    Waiting,
+    None,
   }
 
   // Sticky footer state — all guarded by [lock]
@@ -130,14 +143,10 @@ object TerminalUI {
     hasLogOutput = false
   }
 
-  // ── Block lifecycle ────────────────────────────────────────────────
+  // ── Block lifecycle (internal — invoked by block { } / phase { }) ──
 
-  /**
-   * Starts a new pinned footer block. [type] determines what happens when the block ends:
-   * - [BlockType.PERSIST]: content is printed to scroll
-   * - [BlockType.TRANSIENT]: content is silently erased
-   */
-  fun beginBlock(type: BlockType = BlockType.PERSIST) {
+  @PublishedApi
+  internal fun beginBlock(type: BlockType = BlockType.PERSIST) {
     lock.withLock {
       blockActive = true
       currentBlockType = type
@@ -145,11 +154,8 @@ object TerminalUI {
     }
   }
 
-  /**
-   * Ends the current block. PERSIST blocks are printed to scroll with a blank line before (not
-   * after) for separation from previous content. TRANSIENT blocks are silently erased.
-   */
-  fun endBlock() {
+  @PublishedApi
+  internal fun endBlock() {
     lock.withLock {
       if (!blockActive && blockLines.isEmpty()) return
       if (isTty) clearDisplay()
@@ -164,26 +170,13 @@ object TerminalUI {
     }
   }
 
-  /**
-   * Discards the current pinned block without printing it, regardless of type. Use in shutdown
-   * hooks where no new block follows.
-   */
-  fun discardBlock() {
+  @PublishedApi
+  internal fun discardBlock() {
     lock.withLock {
       if (!blockActive && blockLines.isEmpty()) return
       if (isTty) clearDisplay()
       resetBlock()
     }
-  }
-
-  /**
-   * Ends the current block and starts a transient "Watching/Waiting" block. Convenience for the
-   * pattern that repeats throughout DevCommand.
-   */
-  fun awaitChanges(watching: Boolean = true) {
-    endBlock()
-    beginBlock(BlockType.TRANSIENT)
-    status(if (watching) "Watching for changes..." else "Waiting for changes...")
   }
 
   /**
@@ -204,6 +197,54 @@ object TerminalUI {
     } finally {
       endBlock()
     }
+  }
+
+  /**
+   * Scoped iteration block for dev-server loops. Discards any prior pinned footer, opens a
+   * PERSIST block, runs [body], closes it, then opens a trailing TRANSIENT footer whose label
+   * is determined by [body]'s return value.
+   *
+   * ```
+   * TerminalUI.phase {
+   *     change("Change detected: Main.java")
+   *     if (!build()) return@phase PhaseEnd.Waiting
+   *     success("Built")
+   *     PhaseEnd.Watching
+   * }
+   * ```
+   *
+   * Exceptions inside [body] clear the pinned footer and rethrow — the block doesn't leak.
+   */
+  inline fun phase(body: TerminalUI.() -> PhaseEnd) {
+    discardBlock()
+    beginBlock(BlockType.PERSIST)
+    val end =
+        try {
+          body()
+        } catch (t: Throwable) {
+          discardBlock()
+          throw t
+        }
+    endBlock()
+    when (end) {
+      PhaseEnd.Watching -> {
+        beginBlock(BlockType.TRANSIENT)
+        status("Watching for changes...")
+      }
+      PhaseEnd.Waiting -> {
+        beginBlock(BlockType.TRANSIENT)
+        status("Waiting for changes...")
+      }
+      PhaseEnd.None -> Unit
+    }
+  }
+
+  /**
+   * Clears any pinned footer. Safety net for shutdown hooks; also used between dev-server
+   * phases when a health-check fails. Idempotent — no-op if nothing is pinned.
+   */
+  fun clearPinnedFooter() {
+    discardBlock()
   }
 
   // ── Output methods (block-aware) ───────────────────────────────────

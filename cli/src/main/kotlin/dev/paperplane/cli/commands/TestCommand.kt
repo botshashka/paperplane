@@ -7,6 +7,7 @@ import dev.paperplane.cli.Versions
 import dev.paperplane.cli.devserver.formatDurationMs
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.ui.TerminalUI
+import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
 import dev.paperplane.cli.watcher.FileWatcher
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
@@ -34,29 +35,25 @@ class TestCommand : CliktCommand(name = "test") {
     TerminalUI.header(version)
 
     if (watch) {
-      TerminalUI.beginBlock()
-      runTestsInBlock()
-      TerminalUI.endBlock()
-
-      TerminalUI.beginBlock(TerminalUI.BlockType.TRANSIENT)
-      TerminalUI.status("Watching for changes...")
+      TerminalUI.phase {
+        runTestsInBlock()
+        PhaseEnd.Watching
+      }
 
       val watcher =
           FileWatcher(File(projectDir, "src")) {
-            TerminalUI.discardBlock()
-            TerminalUI.beginBlock()
-            TerminalUI.change("Re-running tests...")
-            runTestsInBlock()
-            TerminalUI.endBlock()
-
-            TerminalUI.beginBlock(TerminalUI.BlockType.TRANSIENT)
-            TerminalUI.status("Watching for changes...")
+            TerminalUI.phase {
+              change("Re-running tests...")
+              runTestsInBlock()
+              PhaseEnd.Watching
+            }
           }
       watcher.start()
       try {
         while (true) Thread.sleep(WATCH_POLL_INTERVAL_MS)
       } catch (_: InterruptedException) {
         watcher.stop()
+        TerminalUI.clearPinnedFooter()
       }
     } else {
       TerminalUI.block { runTestsInBlock() }

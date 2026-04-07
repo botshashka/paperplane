@@ -62,21 +62,23 @@ The CLI and companion plugin coordinate through flag files in `.paperplane/` ins
 
 ### TerminalUI Block System
 
-All CLI output goes through `TerminalUI` (`cli/.../ui/TerminalUI.kt`). Spacing between sections is handled by **blocks**, not manual `blank()` or `println()` calls.
+All CLI output goes through `TerminalUI` (`cli/.../ui/TerminalUI.kt`). Spacing between sections is handled by **scoped blocks**, not manual `blank()` or `println()` calls.
+
+**Two scoped primitives:**
+- `TerminalUI.block { … }` — one-shot PERSIST block for command output. The lambda receiver is `TerminalUI`, so emit calls (`success(...)`, `info(...)`, `error(...)`) are unqualified. The block closes in a finally, so exceptions can't leak a pinned footer.
+- `TerminalUI.phase { … PhaseEnd.Watching }` — iteration-scoped block for dev-server loops. Discards any prior pinned footer, opens a PERSIST block, runs the body, then opens a trailing TRANSIENT footer based on the returned `PhaseEnd`:
+  - `PhaseEnd.Watching` → "Watching for changes..."
+  - `PhaseEnd.Waiting` → "Waiting for changes..." (build/server failure)
+  - `PhaseEnd.None` → no trailing footer (terminal exit)
 
 **Rules:**
-- Wrap output in `beginBlock()` / `endBlock()`. Every block automatically gets 1 blank line above it.
-- PERSIST blocks (default) commit content to scroll. TRANSIENT blocks live in the footer and are erased on discard.
-- Use `awaitChanges()` to end the current block and start a transient "Watching..." footer.
-- To add a blank line between two groups of output, **split them into two blocks** — don't insert `blank()` between them.
+- Every block automatically gets 1 blank line above it. To add space between two groups of output, use two `block { }` calls — don't insert `blank()` between them.
 - `blank()` is only for intra-block spacing (visual grouping within a single block).
-- Never add manual `println()` for spacing. The block system handles it.
-
-**How spacing works (no cross-block state):**
-- `beginBlock(PERSIST)` prints a blank line to scroll (permanent separator).
-- `beginBlock(TRANSIENT)` renders the separator in the footer via `redraw()` (erased with the block).
-- `hasExternalOutput` (block-scoped) handles the gap between server logs and block content.
-- `endBlock()` prints content with no trailing blank line — the *next* `beginBlock` provides the separator.
+- `serverLog()` interleaves log lines above the pinned footer; safe to call from inside or outside a block/phase.
+- `spin(msg) { … }` pins a spinner. Inside a `block { }` / `phase { }` it reuses the outer block; outside, it auto-opens one.
+- `TerminalUI.clearPinnedFooter()` clears any pinned footer. Only needed in shutdown hooks as a safety net.
+- Deep helpers (`GradleBridge`, `PaperServerManager`, etc.) call typed emit methods (`status`, `error`, `buildError`, `serverLog`) directly — they inherit the current block from whatever phase the command opened.
+- `beginBlock` / `endBlock` / `discardBlock` are `@PublishedApi internal` implementation details of `block { }` and `phase { }`. Don't call them directly.
 
 ## Commit Convention
 
