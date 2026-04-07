@@ -16,10 +16,10 @@ dependencies {
 }
 
 tasks.test {
-  jvmArgs(
-      "-Djdk.attach.allowAttachSelf=true",
-      "-Xlog:redefine+class*=trace",
-  )
+  jvmArgs("-Djdk.attach.allowAttachSelf=true")
+  // JavaPluginRetransformTest mutates the live JavaPlugin class via Instrumentation,
+  // which would break sibling tests (e.g. MockBukkit-based ones) in the same JVM.
+  setForkEvery(1)
 }
 
 tasks.processResources { expand("version" to project.version) }

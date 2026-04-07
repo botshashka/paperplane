@@ -1,5 +1,7 @@
 package dev.paperplane.companion
 
+import java.io.PrintWriter
+import java.io.StringWriter
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -11,8 +13,6 @@ import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
 import org.objectweb.asm.util.CheckClassAdapter
-import java.io.PrintWriter
-import java.io.StringWriter
 
 class JavaPluginPatcherTest {
 
@@ -144,6 +144,54 @@ class JavaPluginPatcherTest {
         output.contains("Error"),
         "Verifier reported errors:\n$output",
     )
+  }
+
+  @Test
+  fun `transformed init contains no invokedynamic`() {
+    // Regression test for the JEP 280 string-concat leak: Paper's javac-generated <init>
+    // contains an invokedynamic for the IllegalStateException message. The previous
+    // RewrittenInitVisitor only filtered known instruction kinds and let the invokedynamic
+    // through, producing a verifier failure.
+    val original = getJavaPluginBytes()
+    val transformed =
+        transformer.transform(
+            null,
+            "org/bukkit/plugin/java/JavaPlugin",
+            org.bukkit.plugin.java.JavaPlugin::class.java,
+            null,
+            original,
+        )!!
+
+    var indyCount = 0
+    ClassReader(transformed)
+        .accept(
+            object : ClassVisitor(Opcodes.ASM9) {
+              override fun visitMethod(
+                  access: Int,
+                  name: String?,
+                  descriptor: String?,
+                  signature: String?,
+                  exceptions: Array<out String>?,
+              ): MethodVisitor? {
+                if (name == "<init>" && descriptor == "()V") {
+                  return object : MethodVisitor(Opcodes.ASM9) {
+                    override fun visitInvokeDynamicInsn(
+                        name: String?,
+                        descriptor: String?,
+                        bootstrapMethodHandle: org.objectweb.asm.Handle?,
+                        vararg bootstrapMethodArguments: Any?,
+                    ) {
+                      indyCount++
+                    }
+                  }
+                }
+                return null
+              }
+            },
+            0,
+        )
+
+    assertEquals(0, indyCount, "Rewritten <init>()V must not contain any invokedynamic")
   }
 
   @Test
