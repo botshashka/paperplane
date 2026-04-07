@@ -173,7 +173,12 @@ object InteractivePrompts {
    * [PromptCancelledException]).
    *
    * Visible for testing — exposes the input-loop state machine without requiring a real terminal.
+   *
+   * Suppressions: this is a keystroke state machine where each branch handles a distinct key (EOF,
+   * Ctrl+C, ESC, Enter, backspace, arrow-key escape sequence, printable). Decomposing further would
+   * split tightly-related branches across unrelated helpers and obscure intent.
    */
+  @Suppress("CyclomaticComplexMethod", "LongMethod")
   internal fun readPromptLine(default: String?, reader: NonBlockingReader): String? {
     val input = StringBuilder()
     var usingDefault = default != null

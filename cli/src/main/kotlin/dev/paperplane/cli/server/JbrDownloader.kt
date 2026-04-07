@@ -26,7 +26,14 @@ class JbrDownloader(cacheDir: File? = null) {
   private val gson = Gson()
   private val cacheDir = cacheDir ?: File(Platform.paperplaneHome, "jbr")
 
-  /** Downloads JBR if not cached. Returns the path to the `java` binary. */
+  /**
+   * Downloads JBR if not cached. Returns the path to the `java` binary.
+   *
+   * Three legitimately distinct failure modes (no release found / HTTP error / extracted but binary
+   * not found) at three different stages of the procedure — collapsing them into a single throw
+   * site would obscure where the failure originated.
+   */
+  @Suppress("ThrowsCount")
   fun download(jdkMajorVersion: String = "21"): File {
     val os = detectOs()
     val arch = detectArch()

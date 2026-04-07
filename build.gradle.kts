@@ -31,10 +31,13 @@ subprojects {
         // Without this flag the plugin runs with an empty ruleset and silently reports zero findings.
         buildUponDefaultConfig.set(true)
         config.setFrom(rootProject.file("config/detekt/detekt.yml"))
-        // Report findings without breaking the build. The existing codebase has pre-existing
-        // findings against detekt's defaults (magic numbers, TooManyFunctions on facade objects,
-        // etc.) — triage is tracked as a follow-up cleanup pass, not a blocker.
-        ignoreFailures.set(true)
+        // Only `cli` is currently held to a strict gate. The other modules (companion-plugin,
+        // velocity-plugin, gradle-plugin) have pre-existing findings against the bundled defaults
+        // that are tracked for follow-up cleanup, not blockers for this branch. They still produce
+        // detekt reports — `ignoreFailures` only suppresses build failure, not analysis.
+        if (project.name != "cli") {
+            ignoreFailures.set(true)
+        }
     }
 
 tasks.withType<Test> {

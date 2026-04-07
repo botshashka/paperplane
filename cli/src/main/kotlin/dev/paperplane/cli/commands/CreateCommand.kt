@@ -282,42 +282,55 @@ class CreateCommand : CliktCommand(name = "create") {
   private fun scaffoldFiles(c: ProjectConfig): Boolean {
     val createdByUs = !c.projectDir.exists()
     scaffoldInProgress = if (createdByUs) c.projectDir else null
-    val hook =
-        if (createdByUs) {
-          Thread(
-                  {
-                    val dir = scaffoldInProgress ?: return@Thread
-                    try {
-                      wrapperProcess?.destroyForcibly()
-                    } catch (_: Exception) {}
-                    try {
-                      if (dir.exists()) dir.deleteRecursively()
-                    } catch (_: Exception) {}
-                  },
-                  "create-scaffold-rollback",
-              )
-              .also { Runtime.getRuntime().addShutdownHook(it) }
-        } else null
+    val hook = if (createdByUs) installRollbackHook() else null
     var completed = false
     try {
       return doScaffold(c).also { completed = true }
     } finally {
-      if (!completed && createdByUs && c.projectDir.exists()) {
-        try {
-          c.projectDir.deleteRecursively()
-        } catch (_: java.io.IOException) {
-          // best-effort
-        }
-      }
+      rollbackOnFailure(c, completed, createdByUs)
       scaffoldInProgress = null
       wrapperProcess = null
-      if (hook != null) {
-        try {
-          Runtime.getRuntime().removeShutdownHook(hook)
-        } catch (_: IllegalStateException) {
-          // JVM already shutting down
-        }
-      }
+      removeShutdownHookSafely(hook)
+    }
+  }
+
+  private fun installRollbackHook(): Thread {
+    val hook =
+        Thread(
+            {
+              val dir = scaffoldInProgress ?: return@Thread
+              try {
+                wrapperProcess?.destroyForcibly()
+              } catch (_: Exception) {
+                // best-effort
+              }
+              try {
+                if (dir.exists()) dir.deleteRecursively()
+              } catch (_: Exception) {
+                // best-effort
+              }
+            },
+            "create-scaffold-rollback",
+        )
+    Runtime.getRuntime().addShutdownHook(hook)
+    return hook
+  }
+
+  private fun rollbackOnFailure(c: ProjectConfig, completed: Boolean, createdByUs: Boolean) {
+    if (completed || !createdByUs || !c.projectDir.exists()) return
+    try {
+      c.projectDir.deleteRecursively()
+    } catch (_: java.io.IOException) {
+      // best-effort
+    }
+  }
+
+  private fun removeShutdownHookSafely(hook: Thread?) {
+    if (hook == null) return
+    try {
+      Runtime.getRuntime().removeShutdownHook(hook)
+    } catch (_: IllegalStateException) {
+      // JVM already shutting down
     }
   }
 
