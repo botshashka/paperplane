@@ -71,32 +71,17 @@ class JbrDownloader(cacheDir: File? = null) {
 
   private fun findJavaBin(jbrDir: File): File? {
     if (!jbrDir.exists()) return null
-
-    val binaryName = if (Platform.isWindows) "java.exe" else "java"
-
-    // Direct bin
-    val direct = File(jbrDir, "bin/$binaryName")
-    if (direct.exists()) return direct
-
-    // macOS layout
-    if (!Platform.isWindows) {
-      val macLayout = File(jbrDir, "Contents/Home/bin/$binaryName")
-      if (macLayout.exists()) return macLayout
-    }
-
-    // Search one level deep (archive extracts to a subdirectory)
-    val subdirs = jbrDir.listFiles { f -> f.isDirectory } ?: return null
-    for (subdir in subdirs) {
-      val relPaths =
-          if (Platform.isWindows) listOf("bin/$binaryName")
-          else listOf("bin/$binaryName", "Contents/Home/bin/$binaryName")
-      for (relPath in relPaths) {
-        val candidate = File(subdir, relPath)
-        if (candidate.exists()) return candidate
+    val binary = if (Platform.isWindows) "java.exe" else "java"
+    val candidates = sequence {
+      yield(File(jbrDir, "bin/$binary"))
+      if (!Platform.isWindows) yield(File(jbrDir, "Contents/Home/bin/$binary"))
+      val subdirs = jbrDir.listFiles { f -> f.isDirectory } ?: emptyArray()
+      for (subdir in subdirs) {
+        yield(File(subdir, "bin/$binary"))
+        if (!Platform.isWindows) yield(File(subdir, "Contents/Home/bin/$binary"))
       }
     }
-
-    return null
+    return candidates.firstOrNull { it.exists() }
   }
 
   private data class JbrRelease(val version: String, val buildId: String)

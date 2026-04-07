@@ -67,23 +67,31 @@ object Platform {
       while (entry != null) {
         val name = if (stripTopLevel) entry.name.substringAfter("/", "") else entry.name
         if (name.isNotEmpty()) {
-          val outFile = File(targetDir, name)
-          if (!outFile.canonicalPath.startsWith(targetDir.canonicalPath + File.separator)) {
-            throw IOException("Zip entry outside target directory: ${entry.name}")
-          }
-          if (entry.isDirectory) {
-            outFile.mkdirs()
-          } else {
-            outFile.parentFile.mkdirs()
-            outFile.outputStream().use { out -> zis.copyTo(out) }
-            if (markExecutable(name)) {
-              outFile.setExecutable(true)
-            }
-          }
+          extractEntry(zis, entry, name, targetDir, markExecutable)
         }
         zis.closeEntry()
         entry = zis.nextEntry
       }
     }
+  }
+
+  private fun extractEntry(
+      zis: ZipInputStream,
+      entry: java.util.zip.ZipEntry,
+      name: String,
+      targetDir: File,
+      markExecutable: (String) -> Boolean,
+  ) {
+    val outFile = File(targetDir, name)
+    if (!outFile.canonicalPath.startsWith(targetDir.canonicalPath + File.separator)) {
+      throw IOException("Zip entry outside target directory: ${entry.name}")
+    }
+    if (entry.isDirectory) {
+      outFile.mkdirs()
+      return
+    }
+    outFile.parentFile.mkdirs()
+    outFile.outputStream().use { out -> zis.copyTo(out) }
+    if (markExecutable(name)) outFile.setExecutable(true)
   }
 }
