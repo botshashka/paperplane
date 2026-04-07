@@ -483,7 +483,7 @@ object TerminalUI {
               System.out.flush()
             }
             else -> {
-              if (b in 32..126) {
+              if (b >= 32 && !Character.isISOControl(b)) {
                 if (usingDefault) {
                   input.clear()
                   usingDefault = false
