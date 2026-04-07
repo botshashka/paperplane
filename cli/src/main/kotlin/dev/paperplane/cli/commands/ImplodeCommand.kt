@@ -39,7 +39,10 @@ class ImplodeCommand : CliktCommand(name = "implode") {
       status("Total: ${Platform.formatSize(totalSize)}")
     }
 
-    if (!force && !InteractivePrompts.confirm("Are you sure? This will remove ppl from your system.")) {
+    if (
+        !force &&
+            !InteractivePrompts.confirm("Are you sure? This will remove ppl from your system.")
+    ) {
       TerminalUI.status("Cancelled")
       return
     }

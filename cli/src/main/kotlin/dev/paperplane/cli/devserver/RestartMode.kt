@@ -44,8 +44,8 @@ internal class RestartMode(private val session: DevSession) {
   }
 
   /**
-   * Runs the startup sequence (metadata → build → paper download → server start → info) inside
-   * a single phase. Returns the running state on success, or null on failure (in which case the
+   * Runs the startup sequence (metadata → build → paper download → server start → info) inside a
+   * single phase. Returns the running state on success, or null on failure (in which case the
    * phase's trailing footer is PhaseEnd.None and the mode exits).
    *
    * On a failed initial build, transfers to the fix-recovery loop which blocks forever.

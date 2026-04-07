@@ -11,9 +11,9 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
 /**
- * Unit tests for [InteractivePrompts.readPromptLine] — the keystroke loop driving interactive
- * text prompts. The function is pure over a [NonBlockingReader], so it tests cleanly with a
- * queue-backed fake.
+ * Unit tests for [InteractivePrompts.readPromptLine] — the keystroke loop driving interactive text
+ * prompts. The function is pure over a [NonBlockingReader], so it tests cleanly with a queue-backed
+ * fake.
  *
  * Stdout is captured into a sink to keep ANSI escape sequences out of the test report.
  */
@@ -93,8 +93,7 @@ class InteractivePromptsTest {
 
   @Test
   fun `tab and other control chars are dropped`() {
-    val reader =
-        FakeReader(listOf('a'.code, '\t'.code, '\u0001'.code, 'b'.code, '\r'.code))
+    val reader = FakeReader(listOf('a'.code, '\t'.code, '\u0001'.code, 'b'.code, '\r'.code))
     assertEquals("ab", InteractivePrompts.readPromptLine(null, reader))
   }
 

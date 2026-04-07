@@ -28,19 +28,21 @@ internal class DevSession(
   /** Result of an initial-build-and-resolve attempt used during startup or fix recovery. */
   sealed class BuildOutcome {
     data class Success(val paperJar: File) : BuildOutcome()
+
     object BuildFailed : BuildOutcome()
   }
 
   /** Result of a fix-watcher build attempt. */
   sealed class FixAttempt {
     data class Success(val metadata: ProjectMetadata, val paperJar: File) : FixAttempt()
+
     object BuildFailed : FixAttempt()
   }
 
   /**
    * Runs the metadata-resolution step. Emits directly into whatever block/phase the caller has
-   * open; never touches block lifecycle. Returns null if the metadata can't be resolved (plugin
-   * not applied) and signals shutdown via [shuttingDown].
+   * open; never touches block lifecycle. Returns null if the metadata can't be resolved (plugin not
+   * applied) and signals shutdown via [shuttingDown].
    */
   fun resolveMetadataOrAbort(shuttingDown: AtomicBoolean): ProjectMetadata? {
     val metadata = TerminalUI.spin("Reading project metadata...") { gradle.metadata() }
@@ -68,9 +70,9 @@ internal class DevSession(
   }
 
   /**
-   * Runs the initial build + Paper download. Returns [BuildOutcome.Success] with the resolved
-   * Paper jar on success, or [BuildOutcome.BuildFailed] if the build failed. Emits directly
-   * into the caller's phase; never touches block lifecycle.
+   * Runs the initial build + Paper download. Returns [BuildOutcome.Success] with the resolved Paper
+   * jar on success, or [BuildOutcome.BuildFailed] if the build failed. Emits directly into the
+   * caller's phase; never touches block lifecycle.
    */
   fun initialBuild(
       metadata: ProjectMetadata,
@@ -97,8 +99,8 @@ internal class DevSession(
       TerminalUI.spin("Downloading Paper $mcVersion...") { downloader.download(mcVersion) }
 
   /**
-   * Emits the three-line server summary (address / plugin / mode). Caller is inside a phase;
-   * this function just appends to it.
+   * Emits the three-line server summary (address / plugin / mode). Caller is inside a phase; this
+   * function just appends to it.
    */
   fun showServerInfo(metadata: ProjectMetadata, serverAddress: String, modeLabel: String) {
     TerminalUI.info("Server:", serverAddress)
@@ -107,9 +109,9 @@ internal class DevSession(
   }
 
   /**
-   * Blocks on the fix-recovery file watcher. On every change, wraps the [onFix] callback in a
-   * phase whose trailing footer is determined by [onFix]'s returned [PhaseEnd]. A "Change
-   * detected" change() line is prepended automatically inside the phase.
+   * Blocks on the fix-recovery file watcher. On every change, wraps the [onFix] callback in a phase
+   * whose trailing footer is determined by [onFix]'s returned [PhaseEnd]. A "Change detected"
+   * change() line is prepended automatically inside the phase.
    */
   fun runFixWatcher(cleanup: () -> Unit, onFix: TerminalUI.() -> PhaseEnd) {
     val srcDir = File(projectDir, "src")
@@ -155,8 +157,8 @@ internal class DevSession(
 
   /**
    * Blocks on the main file watcher. On every change, wraps [onChanged] in a phase with an
-   * automatic "Change detected" prefix. [healthCheck] runs between phases and can emit an
-   * error into the pinned watching footer if it decides to exit the loop.
+   * automatic "Change detected" prefix. [healthCheck] runs between phases and can emit an error
+   * into the pinned watching footer if it decides to exit the loop.
    */
   fun runMainWatchLoop(
       onChanged: TerminalUI.(changedFiles: List<String>) -> PhaseEnd,
@@ -190,8 +192,8 @@ internal class DevSession(
   }
 
   /**
-   * Starts a server after a successful fix-recovery build and transitions to the main loop.
-   * Returns the [PhaseEnd] that the caller should emit.
+   * Starts a server after a successful fix-recovery build and transitions to the main loop. Returns
+   * the [PhaseEnd] that the caller should emit.
    */
   fun startServerAndReport(
       serverManager: PaperServerManager,

@@ -187,8 +187,9 @@ object TerminalUI {
    *     info("files", "12 changed")
    * }
    * ```
-   * The lambda receiver is `TerminalUI`, so emit calls are unqualified. The block closes on
-   * scope exit even if [body] throws — "forgot to endBlock" becomes impossible.
+   *
+   * The lambda receiver is `TerminalUI`, so emit calls are unqualified. The block closes on scope
+   * exit even if [body] throws — "forgot to endBlock" becomes impossible.
    */
   inline fun <T> block(body: TerminalUI.() -> T): T {
     beginBlock(BlockType.PERSIST)
@@ -200,9 +201,9 @@ object TerminalUI {
   }
 
   /**
-   * Scoped iteration block for dev-server loops. Discards any prior pinned footer, opens a
-   * PERSIST block, runs [body], closes it, then opens a trailing TRANSIENT footer whose label
-   * is determined by [body]'s return value.
+   * Scoped iteration block for dev-server loops. Discards any prior pinned footer, opens a PERSIST
+   * block, runs [body], closes it, then opens a trailing TRANSIENT footer whose label is determined
+   * by [body]'s return value.
    *
    * ```
    * TerminalUI.phase {
@@ -240,8 +241,8 @@ object TerminalUI {
   }
 
   /**
-   * Clears any pinned footer. Safety net for shutdown hooks; also used between dev-server
-   * phases when a health-check fails. Idempotent — no-op if nothing is pinned.
+   * Clears any pinned footer. Safety net for shutdown hooks; also used between dev-server phases
+   * when a health-check fails. Idempotent — no-op if nothing is pinned.
    */
   fun clearPinnedFooter() {
     discardBlock()

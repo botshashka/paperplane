@@ -136,8 +136,8 @@ internal class BlueGreenMode(private val session: DevSession) {
   }
 
   /**
-   * Wraps [rebuild] so it can update [activeSlot] as a side effect while returning only
-   * [PhaseEnd] to the watcher callback.
+   * Wraps [rebuild] so it can update [activeSlot] as a side effect while returning only [PhaseEnd]
+   * to the watcher callback.
    */
   private fun rebuildAndUpdateSlot(metadata: ProjectMetadata, paperJar: File): PhaseEnd {
     val (newSlot, end) = rebuild(metadata, paperJar)

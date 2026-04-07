@@ -8,9 +8,9 @@ import org.jline.utils.NonBlockingReader
 /**
  * Interactive input primitives: text prompts, arrow-key menus, y/N confirmations.
  *
- * Owns the JLine terminal singleton, raw-mode lifecycle, and the `PromptCancelledException`
- * path for Ctrl+C / ESC / EOF. Separate from [TerminalUI] (which owns block/footer rendering
- * and typed emit methods) because it has no overlap beyond reusing color helpers.
+ * Owns the JLine terminal singleton, raw-mode lifecycle, and the `PromptCancelledException` path
+ * for Ctrl+C / ESC / EOF. Separate from [TerminalUI] (which owns block/footer rendering and typed
+ * emit methods) because it has no overlap beyond reusing color helpers.
  */
 object InteractivePrompts {
   private const val BOTTOM_PADDING = 1
@@ -101,10 +101,10 @@ object InteractivePrompts {
   // ── Prompt (text input) ────────────────────────────────────────────
 
   /**
-   * Prompts the user for text input with an optional default (Vite-style). Shows a two-line
-   * active state with `›` prefix and dim placeholder, collapsing to a `◇` completed state after
-   * input. In TTY mode, uses raw input for placeholder replacement. Falls back to simple line
-   * input otherwise.
+   * Prompts the user for text input with an optional default (Vite-style). Shows a two-line active
+   * state with `›` prefix and dim placeholder, collapsing to a `◇` completed state after input. In
+   * TTY mode, uses raw input for placeholder replacement. Falls back to simple line input
+   * otherwise.
    */
   fun prompt(label: String, default: String? = null): String {
     if (!isTty) return promptFallback(label, default)
@@ -207,7 +207,8 @@ object InteractivePrompts {
         }
       }
     }
-    @Suppress("UNREACHABLE_CODE") return null
+    @Suppress("UNREACHABLE_CODE")
+    return null
   }
 
   /** Fallback prompt for non-TTY environments. */
@@ -236,8 +237,8 @@ object InteractivePrompts {
       select(label, options.map { SelectOption(it) }, note, default)
 
   /**
-   * Displays an arrow-key selection menu. Must be called outside any block with no spinner
-   * active. Returns the selected index.
+   * Displays an arrow-key selection menu. Must be called outside any block with no spinner active.
+   * Returns the selected index.
    */
   fun select(
       label: String,
@@ -249,7 +250,9 @@ object InteractivePrompts {
 
     val noteText = if (note != null) "  ${TerminalUI.dim(note)}" else ""
     println()
-    println("  ${TerminalUI.cyan("›")}  ${TerminalUI.bold(TerminalUI.brightWhite(label))}:$noteText")
+    println(
+        "  ${TerminalUI.cyan("›")}  ${TerminalUI.bold(TerminalUI.brightWhite(label))}:$noteText"
+    )
 
     var selected = default
 

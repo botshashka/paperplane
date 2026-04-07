@@ -5,4 +5,5 @@ package dev.paperplane.cli.ui
  * Commands catch this at their boundary and translate to a `ProgramResult(130)` so Clikt unwinds
  * cleanly (unlike `System.exit`, which skips `finally` blocks).
  */
-class PromptCancelledException : kotlin.coroutines.cancellation.CancellationException("User cancelled prompt")
+class PromptCancelledException :
+    kotlin.coroutines.cancellation.CancellationException("User cancelled prompt")

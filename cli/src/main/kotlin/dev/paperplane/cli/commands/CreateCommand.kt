@@ -276,15 +276,18 @@ class CreateCommand : CliktCommand(name = "create") {
     scaffoldInProgress = if (createdByUs) c.projectDir else null
     val hook =
         if (createdByUs) {
-          Thread({
-                val dir = scaffoldInProgress ?: return@Thread
-                try {
-                  wrapperProcess?.destroyForcibly()
-                } catch (_: Exception) {}
-                try {
-                  if (dir.exists()) dir.deleteRecursively()
-                } catch (_: Exception) {}
-              }, "create-scaffold-rollback")
+          Thread(
+                  {
+                    val dir = scaffoldInProgress ?: return@Thread
+                    try {
+                      wrapperProcess?.destroyForcibly()
+                    } catch (_: Exception) {}
+                    try {
+                      if (dir.exists()) dir.deleteRecursively()
+                    } catch (_: Exception) {}
+                  },
+                  "create-scaffold-rollback",
+              )
               .also { Runtime.getRuntime().addShutdownHook(it) }
         } else null
     try {

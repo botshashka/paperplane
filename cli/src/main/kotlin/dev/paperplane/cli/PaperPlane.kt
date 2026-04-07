@@ -50,7 +50,6 @@ fun main(args: Array<String>) {
   Runtime.getRuntime()
       .addShutdownHook(Thread({ InteractivePrompts.restoreTerminalIfNeeded() }, "terminal-restore"))
 
-
   if (args.isEmpty()) {
     val version = Versions.paperplaneVersion()
     TerminalUI.header(version)
