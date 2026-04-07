@@ -87,6 +87,17 @@ class CreateCommand : CliktCommand(name = "create") {
   private fun derivePackage(author: String, slug: String): String =
       "me.${author.lowercase().replace(Regex("[^a-z0-9]"), "")}.${slug.replace("-", "")}"
 
+  private fun isValidPackage(pkg: String): Boolean {
+    if (pkg.isEmpty()) return false
+    val segments = pkg.split(".")
+    return segments.all { seg ->
+      seg.isNotEmpty() &&
+          seg.first().isLetter() &&
+          seg.all { it.isLetterOrDigit() || it == '_' } &&
+          seg.first().isLowerCase()
+    }
+  }
+
   private fun deriveAuthor(): String = System.getProperty("user.name") ?: "author"
 
   private fun runInteractive() {
@@ -117,7 +128,14 @@ class CreateCommand : CliktCommand(name = "create") {
 
     val resolvedAuthor = TerminalUI.prompt("Author", deriveAuthor())
     val className = deriveClassName(slug)
-    val resolvedPackage = derivePackage(resolvedAuthor, slug)
+    var resolvedPackage: String
+    while (true) {
+      resolvedPackage = TerminalUI.prompt("Package", derivePackage(resolvedAuthor, slug))
+      if (isValidPackage(resolvedPackage)) break
+      TerminalUI.beginBlock()
+      TerminalUI.error("Invalid package name (use lowercase segments like com.example.myplugin)")
+      TerminalUI.endBlock()
+    }
 
     val versions =
         TerminalUI.spin("Resolving Paper versions...") { PaperVersionResolver().resolveRecent(5) }
@@ -279,7 +297,7 @@ class CreateCommand : CliktCommand(name = "create") {
         c.projectDir,
         "build.gradle.kts",
         ProjectTemplates.buildGradle(
-            c.displayName, c.className, c.packageName, c.author, c.paperVersion, c.useKotlin),
+            c.className, c.packageName, c.author, c.paperVersion, c.useKotlin),
     )
     ProjectTemplates.writeTemplate(
         c.projectDir, "settings.gradle.kts", ProjectTemplates.settingsGradle(c.projectName))
@@ -316,6 +334,11 @@ class CreateCommand : CliktCommand(name = "create") {
     ProjectTemplates.writeTemplate(
         c.projectDir, "paperplane.yml", ProjectTemplates.paperplaneYml(c.paperVersion, c.devMode, c.jbr))
     ProjectTemplates.writeTemplate(c.projectDir, ".gitignore", ProjectTemplates.gitignore())
+    ProjectTemplates.writeTemplate(c.projectDir, "README.md", ProjectTemplates.readme(c.displayName))
+    ProjectTemplates.writeTemplate(
+        c.projectDir, ".vscode/extensions.json", ProjectTemplates.vscodeExtensions())
+    ProjectTemplates.writeTemplate(
+        c.projectDir, ".vscode/settings.json", ProjectTemplates.vscodeSettings())
 
     val wrapperProcess =
         ProcessBuilder("gradle", "wrapper", "--gradle-version", Versions.GRADLE_WRAPPER)

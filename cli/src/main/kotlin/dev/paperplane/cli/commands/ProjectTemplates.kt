@@ -12,7 +12,6 @@ internal object ProjectTemplates {
   }
 
   fun buildGradle(
-      displayName: String,
       className: String,
       packageName: String,
       author: String,
@@ -29,6 +28,11 @@ internal object ProjectTemplates {
               add("id(\"dev.paperplane\") version \"${Versions.paperplaneVersion()}\"")
             }
             .joinToString("\n") { "    $it" }
+
+    val kotlinBlock =
+        if (isKotlin) {
+          "\n\n        kotlin {\n            jvmToolchain(21)\n        }"
+        } else ""
 
     val deps =
         buildList {
@@ -61,7 +65,7 @@ internal object ProjectTemplates {
             toolchain {
                 languageVersion.set(JavaLanguageVersion.of(21))
             }
-        }
+        }$kotlinBlock
 
         repositories {
             mavenCentral()
@@ -74,7 +78,7 @@ internal object ProjectTemplates {
 
         paperplane {
             mainClass.set("$packageName.$className")
-            pluginName.set("$displayName")
+            pluginName.set("$className")
             authors.set(listOf("$author"))
         }
 
@@ -85,18 +89,44 @@ internal object ProjectTemplates {
         .trimIndent() + "\n"
   }
 
-  fun settingsGradle(projectName: String) =
-      """
-        pluginManagement {
-            repositories {
-                mavenLocal()
-                gradlePluginPortal()
-            }
-        }
+  /**
+   * Returns true if the dev.paperplane gradle plugin is available in the local Maven repo
+   * for the current paperplane version. When true, generated projects need `mavenLocal()` in
+   * their pluginManagement repositories to resolve it. Released paperplane installs (where
+   * the plugin lives on the Gradle Plugin Portal) won't have it locally → no mavenLocal needed.
+   */
+  private fun gradlePluginInMavenLocal(): Boolean {
+    val home = System.getProperty("user.home") ?: return false
+    val version = Versions.paperplaneVersion()
+    val artifactDir =
+        File(
+            "$home/.m2/repository/dev/paperplane/dev.paperplane.gradle.plugin/$version",
+        )
+    return artifactDir.isDirectory
+  }
 
+  fun settingsGradle(projectName: String): String {
+    val pluginMgmt =
+        if (gradlePluginInMavenLocal()) {
+          """
+            pluginManagement {
+                repositories {
+                    mavenLocal()
+                    gradlePluginPortal()
+                }
+            }
+
+
+          """
+              .trimIndent() + "\n"
+        } else ""
+
+    return pluginMgmt +
+        """
         rootProject.name = "$projectName"
     """
-          .trimIndent() + "\n"
+            .trimIndent() + "\n"
+  }
 
   fun mainPluginJava(packageName: String, className: String, displayName: String) =
       """
@@ -107,6 +137,7 @@ internal object ProjectTemplates {
         public class $className extends JavaPlugin {
             @Override
             public void onEnable() {
+                saveDefaultConfig();
                 getLogger().info("$displayName enabled!");
             }
 
@@ -126,6 +157,7 @@ internal object ProjectTemplates {
 
         class $className : JavaPlugin() {
             override fun onEnable() {
+                saveDefaultConfig()
                 logger.info("$displayName enabled!")
             }
 
@@ -227,7 +259,6 @@ internal object ProjectTemplates {
       # IDE
       .idea/
       *.iml
-      .vscode/
 
       # OS
       .DS_Store
@@ -235,5 +266,53 @@ internal object ProjectTemplates {
       # PaperPlane
       .paperplane/
       """
+          .trimIndent() + "\n"
+
+  fun readme(displayName: String) =
+      """
+        # $displayName
+
+        A Paper plugin scaffolded with [PaperPlane](https://github.com/botshashka/paperplane).
+
+        ## Develop
+
+        ```bash
+        ppl dev
+        ```
+
+        ## Test
+
+        ```bash
+        ppl test
+        ```
+
+        ## Build
+
+        ```bash
+        ./gradlew build
+        ```
+
+        Built jar: `build/libs/`
+    """
+          .trimIndent() + "\n"
+
+  fun vscodeExtensions() =
+      """
+        {
+          "recommendations": [
+            "vscjava.vscode-java-pack",
+            "fwcd.kotlin"
+          ]
+        }
+    """
+          .trimIndent() + "\n"
+
+  fun vscodeSettings() =
+      """
+        {
+          "editor.formatOnSave": true,
+          "java.format.settings.profile": "GoogleStyle"
+        }
+    """
           .trimIndent() + "\n"
 }
