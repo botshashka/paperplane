@@ -26,6 +26,17 @@ subprojects {
         }
     }
 
+    configure<dev.detekt.gradle.extensions.DetektExtension> {
+        // Build on detekt's bundled defaults; the project's detekt.yml only overrides exceptions.
+        // Without this flag the plugin runs with an empty ruleset and silently reports zero findings.
+        buildUponDefaultConfig.set(true)
+        config.setFrom(rootProject.file("config/detekt/detekt.yml"))
+        // Report findings without breaking the build. The existing codebase has pre-existing
+        // findings against detekt's defaults (magic numbers, TooManyFunctions on facade objects,
+        // etc.) — triage is tracked as a follow-up cleanup pass, not a blocker.
+        ignoreFailures.set(true)
+    }
+
 tasks.withType<Test> {
         useJUnitPlatform()
     }

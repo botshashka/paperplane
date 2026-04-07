@@ -110,6 +110,9 @@ object InteractivePrompts {
     }
   }
 
+  /** Throws [PromptCancelledException]. Collapses the per-keystroke cancellation sites. */
+  private fun cancelPrompt(): Nothing = throw PromptCancelledException()
+
   // ── Prompt (text input) ────────────────────────────────────────────
 
   /**
@@ -166,17 +169,11 @@ object InteractivePrompts {
     while (true) {
       val b = reader.read()
       when (b) {
-        -1 -> { // EOF
+        -1, // EOF
+        AsciiKeys.CTRL_C,
+        AsciiKeys.ESC -> {
           println()
-          throw PromptCancelledException()
-        }
-        AsciiKeys.CTRL_C -> {
-          println()
-          throw PromptCancelledException()
-        }
-        AsciiKeys.ESC -> { // abort
-          println()
-          throw PromptCancelledException()
+          cancelPrompt()
         }
         AsciiKeys.CR,
         AsciiKeys.LF -> { // Enter
@@ -278,15 +275,11 @@ object InteractivePrompts {
         loop@ while (true) {
           val b = reader.read()
           when (b) {
-            -1 -> {
-              print("\u001b[?25h")
-              println()
-              throw PromptCancelledException()
-            }
+            -1,
             AsciiKeys.CTRL_C -> {
               print("\u001b[?25h")
               println()
-              throw PromptCancelledException()
+              cancelPrompt()
             }
             AsciiKeys.CR,
             AsciiKeys.LF -> break@loop // Enter
@@ -304,7 +297,7 @@ object InteractivePrompts {
               } else {
                 print("\u001b[?25h")
                 println()
-                throw PromptCancelledException()
+                cancelPrompt()
               }
             }
           }
