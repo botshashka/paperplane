@@ -10,12 +10,6 @@ class FormatLineTest {
 
   @TempDir lateinit var tempDir: File
 
-  private fun createServerManager(): PaperServerManager {
-    val serverDir = File(tempDir, "server")
-    val cacheDir = File(tempDir, "cache")
-    return PaperServerManager(serverDir, PaperDownloader(cacheDir))
-  }
-
   private fun createVelocityManager(): VelocityManager {
     return VelocityManager(File(tempDir, "proxy"))
   }
@@ -24,8 +18,7 @@ class FormatLineTest {
 
   @Test
   fun `formatServerLine extracts thread and message from standard log line`() {
-    val manager = createServerManager()
-    val result = manager.formatServerLine("[12:34:56] [Server thread/INFO] Hello world")
+    val result = formatServerLine("[12:34:56] [Server thread/INFO] Hello world")
 
     // Should contain the thread and message regardless of color mode
     assertTrue(result.contains("Server thread/INFO"))
@@ -34,21 +27,18 @@ class FormatLineTest {
 
   @Test
   fun `formatServerLine passes through non-matching lines unchanged`() {
-    val manager = createServerManager()
-    val result = manager.formatServerLine("Some raw output without timestamp")
+    val result = formatServerLine("Some raw output without timestamp")
 
     assertEquals("Some raw output without timestamp", result)
   }
 
   @Test
   fun `formatServerLine handles various timestamp formats`() {
-    val manager = createServerManager()
-
-    val result1 = manager.formatServerLine("[00:00:00] [main/INFO] Starting")
+    val result1 = formatServerLine("[00:00:00] [main/INFO] Starting")
     assertTrue(result1.contains("main/INFO"))
     assertTrue(result1.contains("Starting"))
 
-    val result2 = manager.formatServerLine("[23:59:59] [Async/WARN] Something bad")
+    val result2 = formatServerLine("[23:59:59] [Async/WARN] Something bad")
     assertTrue(result2.contains("Async/WARN"))
     assertTrue(result2.contains("Something bad"))
   }
@@ -58,8 +48,7 @@ class FormatLineTest {
     // TerminalUI.useColor is based on NO_COLOR env at init time.
     // In test env, NO_COLOR is typically not set, so we can't easily toggle.
     // Instead, just verify the structure is correct.
-    val manager = createServerManager()
-    val result = manager.formatServerLine("[12:34:56] [Thread/INFO] message")
+    val result = formatServerLine("[12:34:56] [Thread/INFO] message")
 
     // Either contains ANSI codes or plain brackets — both valid based on env
     assertTrue(

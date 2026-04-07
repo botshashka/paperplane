@@ -1,7 +1,6 @@
 package dev.paperplane.cli.server
 
 import dev.paperplane.cli.ui.TerminalUI
-import dev.paperplane.cli.util.Platform
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
@@ -14,9 +13,6 @@ class PaperServerManager(
 ) {
   companion object {
     internal const val DEFAULT_PORT = 25565
-    private const val LSOF_TIMEOUT_SECONDS = 5L
-    private const val KILL_TIMEOUT_SECONDS = 2L
-    private const val PORT_RELEASE_DELAY_MS = 500L
     private const val STOP_TIMEOUT_SECONDS = 5L
     private const val FORCE_STOP_TIMEOUT_SECONDS = 2L
     private const val SAVE_POLL_INTERVAL_MS = 200L
@@ -34,17 +30,7 @@ class PaperServerManager(
    * occupying the server port and removes world lock files.
    */
   fun cleanupStale() {
-    // Kill any process still bound to our port (zombie from previous run)
-    try {
-      if (Platform.isWindows) {
-        killPortProcessWindows(port)
-      } else {
-        killPortProcessUnix(port)
-      }
-    } catch (_: Exception) {
-      // Best-effort; port detection may not be available on all systems
-    }
-
+    killProcessOnPort(port)
     // Remove stale session.lock files from world directories
     if (serverDir.exists()) {
       serverDir
@@ -60,73 +46,16 @@ class PaperServerManager(
   fun configure() {
     serverDir.mkdirs()
     pluginsDir.mkdirs()
-
     // Always overwrite — PaperPlane manages these settings, and Paper rewrites
     // the file on first boot (making writeIfMissing a no-op for new properties)
-    File(serverDir, "server.properties")
-        .writeText(
-            """
-            online-mode=false
-            view-distance=4
-            simulation-distance=4
-            level-type=flat
-            spawn-protection=0
-            max-players=2
-            enable-command-block=true
-            server-port=$port
-            motd=PaperPlane Dev Server
-            generate-structures=false
-            accepts-transfers=true
-        """
-                .trimIndent() + "\n"
-        )
-
-    writeIfMissing(
-        "bukkit.yml",
-        """
-        settings:
-          allow-end: false
-          connection-throttle: 0
-        ticks-per:
-          autosave: 0
-        """
-            .trimIndent() + "\n",
-    )
-
-    writeIfMissing(
-        "spigot.yml",
-        """
-        settings:
-          save-user-cache-on-stop-only: true
-          bungeecord: false
-        world-settings:
-          default:
-            verbose: false
-        """
-            .trimIndent() + "\n",
-    )
-
-    // Paper config — only non-gameplay-affecting optimizations
-    val paperConfigDir = File(serverDir, "config")
-    paperConfigDir.mkdirs()
-    writeIfMissing(
-        File(paperConfigDir, "paper-global.yml"),
-        """
-        timings:
-          enabled: false
-        """
-            .trimIndent() + "\n",
-    )
-
+    File(serverDir, "server.properties").writeText(ServerConfigs.serverProperties(port))
+    writeIfMissing("bukkit.yml", ServerConfigs.bukkitYml)
+    writeIfMissing("spigot.yml", ServerConfigs.spigotYml)
+    val paperConfigDir = File(serverDir, "config").apply { mkdirs() }
+    writeIfMissing(File(paperConfigDir, "paper-global.yml"), ServerConfigs.paperGlobalYml)
     writeIfMissing(
         File(paperConfigDir, "paper-world-defaults.yml"),
-        """
-        chunks:
-          auto-save-interval: -1
-        spawn:
-          keep-spawn-loaded: false
-        """
-            .trimIndent() + "\n",
+        ServerConfigs.paperWorldDefaultsYml,
     )
   }
 
@@ -324,60 +253,6 @@ class PaperServerManager(
     val tmpFile = File(statusDir, ".companion-status.tmp")
     tmpFile.writeText(json)
     Files.move(tmpFile.toPath(), statusFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
-  }
-
-  private val serverLineRegex = Regex("""\[[\d:]+] \[([^]]+)] (.+)""")
-
-  internal fun formatServerLine(line: String): String {
-    val match = serverLineRegex.find(line)
-    return if (match != null) {
-      val (thread, message) = match.destructured
-      if (TerminalUI.useColor) "\u001b[2m[$thread]\u001b[0m $message" else "[$thread] $message"
-    } else {
-      line
-    }
-  }
-
-  private fun killPortProcessUnix(port: Int) {
-    val lsof = ProcessBuilder("lsof", "-ti", "tcp:$port").redirectErrorStream(true).start()
-    val pids = lsof.inputStream.bufferedReader().readText().trim()
-    lsof.waitFor(LSOF_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
-    if (pids.isNotEmpty()) {
-      for (pid in pids.lines().filter { it.isNotBlank() }) {
-        ProcessBuilder("kill", "-9", pid)
-            .start()
-            .waitFor(KILL_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
-      }
-      Thread.sleep(PORT_RELEASE_DELAY_MS)
-    }
-  }
-
-  private fun killPortProcessWindows(port: Int) {
-    val netstat =
-        ProcessBuilder("cmd", "/c", "netstat -ano | findstr :$port | findstr LISTENING")
-            .redirectErrorStream(true)
-            .start()
-    val output = netstat.inputStream.bufferedReader().readText().trim()
-    netstat.waitFor(LSOF_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
-    // Each line ends with a PID, e.g. "  TCP    0.0.0.0:25565    0.0.0.0:0    LISTENING    12345"
-    val pids =
-        output
-            .lines()
-            .filter { it.isNotBlank() }
-            .mapNotNull { it.trim().split("\\s+".toRegex()).lastOrNull() }
-            .filter { it.all(Char::isDigit) }
-            .toSet()
-    if (pids.isNotEmpty()) {
-      val cmd = mutableListOf("taskkill", "/F")
-      for (pid in pids) {
-        cmd.add("/PID")
-        cmd.add(pid)
-      }
-      ProcessBuilder(cmd)
-          .start()
-          .waitFor(KILL_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
-      Thread.sleep(PORT_RELEASE_DELAY_MS)
-    }
   }
 
   private fun writeIfMissing(name: String, content: String) {
