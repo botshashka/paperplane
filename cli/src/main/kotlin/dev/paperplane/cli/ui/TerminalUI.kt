@@ -46,7 +46,7 @@ class TerminalUI(terminal: Terminal) {
     get() = Ansi.useColor
 
   private val lock = ReentrantLock()
-  private val state = BlockState(terminal.isTty)
+  private val state = BlockState(terminal.isTty, widthProvider = { terminal.width })
   private val renderer = BlockRenderer(Writer(terminal))
 
   /** Drives [state] under the lock and renders the resulting ops. */

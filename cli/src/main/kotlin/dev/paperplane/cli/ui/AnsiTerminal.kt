@@ -22,7 +22,15 @@ import org.jline.utils.NonBlockingReader
  * [InteractivePrompts.beginInteractiveView]).
  */
 class AnsiTerminal : Terminal {
+  companion object {
+    /** Fallback column count if JLine can't report a real size (dumb terminal, pre-init, etc.). */
+    private const val DEFAULT_WIDTH = 80
+  }
+
   override val isTty: Boolean = System.console() != null
+
+  override val width: Int
+    get() = jline().size.columns.takeIf { it > 0 } ?: DEFAULT_WIDTH
 
   private val jlineLock = Any()
   private var jlineInstance: JlineTerminal? = null

@@ -93,6 +93,105 @@ class BlockStateTest {
     assertEquals(emptyList<RenderOp>(), ops)
   }
 
+  // ── Multi-line emit ────────────────────────────────────────────────
+
+  @Test
+  fun `emit splits multi-line text into separate block lines so footer math stays correct`() {
+    val state = newState()
+    state.beginBlock(BlockState.BlockType.PERSIST)
+    val ops = state.emit("first\nsecond\nthird")
+    // The redraw should pin 4 visible rows (1 separator + 3 lines), not 2.
+    assertEquals(4, state.pinnedLineCount)
+    assertEquals(
+        listOf(WriteLine(), WriteLine("first"), WriteLine("second"), WriteLine("third")),
+        ops,
+    )
+  }
+
+  @Test
+  fun `emit followed by another emit clears the right number of rows for multi-line content`() {
+    val state = newState()
+    state.beginBlock(BlockState.BlockType.PERSIST)
+    state.emit("multi\nline\nmessage")
+    val ops = state.emit("next")
+    // ClearFooter must clear 4 rows (separator + 3 lines from the multi-line emit), not 2.
+    // This is the regression fix for the dev-mode "ghost blank lines" bug.
+    assertEquals(ClearFooter(4), ops.first())
+  }
+
+  @Test
+  fun `emit drops trailing empty line from text ending in newline`() {
+    val state = newState()
+    state.beginBlock(BlockState.BlockType.PERSIST)
+    state.emit("foo\n")
+    // "foo\n".lines() is ["foo", ""] — the trailing empty string is dropped so we don't get
+    // a phantom blank line at the end of the buffered content.
+    assertEquals(listOf("foo"), state.bufferedLines)
+  }
+
+  @Test
+  fun `emit preserves empty lines in the middle of multi-line text`() {
+    val state = newState()
+    state.beginBlock(BlockState.BlockType.PERSIST)
+    state.emit("top\n\nbottom")
+    assertEquals(listOf("top", "", "bottom"), state.bufferedLines)
+  }
+
+  @Test
+  fun `non-TTY emit with multi-line text scroll-commits each line separately`() {
+    val state = newState(isTty = false)
+    val ops = state.emit("a\nb\nc")
+    assertEquals(listOf(WriteLine("a"), WriteLine("b"), WriteLine("c")), ops)
+  }
+
+  // ── Wrap-aware visual row counting ─────────────────────────────────
+
+  @Test
+  fun `long line that wraps counts multiple visual rows in the pinned footer`() {
+    // 80-col terminal, 160-character line → 2 visible rows for the line + 1 for separator = 3.
+    val state = BlockState(isTty = true, widthProvider = { 80 })
+    state.beginBlock(BlockState.BlockType.PERSIST)
+    val longLine = "x".repeat(160)
+    state.emit(longLine)
+    assertEquals(3, state.pinnedLineCount)
+  }
+
+  @Test
+  fun `next emit after a wrapped line clears the correct number of rows`() {
+    val state = BlockState(isTty = true, widthProvider = { 80 })
+    state.beginBlock(BlockState.BlockType.PERSIST)
+    state.emit("x".repeat(160)) // 2 visual rows + 1 sep = 3
+    val ops = state.emit("y") // should clear 3 rows, not 2
+    assertEquals(ClearFooter(3), ops.first())
+  }
+
+  @Test
+  fun `ANSI escape sequences are stripped before visual row counting`() {
+    // ANSI escapes don't consume visible columns. A 60-char line with 20 chars of ANSI
+    // escapes should count as 40 visible chars → fits on a single row at 80 cols.
+    val state = BlockState(isTty = true, widthProvider = { 80 })
+    state.beginBlock(BlockState.BlockType.PERSIST)
+    val withEscapes = "\u001b[32m" + "x".repeat(40) + "\u001b[0m" + "y".repeat(20)
+    state.emit(withEscapes)
+    // 60 visible chars at 80 width = 1 row + 1 separator = 2.
+    assertEquals(2, state.pinnedLineCount)
+  }
+
+  @Test
+  fun `visualRows helper returns 1 for empty and short strings`() {
+    assertEquals(1, BlockState.visualRows("", 80))
+    assertEquals(1, BlockState.visualRows("short", 80))
+    assertEquals(1, BlockState.visualRows("x".repeat(80), 80))
+  }
+
+  @Test
+  fun `visualRows helper handles exact-width boundary`() {
+    assertEquals(1, BlockState.visualRows("x".repeat(80), 80))
+    assertEquals(2, BlockState.visualRows("x".repeat(81), 80))
+    assertEquals(2, BlockState.visualRows("x".repeat(160), 80))
+    assertEquals(3, BlockState.visualRows("x".repeat(161), 80))
+  }
+
   // ── nextSection ────────────────────────────────────────────────────
 
   @Test

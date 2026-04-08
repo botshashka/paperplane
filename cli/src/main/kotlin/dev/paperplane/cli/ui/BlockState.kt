@@ -19,7 +19,10 @@ import dev.paperplane.cli.ui.RenderOp.WriteLine
  * - PERSIST blocks commit their lines to the scrollback when [endBlock] is called.
  * - TRANSIENT blocks (the dev-server "Watching for changes..." footer) are erased silently.
  */
-internal class BlockState(private val isTty: Boolean) {
+internal class BlockState(
+    private val isTty: Boolean,
+    private val widthProvider: () -> Int = { DEFAULT_WIDTH },
+) {
   enum class BlockType {
     PERSIST,
     TRANSIENT,
@@ -122,13 +125,30 @@ internal class BlockState(private val isTty: Boolean) {
    * Adds [text] to the active block. In TTY mode the pinned footer is redrawn so the buffered lines
    * stay visible; in non-TTY mode the lines are held until [endBlock] flushes them. Calls outside
    * any block scroll-commit directly.
+   *
+   * If [text] contains embedded newlines, each line is added/written separately. Otherwise the
+   * pinned-footer math (`displayedLineCount`) would underestimate the visible row count and
+   * subsequent `ClearFooter` ops would leave ghost rows in scrollback. This bites whenever an
+   * external source like a Gradle exception message gets piped through `ui.status(...)`.
    */
   fun emit(text: String): List<RenderOp> {
+    val lines = splitForEmit(text)
     if (blockActive) {
-      blockLines.add(text)
+      blockLines.addAll(lines)
       return if (isTty) redraw() else emptyList()
     }
-    return listOf(WriteLine(text))
+    return lines.map { WriteLine(it) }
+  }
+
+  /**
+   * Splits [text] on `\n` (and `\r\n`) for emit, preserving empty lines in the middle but dropping
+   * a single trailing empty line so callers that pass a string ending in `\n` don't get an extra
+   * blank.
+   */
+  private fun splitForEmit(text: String): List<String> {
+    if ('\n' !in text && '\r' !in text) return listOf(text)
+    val parts = text.lines()
+    return if (parts.isNotEmpty() && parts.last().isEmpty()) parts.dropLast(1) else parts
   }
 
   /**
@@ -239,7 +259,14 @@ internal class BlockState(private val isTty: Boolean) {
 
   // ── Internals ──────────────────────────────────────────────────────
 
-  /** Recomputes the pinned-footer ops: clear, optional separator, block lines, optional spinner. */
+  /**
+   * Recomputes the pinned-footer ops: clear, optional separator, block lines, optional spinner.
+   *
+   * [displayedLineCount] counts **visual rows**, not logical lines — a long line that wraps on the
+   * terminal consumes multiple rows and must be accounted for so the next [ClearFooter] erases the
+   * correct number of rows. Without this, a single wrapped error message can leave ghost blank rows
+   * in the scrollback on every subsequent redraw.
+   */
   private fun redraw(): List<RenderOp> {
     if (!isTty) return emptyList()
     val ops = mutableListOf<RenderOp>()
@@ -249,7 +276,12 @@ internal class BlockState(private val isTty: Boolean) {
     for (line in blockLines) ops += WriteLine(line)
     val spinnerLine = currentSpinnerLine()
     if (spinnerLine != null) ops += WriteLine(spinnerLine)
-    displayedLineCount = (if (sep) 1 else 0) + blockLines.size + (if (spinnerLine != null) 1 else 0)
+
+    val width = widthProvider()
+    val sepRows = if (sep) 1 else 0
+    val lineRows = blockLines.sumOf { visualRows(it, width) }
+    val spinnerRows = if (spinnerLine != null) visualRows(spinnerLine, width) else 0
+    displayedLineCount = sepRows + lineRows + spinnerRows
     return ops
   }
 
@@ -272,5 +304,25 @@ internal class BlockState(private val isTty: Boolean) {
 
   companion object {
     val SPINNER_FRAMES = arrayOf("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+
+    /** Default terminal width used when no provider is supplied (tests, non-TTY paths). */
+    const val DEFAULT_WIDTH = 80
+
+    /** Strips ANSI escape sequences so width math counts visible characters only. */
+    private val ANSI_ESCAPE = Regex("\u001b\\[[0-9;?]*[a-zA-Z]")
+
+    /**
+     * Computes the number of physical terminal rows a logical line will occupy when rendered via
+     * `println` at [width] columns. ANSI escape sequences are stripped (they don't consume visible
+     * columns); all other characters are counted as 1 column each. This under-counts wide unicode
+     * (CJK, emoji) — acceptable for now since the bug we're fixing is about long ASCII error
+     * messages, not CJK.
+     */
+    internal fun visualRows(text: String, width: Int): Int {
+      if (width <= 0) return 1
+      val visibleLength = ANSI_ESCAPE.replace(text, "").length
+      if (visibleLength == 0) return 1
+      return (visibleLength + width - 1) / width
+    }
   }
 }

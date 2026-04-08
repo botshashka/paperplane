@@ -18,6 +18,7 @@ import org.jline.utils.NonBlockingReader
  */
 class RecordingTerminal(
     override val isTty: Boolean = true,
+    override val width: Int = 80,
     private val scriptedReader: NonBlockingReader = EmptyReader,
 ) : Terminal {
   private val buffer = StringBuilder()

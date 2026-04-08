@@ -24,6 +24,14 @@ interface Terminal {
   /** True when attached to an interactive TTY (controls footer-pinning and raw-mode paths). */
   val isTty: Boolean
 
+  /**
+   * Visible column count of the terminal. Used by [BlockState] to compute how many physical rows a
+   * buffered line will occupy when wrapped, so the pinned-footer `ClearFooter` math stays correct
+   * for long lines like Gradle exception messages. Read on every redraw so that a mid-session
+   * window resize is picked up.
+   */
+  val width: Int
+
   /** Prints [text] without a trailing newline. Used for raw ANSI sequences and partial lines. */
   fun write(text: String)
 
