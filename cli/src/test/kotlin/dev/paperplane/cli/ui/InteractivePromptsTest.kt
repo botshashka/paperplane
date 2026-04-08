@@ -2,7 +2,6 @@ package dev.paperplane.cli.ui
 
 import java.io.ByteArrayOutputStream
 import java.io.PrintStream
-import org.jline.utils.NonBlockingReader
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
@@ -33,23 +32,7 @@ class InteractivePromptsTest {
     System.setOut(originalOut)
   }
 
-  /** Minimal NonBlockingReader fake that dequeues code points from a fixed list. */
-  private class FakeReader(codePoints: List<Int>) : NonBlockingReader() {
-    private val queue = ArrayDeque(codePoints)
-
-    override fun read(timeout: Long, isPeek: Boolean): Int {
-      val v = queue.firstOrNull() ?: return EOF
-      if (!isPeek) queue.removeFirst()
-      return v
-    }
-
-    override fun readBuffered(b: CharArray?, off: Int, len: Int, timeout: Long): Int =
-        throw UnsupportedOperationException("not used by readPromptLine")
-
-    override fun close() {
-      // no-op — fake has no resources
-    }
-  }
+  // FakeReader lives in its own file (FakeReader.kt) — shared with InteractivePromptsRenderTest.
 
   // ── Plain ASCII input + Enter ──────────────────────────────────────
 
