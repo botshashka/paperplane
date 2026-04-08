@@ -9,7 +9,7 @@ complexity:
   # many small cohesive functions. Decomposing further would split tightly-related state
   # across unrelated types for no real readability win.
   TooManyFunctions:
-    allowedFunctionsPerClass: 24
+    allowedFunctionsPerClass: 32
     allowedFunctionsPerObject: 32
 
 style:

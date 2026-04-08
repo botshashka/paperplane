@@ -1,5 +1,7 @@
 package dev.paperplane.cli.server
 
+import dev.paperplane.cli.ui.RecordingTerminal
+import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -10,10 +12,11 @@ import org.junit.jupiter.api.io.TempDir
 class VelocityManagerTest {
 
   @TempDir lateinit var tempDir: File
+  private val ui = TerminalUI(RecordingTerminal())
 
   @Test
   fun `configure creates velocity toml with both backends`() {
-    val manager = VelocityManager(tempDir)
+    val manager = VelocityManager(tempDir, ui)
     manager.configure(serverPort = 25566, swapPort = 25567, proxyPort = 25565)
 
     val toml = File(tempDir, "velocity.toml").readText()
@@ -26,7 +29,7 @@ class VelocityManagerTest {
 
   @Test
   fun `configure always overwrites velocity toml`() {
-    val manager = VelocityManager(tempDir)
+    val manager = VelocityManager(tempDir, ui)
     File(tempDir, "velocity.toml").apply {
       parentFile.mkdirs()
       writeText("old-config")
@@ -41,7 +44,7 @@ class VelocityManagerTest {
 
   @Test
   fun `configure writes forwarding secret`() {
-    val manager = VelocityManager(tempDir)
+    val manager = VelocityManager(tempDir, ui)
     manager.configure(serverPort = 25566, swapPort = 25567, proxyPort = 25565)
 
     val secret = File(tempDir, "forwarding.secret").readText()
@@ -51,7 +54,7 @@ class VelocityManagerTest {
 
   @Test
   fun `configure writes initial active server json`() {
-    val manager = VelocityManager(tempDir)
+    val manager = VelocityManager(tempDir, ui)
     manager.configure(serverPort = 25566, swapPort = 25567, proxyPort = 25565)
 
     val json = File(tempDir, "active-server.json").readText()
@@ -61,7 +64,7 @@ class VelocityManagerTest {
 
   @Test
   fun `writeActiveServer writes transfer signal`() {
-    val manager = VelocityManager(tempDir)
+    val manager = VelocityManager(tempDir, ui)
     tempDir.mkdirs()
 
     manager.writeActiveServer("green", transfer = true)
@@ -73,7 +76,7 @@ class VelocityManagerTest {
 
   @Test
   fun `writeActiveServer can clear transfer flag`() {
-    val manager = VelocityManager(tempDir)
+    val manager = VelocityManager(tempDir, ui)
     tempDir.mkdirs()
 
     manager.writeActiveServer("green", transfer = true)
@@ -85,7 +88,7 @@ class VelocityManagerTest {
 
   @Test
   fun `clearTransferComplete deletes confirmation file`() {
-    val manager = VelocityManager(tempDir)
+    val manager = VelocityManager(tempDir, ui)
     tempDir.mkdirs()
     val file = File(tempDir, "transfer-complete")
     file.writeText("12345")
@@ -98,7 +101,7 @@ class VelocityManagerTest {
 
   @Test
   fun `clearTransferComplete is safe when file missing`() {
-    val manager = VelocityManager(tempDir)
+    val manager = VelocityManager(tempDir, ui)
     tempDir.mkdirs()
     // Should not throw
     manager.clearTransferComplete()
@@ -106,7 +109,7 @@ class VelocityManagerTest {
 
   @Test
   fun `waitForTransferComplete returns true when file appears`() {
-    val manager = VelocityManager(tempDir)
+    val manager = VelocityManager(tempDir, ui)
     tempDir.mkdirs()
 
     // Write the file from a background thread after a short delay
@@ -124,7 +127,7 @@ class VelocityManagerTest {
 
   @Test
   fun `waitForTransferComplete returns false on timeout`() {
-    val manager = VelocityManager(tempDir)
+    val manager = VelocityManager(tempDir, ui)
     tempDir.mkdirs()
 
     val start = System.currentTimeMillis()
@@ -137,13 +140,13 @@ class VelocityManagerTest {
 
   @Test
   fun `isRunning returns false when not started`() {
-    val manager = VelocityManager(tempDir)
+    val manager = VelocityManager(tempDir, ui)
     assertFalse(manager.isRunning())
   }
 
   @Test
   fun `stop is safe when not started`() {
-    val manager = VelocityManager(tempDir)
+    val manager = VelocityManager(tempDir, ui)
     manager.stop()
   }
 }

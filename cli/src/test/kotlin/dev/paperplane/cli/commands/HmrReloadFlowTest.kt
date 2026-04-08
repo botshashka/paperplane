@@ -4,6 +4,8 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import dev.paperplane.cli.devserver.ReloadStrategy
 import dev.paperplane.cli.gradle.ClassChanges
+import dev.paperplane.cli.ui.RecordingTerminal
+import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -14,6 +16,7 @@ import org.junit.jupiter.api.io.TempDir
 class HmrReloadFlowTest {
 
   @TempDir lateinit var tempDir: File
+  private val ui = TerminalUI(RecordingTerminal())
 
   private fun parseJson(json: String): Map<String, Any> {
     val type = object : TypeToken<Map<String, Any>>() {}.type
@@ -160,6 +163,7 @@ class HmrReloadFlowTest {
         dev.paperplane.cli.server.PaperServerManager(
             serverDir,
             dev.paperplane.cli.server.PaperDownloader(cacheDir),
+            ui,
             port = 25566,
         )
 
@@ -194,6 +198,7 @@ class HmrReloadFlowTest {
         dev.paperplane.cli.server.PaperServerManager(
             serverDir,
             dev.paperplane.cli.server.PaperDownloader(cacheDir),
+            ui,
             port = 25566,
         )
 

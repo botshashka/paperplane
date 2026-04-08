@@ -20,6 +20,7 @@ internal class DevSession(
     val gradle: GradleBridge,
     val downloader: PaperDownloader,
     val projectDir: File,
+    val ui: TerminalUI,
 ) {
   companion object {
     private const val MAIN_LOOP_POLL_INTERVAL_MS = 1000L
@@ -45,7 +46,7 @@ internal class DevSession(
    * applied) and signals shutdown via [shuttingDown].
    */
   fun resolveMetadataOrAbort(shuttingDown: AtomicBoolean): ProjectMetadata? {
-    val metadata = TerminalUI.spin("Reading project metadata...") { gradle.metadata() }
+    val metadata = ui.spin("Reading project metadata...") { gradle.metadata() }
     if (metadata == null) {
       pluginNotFoundError()
       shuttingDown.set(true)
@@ -80,15 +81,15 @@ internal class DevSession(
   ): BuildOutcome {
     val buildStart = System.currentTimeMillis()
     serverManager.writeCompanionStatus("building")
-    val buildSuccess = TerminalUI.spin("Building...") { gradle.build() }
+    val buildSuccess = ui.spin("Building...") { gradle.build() }
     val buildDuration = formatDuration(System.currentTimeMillis() - buildStart)
 
     if (!buildSuccess) {
-      TerminalUI.error("Build failed", buildDuration)
+      ui.error("Build failed", buildDuration)
       serverManager.writeCompanionStatus("error", mapOf("message" to "Build failed"))
       return BuildOutcome.BuildFailed
     }
-    TerminalUI.success("Build succeeded", buildDuration)
+    ui.success("Build succeeded", buildDuration)
 
     val mcVersion = resolveMcVersion(metadata)
     val paperJar = downloadPaper(mcVersion)
@@ -96,16 +97,18 @@ internal class DevSession(
   }
 
   fun downloadPaper(mcVersion: String): File =
-      TerminalUI.spin("Downloading Paper $mcVersion...") { downloader.download(mcVersion) }
+      ui.spin("Downloading Paper $mcVersion...") { downloader.download(mcVersion) }
 
   /**
    * Emits the three-line server summary (address / plugin / mode). Caller is inside a phase; this
-   * function just appends to it.
+   * function commits whatever the phase has emitted so far (build/server-ready lines) into a
+   * separate visual sub-block above, then appends the info lines into a fresh sub-block.
    */
   fun showServerInfo(metadata: ProjectMetadata, serverAddress: String, modeLabel: String) {
-    TerminalUI.info("Server:", serverAddress)
-    TerminalUI.info("Plugin:", "${metadata.pluginName} v${metadata.version}")
-    TerminalUI.info("Mode:", modeLabel)
+    ui.nextSection()
+    ui.info("Server:", serverAddress)
+    ui.info("Plugin:", "${metadata.pluginName} v${metadata.version}")
+    ui.info("Mode:", modeLabel)
   }
 
   /**
@@ -117,7 +120,7 @@ internal class DevSession(
     val srcDir = File(projectDir, "src")
     val watcher =
         FileWatcher(srcDir, config.dev.debounceMs) { changedFiles ->
-          TerminalUI.phase {
+          ui.phase {
             val shortName = changedFiles.firstOrNull()?.let { File(it).name } ?: "files"
             change("Change detected: $shortName")
             onFix()
@@ -144,10 +147,10 @@ internal class DevSession(
     val buildDuration = formatDuration(System.currentTimeMillis() - buildStart)
 
     if (!buildSuccess) {
-      TerminalUI.error("Build failed", buildDuration)
+      ui.error("Build failed", buildDuration)
       return FixAttempt.BuildFailed
     }
-    TerminalUI.success("Build succeeded", buildDuration)
+    ui.success("Build succeeded", buildDuration)
 
     val metadata = gradle.metadata() ?: return FixAttempt.BuildFailed
     val mcVersion = resolveMcVersion(metadata)
@@ -168,7 +171,7 @@ internal class DevSession(
     val srcDir = File(projectDir, "src")
     val watcher =
         FileWatcher(srcDir, config.dev.debounceMs) { changedFiles ->
-          TerminalUI.phase {
+          ui.phase {
             val shortName = changedFiles.firstOrNull()?.let { File(it).name } ?: "files"
             val extra = if (changedFiles.size > 1) " (+${changedFiles.size - 1} more)" else ""
             change("Change detected: $shortName$extra")
@@ -187,7 +190,7 @@ internal class DevSession(
     } catch (_: InterruptedException) {} finally {
       watcher.stop()
       cleanup()
-      TerminalUI.clearPinnedFooter()
+      ui.clearPinnedFooter()
     }
   }
 
@@ -211,11 +214,11 @@ internal class DevSession(
     val ready = serverManager.waitForReady()
     val serverDuration = formatDuration(System.currentTimeMillis() - serverStart)
     return if (ready) {
-      TerminalUI.success("Server ready", serverDuration)
+      ui.success("Server ready", serverDuration)
       serverManager.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
       PhaseEnd.Watching
     } else {
-      TerminalUI.error("Server failed to start", serverDuration)
+      ui.error("Server failed to start", serverDuration)
       serverManager.writeCompanionStatus("error", mapOf("message" to "Server failed to start"))
       PhaseEnd.Waiting
     }
@@ -231,8 +234,8 @@ internal class DevSession(
         if (checkIsJbr("java")) JavaRuntime("java", true) else JavaRuntime("java", false)
       }
       "on" -> {
-        val jbrDownloader = JbrDownloader()
-        val javaBin = TerminalUI.spin("Downloading JBR...") { jbrDownloader.download() }
+        val jbrDownloader = JbrDownloader(ui)
+        val javaBin = ui.spin("Downloading JBR...") { jbrDownloader.download() }
         JavaRuntime(javaBin.absolutePath, true)
       }
       "off" -> JavaRuntime("java", false)
@@ -241,9 +244,9 @@ internal class DevSession(
   }
 
   private fun pluginNotFoundError() {
-    TerminalUI.error("PaperPlane Gradle plugin not found.")
-    TerminalUI.info("ppl init", "add PaperPlane to this project")
-    TerminalUI.info("ppl create", "scaffold a new plugin")
+    ui.error("PaperPlane Gradle plugin not found.")
+    ui.info("ppl init", "add PaperPlane to this project")
+    ui.info("ppl create", "scaffold a new plugin")
   }
 
   private fun checkIsJbr(javaBin: String): Boolean = JavaRuntimeUtil.checkIsJbr(javaBin)

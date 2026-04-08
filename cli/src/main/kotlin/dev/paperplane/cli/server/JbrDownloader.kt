@@ -21,7 +21,7 @@ import java.net.http.HttpResponse
  * Downloads from JetBrains cache-redirector with release info from GitHub API. Caches extracted JDK
  * in ~/.paperplane/jbr/{version}-{os}-{arch}/.
  */
-class JbrDownloader(cacheDir: File? = null) {
+class JbrDownloader(private val ui: TerminalUI, cacheDir: File? = null) {
   private val client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()
   private val gson = Gson()
   private val cacheDir = cacheDir ?: File(Platform.paperplaneHome, "jbr")
@@ -50,7 +50,7 @@ class JbrDownloader(cacheDir: File? = null) {
 
     val downloadUrl = buildDownloadUrl(release, os, arch)
 
-    TerminalUI.spinSubstatus("${release.version} ($os-$arch)")
+    ui.spinSubstatus("${release.version} ($os-$arch)")
 
     // Download archive to temp file
     val ext = if (Platform.isWindows) ".zip" else ".tar.gz"

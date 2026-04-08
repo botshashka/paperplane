@@ -5,6 +5,8 @@ import com.google.gson.JsonObject
 import dev.paperplane.cli.devserver.ReloadStrategy
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.server.PaperServerManager
+import dev.paperplane.cli.ui.RecordingTerminal
+import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -18,11 +20,12 @@ class ProtocolCompatTest {
   @TempDir lateinit var tempDir: File
 
   private val gson = Gson()
+  private val ui = TerminalUI(RecordingTerminal())
 
   private fun createManager(): PaperServerManager {
     val serverDir = File(tempDir, "server")
     val cacheDir = File(tempDir, "cache")
-    return PaperServerManager(serverDir, PaperDownloader(cacheDir))
+    return PaperServerManager(serverDir, PaperDownloader(cacheDir), ui)
   }
 
   private fun readStatus(manager: PaperServerManager): JsonObject {

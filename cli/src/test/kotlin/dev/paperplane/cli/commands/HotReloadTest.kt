@@ -4,6 +4,8 @@ import com.charleskorn.kaml.Yaml
 import dev.paperplane.cli.config.DevConfig
 import dev.paperplane.cli.config.DevMode
 import dev.paperplane.cli.config.PaperPlaneConfig
+import dev.paperplane.cli.ui.RecordingTerminal
+import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import kotlinx.serialization.decodeFromString
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -16,6 +18,7 @@ import org.junit.jupiter.api.io.TempDir
 class HotReloadTest {
 
   @TempDir lateinit var tempDir: File
+  private val ui = TerminalUI(RecordingTerminal())
 
   private lateinit var ppDir: File
 
@@ -234,7 +237,7 @@ class HotReloadTest {
 
   @Test
   fun `PaperPlaneConfig load returns defaults when file missing`() {
-    val config = PaperPlaneConfig.load(tempDir)
+    val config = PaperPlaneConfig.load(tempDir, ui)
     assertEquals(DevMode.HOT_RELOAD, config.dev.mode)
     assertEquals(PaperPlaneConfig(), config)
   }
@@ -251,7 +254,7 @@ class HotReloadTest {
             .trimIndent()
     )
 
-    val config = PaperPlaneConfig.load(tempDir)
+    val config = PaperPlaneConfig.load(tempDir, ui)
     assertEquals(DevMode.HOT_RELOAD, config.dev.mode)
     assertEquals(3000, config.dev.debounceMs)
   }

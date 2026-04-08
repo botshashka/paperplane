@@ -24,8 +24,8 @@ class BuildStatusBar(private val plugin: JavaPlugin) {
   /**
    * True while the active server's world is no longer authoritative — either the save is in
    * progress or the CLI has moved on to building/transferring and any further edits will be
-   * discarded when the standby takes over. Consumed by [SaveProtectionListener] to cancel
-   * block edits for the entire rebuild window.
+   * discarded when the standby takes over. Consumed by [SaveProtectionListener] to cancel block
+   * edits for the entire rebuild window.
    */
   var blockWorldEdits: Boolean = false
     private set

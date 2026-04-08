@@ -1,5 +1,8 @@
 package dev.paperplane.cli.commands
 
+import dev.paperplane.cli.ui.InteractivePrompts
+import dev.paperplane.cli.ui.RecordingTerminal
+import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -11,7 +14,8 @@ class ImplodeCommandTest {
 
   @TempDir lateinit var tempDir: File
 
-  private val command = ImplodeCommand()
+  private val terminal = RecordingTerminal()
+  private val command = ImplodeCommand(TerminalUI(terminal), InteractivePrompts(terminal))
 
   // ── removePaperplaneBlock ───────────────────────────────────────────
 

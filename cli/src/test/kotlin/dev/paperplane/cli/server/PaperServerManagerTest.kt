@@ -1,5 +1,7 @@
 package dev.paperplane.cli.server
 
+import dev.paperplane.cli.ui.RecordingTerminal
+import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -10,12 +12,13 @@ import org.junit.jupiter.api.io.TempDir
 class PaperServerManagerTest {
 
   @TempDir lateinit var tempDir: File
+  private val ui = TerminalUI(RecordingTerminal())
 
   private fun createManager(port: Int = 25566): PaperServerManager {
     val serverDir = File(tempDir, "server-$port")
     val cacheDir = File(tempDir, "cache")
     val downloader = PaperDownloader(cacheDir)
-    return PaperServerManager(serverDir, downloader, port = port)
+    return PaperServerManager(serverDir, downloader, ui, port = port)
   }
 
   @Test

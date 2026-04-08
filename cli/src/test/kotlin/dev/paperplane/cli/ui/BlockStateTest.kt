@@ -10,12 +10,12 @@ import org.junit.jupiter.api.Test
 /**
  * Unit tests for [BlockState] — the pure block/footer state machine.
  *
- * The whole point of the [BlockState] / [RenderOp] split is that these tests need no terminal,
- * no stdout capture, no ANSI regex matching. Just construct, drive transitions, assert on op
- * lists. Each test is one rule.
+ * The whole point of the [BlockState] / [RenderOp] split is that these tests need no terminal, no
+ * stdout capture, no ANSI regex matching. Just construct, drive transitions, assert on op lists.
+ * Each test is one rule.
  *
- * `isTty = true` is the default — that's the interesting code path. The non-TTY case (no
- * pinned footer, no clear ops) gets one focused test at the bottom.
+ * `isTty = true` is the default — that's the interesting code path. The non-TTY case (no pinned
+ * footer, no clear ops) gets one focused test at the bottom.
  */
 class BlockStateTest {
 
@@ -91,6 +91,46 @@ class BlockStateTest {
     state.beginBlock(BlockState.BlockType.PERSIST)
     val ops = state.endBlock()
     assertEquals(emptyList<RenderOp>(), ops)
+  }
+
+  // ── nextSection ────────────────────────────────────────────────────
+
+  @Test
+  fun `nextSection commits the current group and opens a fresh sub-block of the same type`() {
+    val state = newState()
+    state.beginBlock(BlockState.BlockType.PERSIST)
+    state.emit("first")
+    state.emit("second")
+    val ops = state.nextSection()
+    // Clear the pinned footer, scroll-commit "first" and "second" with a leading separator,
+    // then we're left in a fresh PERSIST block with no pinned content.
+    assertEquals(
+        listOf(ClearFooter(3), WriteLine(), WriteLine("first"), WriteLine("second")),
+        ops,
+    )
+    assertTrue(state.isBlockActive)
+    assertEquals(0, state.pinnedLineCount)
+    assertEquals(emptyList<String>(), state.bufferedLines)
+  }
+
+  @Test
+  fun `nextSection followed by emit pins the new group as its own footer`() {
+    val state = newState()
+    state.beginBlock(BlockState.BlockType.PERSIST)
+    state.emit("first")
+    state.nextSection()
+    val ops = state.emit("second-group")
+    // Fresh sub-block: separator (needsSeparator was rearmed by nextSection's endBlock) plus the
+    // line. The "first" group is already in scrollback and not part of this redraw.
+    assertEquals(listOf(WriteLine(), WriteLine("second-group")), ops)
+  }
+
+  @Test
+  fun `nextSection with no active block is a no-op`() {
+    val state = newState()
+    val ops = state.nextSection()
+    assertEquals(emptyList<RenderOp>(), ops)
+    assertFalse(state.isBlockActive)
   }
 
   // ── discardBlock ───────────────────────────────────────────────────
@@ -230,23 +270,34 @@ class BlockStateTest {
   // ── Non-TTY ────────────────────────────────────────────────────────
 
   @Test
-  fun `non-TTY emit scroll-commits the line directly without pinning a footer`() {
+  fun `non-TTY emit buffers without producing ops until endBlock flushes`() {
     val state = newState(isTty = false)
     state.beginBlock(BlockState.BlockType.PERSIST)
     val first = state.emit("hello")
     val second = state.emit("world")
-    assertEquals(listOf(WriteLine("hello")), first)
-    assertEquals(listOf(WriteLine("world")), second)
+    // Non-TTY emits hold their content; nothing renders until endBlock.
+    assertEquals(emptyList<RenderOp>(), first)
+    assertEquals(emptyList<RenderOp>(), second)
     assertEquals(0, state.pinnedLineCount)
   }
 
   @Test
-  fun `non-TTY endBlock is a no-op since nothing was buffered`() {
+  fun `non-TTY endBlock flushes buffered lines with leading separator`() {
     val state = newState(isTty = false)
     state.beginBlock(BlockState.BlockType.PERSIST)
     state.emit("hello")
+    state.emit("world")
     val ops = state.endBlock()
-    // Lines were committed by emit; endBlock has nothing buffered.
-    assertEquals(emptyList<RenderOp>(), ops)
+    assertEquals(
+        listOf(WriteLine(), WriteLine("hello"), WriteLine("world")),
+        ops,
+    )
+  }
+
+  @Test
+  fun `non-TTY emit outside a block scroll-commits directly`() {
+    val state = newState(isTty = false)
+    val ops = state.emit("standalone")
+    assertEquals(listOf(WriteLine("standalone")), ops)
   }
 }

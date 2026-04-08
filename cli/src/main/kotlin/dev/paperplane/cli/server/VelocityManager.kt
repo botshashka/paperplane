@@ -5,7 +5,7 @@ import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import java.util.UUID
 
-class VelocityManager(private val proxyDir: File) {
+class VelocityManager(private val proxyDir: File, private val ui: TerminalUI) {
   companion object {
     private const val TRANSFER_POLL_INTERVAL_MS = 100L
     private const val STOP_TIMEOUT_SECONDS = 5L
@@ -118,7 +118,7 @@ class VelocityManager(private val proxyDir: File) {
     Thread(
             {
               proc.inputStream.bufferedReader().forEachLine { line ->
-                TerminalUI.serverLog("  ${formatProxyLine(line)}")
+                ui.serverLog("  ${formatProxyLine(line)}")
               }
             },
             "proxy-output",

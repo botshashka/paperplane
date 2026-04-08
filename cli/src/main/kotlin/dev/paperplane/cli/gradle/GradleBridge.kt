@@ -27,7 +27,7 @@ data class ProjectMetadata(
             ?: listOfNotNull(classesDir.takeIf { it.isNotEmpty() })
 }
 
-class GradleBridge(private val projectDir: File) : AutoCloseable {
+class GradleBridge(private val projectDir: File, private val ui: TerminalUI) : AutoCloseable {
   companion object {
     private const val MAX_DISPLAYED_ERRORS = 5
     private const val MAX_FALLBACK_LINES = 10
@@ -74,7 +74,7 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
           .run()
       true
     } catch (e: GradleConnectionException) {
-      TerminalUI.status("Build failed: ${e.message}")
+      ui.status("Build failed: ${e.message}")
       val output = stderr.toString() + stdout.toString()
       parseBuildErrors(output)
       false
@@ -137,7 +137,7 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
       true
     } catch (e: GradleConnectionException) {
       if (!quiet) {
-        TerminalUI.status("Test failed: ${e.message}")
+        ui.status("Test failed: ${e.message}")
         val output = stderr.toString() + stdout.toString()
         parseBuildErrors(output)
       }
@@ -165,7 +165,7 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
 
       parseMetadataFile(metadataFile)
     } catch (e: GradleConnectionException) {
-      TerminalUI.status("Metadata task failed: ${e.message}")
+      ui.status("Metadata task failed: ${e.message}")
       null
     }
   }
@@ -195,10 +195,10 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
       for (match in errors.take(MAX_DISPLAYED_ERRORS)) {
         val (file, line, message) = match.destructured
         val shortFile = file.substringAfter("src/")
-        TerminalUI.buildError("src/$shortFile", line.toInt(), message)
+        ui.buildError("src/$shortFile", line.toInt(), message)
       }
       if (errors.size > MAX_DISPLAYED_ERRORS) {
-        TerminalUI.status("... and ${errors.size - MAX_DISPLAYED_ERRORS} more errors")
+        ui.status("... and ${errors.size - MAX_DISPLAYED_ERRORS} more errors")
       }
     } else {
       // Fallback: show raw output (trimmed)
@@ -210,7 +210,7 @@ class GradleBridge(private val projectDir: File) : AutoCloseable {
               .takeLast(MAX_FALLBACK_LINES)
               .joinToString("\n")
       if (trimmed.isNotBlank()) {
-        TerminalUI.buildError("Build output", null, trimmed)
+        ui.buildError("Build output", null, trimmed)
       }
     }
   }

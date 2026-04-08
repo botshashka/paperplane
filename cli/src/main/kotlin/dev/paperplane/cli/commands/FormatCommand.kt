@@ -8,7 +8,7 @@ import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 
-class FormatCommand : CliktCommand(name = "format") {
+class FormatCommand(private val ui: TerminalUI) : CliktCommand(name = "format") {
   private val check by
       option("--check", "-c", help = "Check formatting without modifying files").flag()
   private val projectDir = File(System.getProperty("user.dir"))
@@ -17,19 +17,19 @@ class FormatCommand : CliktCommand(name = "format") {
     try {
       runInternal()
     } finally {
-      TerminalUI.endView()
+      ui.endView()
     }
   }
 
   private fun runInternal() {
-    TerminalUI.header(Versions.paperplaneVersion())
+    ui.header(Versions.paperplaneVersion())
 
-    val gradle = GradleBridge(projectDir)
+    val gradle = GradleBridge(projectDir, ui)
     try {
       val spinMessage = if (check) "Checking formatting..." else "Formatting..."
-      val result = TerminalUI.spin(spinMessage) { gradle.format(check = check) }
+      val result = ui.spin(spinMessage) { gradle.format(check = check) }
 
-      TerminalUI.block {
+      ui.block {
         if (result.success) {
           success(if (check) "Formatting OK" else "Formatted")
         } else if (result.taskMissing) {

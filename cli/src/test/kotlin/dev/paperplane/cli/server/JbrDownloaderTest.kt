@@ -1,5 +1,7 @@
 package dev.paperplane.cli.server
 
+import dev.paperplane.cli.ui.RecordingTerminal
+import dev.paperplane.cli.ui.TerminalUI
 import dev.paperplane.cli.util.Platform
 import java.io.File
 import org.junit.jupiter.api.Assertions.assertDoesNotThrow
@@ -13,6 +15,7 @@ import org.junit.jupiter.api.io.TempDir
 class JbrDownloaderTest {
 
   @TempDir lateinit var tempDir: File
+  private val ui = TerminalUI(RecordingTerminal())
 
   private val binaryName = if (Platform.isWindows) "java.exe" else "java"
 
@@ -52,7 +55,7 @@ class JbrDownloaderTest {
     javaBin.writeText("#!/bin/sh\necho fake java")
     javaBin.setExecutable(true)
 
-    val downloader = JbrDownloader(cacheDir)
+    val downloader = JbrDownloader(ui, cacheDir)
     val result = downloader.download("21")
 
     assertEquals(javaBin.absolutePath, result.absolutePath)
@@ -70,7 +73,7 @@ class JbrDownloaderTest {
     javaBin.writeText("#!/bin/sh\necho fake java")
     javaBin.setExecutable(true)
 
-    val downloader = JbrDownloader(cacheDir)
+    val downloader = JbrDownloader(ui, cacheDir)
     val result = downloader.download("21")
 
     assertEquals(javaBin.absolutePath, result.absolutePath)
@@ -87,7 +90,7 @@ class JbrDownloaderTest {
     javaBin.writeText("#!/bin/sh\necho fake java")
     javaBin.setExecutable(true)
 
-    val downloader = JbrDownloader(cacheDir)
+    val downloader = JbrDownloader(ui, cacheDir)
     val result = downloader.download("21")
 
     assertEquals(javaBin.absolutePath, result.absolutePath)
@@ -104,7 +107,7 @@ class JbrDownloaderTest {
     javaBin.writeText("#!/bin/sh\necho fake java")
     javaBin.setExecutable(true)
 
-    val downloader = JbrDownloader(cacheDir)
+    val downloader = JbrDownloader(ui, cacheDir)
     val result = downloader.download("21")
 
     assertEquals(javaBin.absolutePath, result.absolutePath)
@@ -121,7 +124,7 @@ class JbrDownloaderTest {
     javaBin.writeText("#!/bin/sh\necho fake java")
     javaBin.setExecutable(true)
 
-    val downloader = JbrDownloader(cacheDir)
+    val downloader = JbrDownloader(ui, cacheDir)
 
     // Should return instantly from cache; no network error possible
     val result = downloader.download("21")
@@ -150,7 +153,7 @@ class JbrDownloaderTest {
     java17.writeText("java 17")
     java17.setExecutable(true)
 
-    val downloader = JbrDownloader(cacheDir)
+    val downloader = JbrDownloader(ui, cacheDir)
 
     val result21 = downloader.download("21")
     val result17 = downloader.download("17")
@@ -165,7 +168,7 @@ class JbrDownloaderTest {
   @Test
   fun `JbrDownloader instantiates without error on current platform`() {
     val cacheDir = File(tempDir, "jbr")
-    assertDoesNotThrow { JbrDownloader(cacheDir) }
+    assertDoesNotThrow { JbrDownloader(ui, cacheDir) }
   }
 
   // ── Cache returns correct file (not a directory) ───────────────────
@@ -179,7 +182,7 @@ class JbrDownloaderTest {
     javaBin.writeText("fake")
     javaBin.setExecutable(true)
 
-    val downloader = JbrDownloader(cacheDir)
+    val downloader = JbrDownloader(ui, cacheDir)
     val result = downloader.download("21")
 
     assertTrue(result.isFile)

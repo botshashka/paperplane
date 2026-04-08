@@ -8,7 +8,10 @@ import dev.paperplane.cli.ui.TerminalUI
 import dev.paperplane.cli.util.Platform
 import java.io.File
 
-class ImplodeCommand : CliktCommand(name = "implode") {
+class ImplodeCommand(
+    private val ui: TerminalUI,
+    private val prompts: InteractivePrompts,
+) : CliktCommand(name = "implode") {
   companion object {
     private const val PAPERPLANE_MARKER = "# paperplane"
   }
@@ -19,8 +22,8 @@ class ImplodeCommand : CliktCommand(name = "implode") {
     val installDir = Platform.paperplaneHome
 
     if (!installDir.exists()) {
-      TerminalUI.blank()
-      TerminalUI.error("No ~/.paperplane/ directory found — nothing to remove")
+      ui.blank()
+      ui.error("No ~/.paperplane/ directory found — nothing to remove")
       return
     }
 
@@ -29,7 +32,7 @@ class ImplodeCommand : CliktCommand(name = "implode") {
     val rcFiles = shellRcFiles()
     val affectedRcFiles = rcFiles.filter { it.readText().contains(PAPERPLANE_MARKER) }
 
-    TerminalUI.block {
+    ui.block {
       status("This will remove:")
       info("~/.paperplane/", Platform.formatSize(totalSize))
       if (affectedRcFiles.isNotEmpty()) {
@@ -39,15 +42,12 @@ class ImplodeCommand : CliktCommand(name = "implode") {
       status("Total: ${Platform.formatSize(totalSize)}")
     }
 
-    if (
-        !force &&
-            !InteractivePrompts.confirm("Are you sure? This will remove ppl from your system.")
-    ) {
-      TerminalUI.status("Cancelled")
+    if (!force && !prompts.confirm("Are you sure? This will remove ppl from your system.")) {
+      ui.status("Cancelled")
       return
     }
 
-    TerminalUI.block {
+    ui.block {
       // Remove PATH entries
       if (Platform.isWindows) {
         removeWindowsPathEntry()
@@ -151,7 +151,7 @@ class ImplodeCommand : CliktCommand(name = "implode") {
             .redirectErrorStream(true)
             .start()
             .waitFor()
-        TerminalUI.success("Removed PATH entry from registry")
+        ui.success("Removed PATH entry from registry")
       }
     } catch (_: Exception) {
       // Best-effort; user can clean up manually

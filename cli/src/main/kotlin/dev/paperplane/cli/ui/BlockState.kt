@@ -11,8 +11,8 @@ import dev.paperplane.cli.ui.RenderOp.WriteLine
  * makes the rules unit-testable without stdout capture: tests construct a `BlockState`, drive
  * transitions, and assert on op sequences.
  *
- * Single-threaded by contract — the caller (currently [TerminalUI]) is responsible for any
- * locking. The class is internally mutable.
+ * Single-threaded by contract — the caller (currently [TerminalUI]) is responsible for any locking.
+ * The class is internally mutable.
  *
  * The two block types ([BlockType.PERSIST] and [BlockType.TRANSIENT]) drive the same rules as
  * before the extraction:
@@ -20,7 +20,10 @@ import dev.paperplane.cli.ui.RenderOp.WriteLine
  * - TRANSIENT blocks (the dev-server "Watching for changes..." footer) are erased silently.
  */
 internal class BlockState(private val isTty: Boolean) {
-  enum class BlockType { PERSIST, TRANSIENT }
+  enum class BlockType {
+    PERSIST,
+    TRANSIENT,
+  }
 
   // ── State ──────────────────────────────────────────────────────────
   // Visible to tests via the package-private accessors below; mutated only by transitions here.
@@ -37,11 +40,20 @@ internal class BlockState(private val isTty: Boolean) {
   private var viewClosed = false
 
   // Test introspection ------------------------------------------------
-  internal val isBlockActive: Boolean get() = blockActive
-  internal val pinnedLineCount: Int get() = displayedLineCount
-  internal val bufferedLines: List<String> get() = blockLines.toList()
-  internal val isViewClosed: Boolean get() = viewClosed
-  internal val separatorPending: Boolean get() = needsSeparator
+  internal val isBlockActive: Boolean
+    get() = blockActive
+
+  internal val pinnedLineCount: Int
+    get() = displayedLineCount
+
+  internal val bufferedLines: List<String>
+    get() = blockLines.toList()
+
+  internal val isViewClosed: Boolean
+    get() = viewClosed
+
+  internal val separatorPending: Boolean
+    get() = needsSeparator
 
   // ── Block lifecycle ────────────────────────────────────────────────
 
@@ -54,9 +66,9 @@ internal class BlockState(private val isTty: Boolean) {
   }
 
   /**
-   * Closes the current block. PERSIST blocks with content emit [ClearFooter] (to erase any
-   * pinned redraw of those lines) followed by [WriteLine]s that scroll-commit them. TRANSIENT
-   * blocks just clear silently.
+   * Closes the current block. PERSIST blocks with content emit [ClearFooter] (to erase any pinned
+   * redraw of those lines) followed by [WriteLine]s that scroll-commit them. TRANSIENT blocks just
+   * clear silently.
    */
   fun endBlock(): List<RenderOp> {
     if (!blockActive && blockLines.isEmpty()) return emptyList()
@@ -77,6 +89,21 @@ internal class BlockState(private val isTty: Boolean) {
     return ops
   }
 
+  /**
+   * Commits the current block (as if [endBlock] were called) and immediately reopens a new block of
+   * the same type. Used to insert a section boundary inside a `phase { }` body so two visually
+   * separate groups of lines can share a single phase lifecycle.
+   *
+   * Crucially, the *prior* group is promoted to permanent scrollback before the new sub-block opens
+   * — so if the phase body later throws, only the second group is discarded. Compared to inserting
+   * a [blank] inside one block, this is the discard-safe choice. No-op when no block is active.
+   */
+  fun nextSection(): List<RenderOp> {
+    if (!blockActive) return emptyList()
+    val type = currentBlockType
+    return endBlock() + beginBlock(type)
+  }
+
   /** Discards the current block without committing PERSIST lines. Used by [phase] re-entry. */
   fun discardBlock(): List<RenderOp> {
     if (!blockActive && blockLines.isEmpty()) return emptyList()
@@ -92,20 +119,21 @@ internal class BlockState(private val isTty: Boolean) {
   // ── Output ─────────────────────────────────────────────────────────
 
   /**
-   * Adds [text] to the active block (and redraws the pinned footer) when a TTY block is open;
-   * otherwise scroll-commits it directly.
+   * Adds [text] to the active block. In TTY mode the pinned footer is redrawn so the buffered lines
+   * stay visible; in non-TTY mode the lines are held until [endBlock] flushes them. Calls outside
+   * any block scroll-commit directly.
    */
   fun emit(text: String): List<RenderOp> {
-    if (blockActive && isTty) {
+    if (blockActive) {
       blockLines.add(text)
-      return redraw()
+      return if (isTty) redraw() else emptyList()
     }
     return listOf(WriteLine(text))
   }
 
   /**
-   * Prints a server/proxy log line. When a footer is pinned, clears it, prints the log line in
-   * the scrollback, then redraws the footer above so the pinned content stays at the bottom.
+   * Prints a server/proxy log line. When a footer is pinned, clears it, prints the log line in the
+   * scrollback, then redraws the footer above so the pinned content stays at the bottom.
    */
   fun serverLog(line: String): List<RenderOp> {
     val ops = mutableListOf<RenderOp>()
@@ -168,9 +196,9 @@ internal class BlockState(private val isTty: Boolean) {
   // ── Spinner ────────────────────────────────────────────────────────
 
   /**
-   * Sets the spinner message/substatus and (re)draws the footer. If no block is active, the
-   * caller is expected to have opened an auto-block via [beginBlock] first; this method does not
-   * change `blockActive` itself.
+   * Sets the spinner message/substatus and (re)draws the footer. If no block is active, the caller
+   * is expected to have opened an auto-block via [beginBlock] first; this method does not change
+   * `blockActive` itself.
    */
   fun setSpinner(message: String?, substatus: String?): List<RenderOp> {
     spinnerMessage = message
@@ -197,8 +225,8 @@ internal class BlockState(private val isTty: Boolean) {
   }
 
   /**
-   * Clears the spinner state and erases the pinned footer. Does NOT commit block lines or close
-   * the block — callers wanting that follow up with [endBlock]. Used by `spin {}`'s finally.
+   * Clears the spinner state and erases the pinned footer. Does NOT commit block lines or close the
+   * block — callers wanting that follow up with [endBlock]. Used by `spin {}`'s finally.
    */
   fun clearSpinner(): List<RenderOp> {
     spinnerMessage = null

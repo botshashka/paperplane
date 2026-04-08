@@ -2,13 +2,13 @@ package dev.paperplane.cli.devserver
 
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.server.PaperServerManager
-import dev.paperplane.cli.ui.TerminalUI
 import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal class RestartMode(private val session: DevSession) {
-  private val serverManager = PaperServerManager(File(session.ppDir, "server"), session.downloader)
+  private val serverManager =
+      PaperServerManager(File(session.ppDir, "server"), session.downloader, session.ui)
 
   private data class RunningState(val metadata: ProjectMetadata, val paperJar: File)
 
@@ -18,8 +18,7 @@ internal class RestartMode(private val session: DevSession) {
         .addShutdownHook(
             Thread {
               if (!shuttingDown.get()) {
-                TerminalUI.clearPinnedFooter()
-                println()
+                session.ui.clearPinnedFooter()
               }
               serverManager.stop()
               session.gradle.close()
@@ -32,7 +31,7 @@ internal class RestartMode(private val session: DevSession) {
         onChanged = { _ -> rebuild(state.metadata, state.paperJar) },
         healthCheck = {
           if (!serverManager.isRunning()) {
-            TerminalUI.error("Server process exited unexpectedly")
+            session.ui.error("Server process exited unexpectedly")
             false
           } else true
         },
@@ -52,7 +51,7 @@ internal class RestartMode(private val session: DevSession) {
    */
   private fun runStartup(shuttingDown: AtomicBoolean): RunningState? {
     var state: RunningState? = null
-    TerminalUI.phase {
+    session.ui.phase {
       val metadata = session.resolveMetadataOrAbort(shuttingDown) ?: return@phase PhaseEnd.None
       val paperJar =
           when (val outcome = session.initialBuild(metadata, serverManager)) {
@@ -109,15 +108,15 @@ internal class RestartMode(private val session: DevSession) {
     val serverStart = System.currentTimeMillis()
     serverManager.start(paperJar, session.config.server.jvmArgs)
     val ready =
-        TerminalUI.spin("Starting Paper $mcVersion server...") { serverManager.waitForReady() }
+        session.ui.spin("Starting Paper $mcVersion server...") { serverManager.waitForReady() }
     val serverDuration = session.formatDuration(System.currentTimeMillis() - serverStart)
 
     return if (ready) {
-      TerminalUI.success("Paper $mcVersion server ready", serverDuration)
+      session.ui.success("Paper $mcVersion server ready", serverDuration)
       serverManager.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
       true
     } else {
-      TerminalUI.error("Server failed to start", serverDuration)
+      session.ui.error("Server failed to start", serverDuration)
       serverManager.writeCompanionStatus("error", mapOf("message" to "Server failed to start"))
       false
     }
@@ -132,10 +131,10 @@ internal class RestartMode(private val session: DevSession) {
     val buildDuration = session.formatDuration(System.currentTimeMillis() - buildStart)
 
     if (!buildSuccess) {
-      TerminalUI.error("Build failed", buildDuration)
+      session.ui.error("Build failed", buildDuration)
       return PhaseEnd.Waiting
     }
-    TerminalUI.success("Build succeeded", buildDuration)
+    session.ui.success("Build succeeded", buildDuration)
 
     val builtJar = File(session.projectDir, metadata.jarPath)
     serverManager.copyPlugin(builtJar)
@@ -147,13 +146,13 @@ internal class RestartMode(private val session: DevSession) {
     val serverDuration = session.formatDuration(System.currentTimeMillis() - serverStart)
 
     return if (ready) {
-      TerminalUI.success("Server ready", serverDuration)
+      session.ui.success("Server ready", serverDuration)
       val totalDuration = session.formatDuration(System.currentTimeMillis() - totalStart)
-      TerminalUI.totalTime(totalDuration)
+      session.ui.totalTime(totalDuration)
       serverManager.writeCompanionStatus("ready", mapOf("duration" to totalDuration))
       PhaseEnd.Watching
     } else {
-      TerminalUI.error("Server failed to start", serverDuration)
+      session.ui.error("Server failed to start", serverDuration)
       PhaseEnd.Waiting
     }
   }

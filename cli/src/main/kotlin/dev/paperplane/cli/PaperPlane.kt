@@ -16,6 +16,7 @@ import dev.paperplane.cli.commands.ImplodeCommand
 import dev.paperplane.cli.commands.InitCommand
 import dev.paperplane.cli.commands.TestCommand
 import dev.paperplane.cli.commands.UpgradeCommand
+import dev.paperplane.cli.ui.AnsiTerminal
 import dev.paperplane.cli.ui.InteractivePrompts
 import dev.paperplane.cli.ui.TerminalUI
 
@@ -45,38 +46,47 @@ class PaperPlane : CliktCommand(name = "ppl") {
 }
 
 fun main(args: Array<String>) {
+  // Single Terminal seam for the whole CLI process. All UI, prompts, dev-server modes, and
+  // helpers wire their I/O through these two instances — threaded via constructor injection.
+  val terminal = AnsiTerminal()
+  val ui = TerminalUI(terminal)
+  val prompts = InteractivePrompts(terminal)
+
   // Safety net: restore terminal attributes if the JVM exits while still in raw mode
   // (hard SIGTERM, unexpected System.exit, crash during scaffolding).
   Runtime.getRuntime()
-      .addShutdownHook(Thread({ InteractivePrompts.restoreTerminalIfNeeded() }, "terminal-restore"))
+      .addShutdownHook(Thread({ prompts.restoreTerminalIfNeeded() }, "terminal-restore"))
 
   if (args.isEmpty()) {
     val version = Versions.paperplaneVersion()
-    TerminalUI.header(version)
-    TerminalUI.info("dev", "Start dev server with file watching")
-    TerminalUI.info("create", "Scaffold a new Paper plugin project")
-    TerminalUI.info("init", "Add PaperPlane to an existing project")
-    TerminalUI.info("test", "Run tests via Gradle")
-    TerminalUI.info("format", "Format source code with Spotless")
-    TerminalUI.info("clean", "Clean .paperplane directory")
-    TerminalUI.info("upgrade", "Update ppl to the latest version")
-    TerminalUI.info("implode", "Uninstall ppl completely")
-    TerminalUI.blank()
-    TerminalUI.status("Run 'ppl <command> --help' for more info")
+    ui.header(version)
+    ui.block {
+      info("dev", "Start dev server with file watching")
+      info("create", "Scaffold a new Paper plugin project")
+      info("init", "Add PaperPlane to an existing project")
+      info("test", "Run tests via Gradle")
+      info("format", "Format source code with Spotless")
+      info("clean", "Clean .paperplane directory")
+      info("upgrade", "Update ppl to the latest version")
+      info("implode", "Uninstall ppl completely")
+      blank()
+      status("Run 'ppl <command> --help' for more info")
+    }
+    ui.endView()
     return
   }
 
   PaperPlane()
       .completionOption()
       .subcommands(
-          CreateCommand(),
-          InitCommand(),
-          DevCommand(),
-          TestCommand(),
-          FormatCommand(),
-          CleanCommand(),
-          UpgradeCommand(),
-          ImplodeCommand(),
+          CreateCommand(ui, prompts),
+          InitCommand(ui),
+          DevCommand(ui, prompts),
+          TestCommand(ui),
+          FormatCommand(ui),
+          CleanCommand(ui, prompts),
+          UpgradeCommand(ui),
+          ImplodeCommand(ui, prompts),
       )
       .main(args)
 }

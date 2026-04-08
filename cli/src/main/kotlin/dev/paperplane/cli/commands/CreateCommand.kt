@@ -18,7 +18,10 @@ import dev.paperplane.cli.util.JavaRuntimeUtil
 import dev.paperplane.cli.util.Platform
 import java.io.File
 
-class CreateCommand : CliktCommand(name = "create") {
+class CreateCommand(
+    private val ui: TerminalUI,
+    private val prompts: InteractivePrompts,
+) : CliktCommand(name = "create") {
   companion object {
     private const val WRAPPER_TIMEOUT_SECONDS = 60L
     private const val PAPER_VERSIONS_TO_SHOW = 5
@@ -66,7 +69,7 @@ class CreateCommand : CliktCommand(name = "create") {
   private val useKotlin by option("--kotlin", "-k", help = "Use Kotlin instead of Java").flag()
 
   override fun run() {
-    InteractivePrompts.beginInteractiveView()
+    prompts.beginInteractiveView()
     try {
       if (name == null) {
         runInteractive()
@@ -75,11 +78,11 @@ class CreateCommand : CliktCommand(name = "create") {
       }
     } catch (_: PromptCancelledException) {
       rollbackScaffold()
-      TerminalUI.cancelled()
+      ui.cancelled()
       throw ProgramResult(EXIT_CANCELLED)
     } finally {
-      InteractivePrompts.endInteractiveView()
-      TerminalUI.endView()
+      prompts.endInteractiveView()
+      ui.endView()
     }
   }
 
@@ -129,15 +132,15 @@ class CreateCommand : CliktCommand(name = "create") {
 
   private fun promptProjectNameAndDir(): Triple<String, String, File> {
     while (true) {
-      val displayName = InteractivePrompts.prompt("Plugin name", "My Plugin")
+      val displayName = prompts.prompt("Plugin name", "My Plugin")
       val slug = deriveSlug(displayName)
       if (slug.isEmpty()) {
-        TerminalUI.block { error("Could not derive a project name from '$displayName'") }
+        ui.block { error("Could not derive a project name from '$displayName'") }
         continue
       }
       val projectDir = File(slug)
       if (projectDir.exists()) {
-        TerminalUI.block { error("Directory '$slug' already exists") }
+        ui.block { error("Directory '$slug' already exists") }
         continue
       }
       return Triple(displayName, slug, projectDir)
@@ -146,39 +149,36 @@ class CreateCommand : CliktCommand(name = "create") {
 
   private fun promptPackageName(resolvedAuthor: String, slug: String): String {
     while (true) {
-      val pkg = InteractivePrompts.prompt("Package", derivePackage(resolvedAuthor, slug))
+      val pkg = prompts.prompt("Package", derivePackage(resolvedAuthor, slug))
       if (isValidPackage(pkg)) return pkg
-      TerminalUI.block {
-        error("Invalid package name (use lowercase segments like com.example.myplugin)")
-      }
+      ui.block { error("Invalid package name (use lowercase segments like com.example.myplugin)") }
     }
   }
 
   private fun runInteractive() {
-    TerminalUI.header(Versions.paperplaneVersion())
-    TerminalUI.subtitle("Let's make a new Paper plugin")
+    ui.header(Versions.paperplaneVersion())
+    ui.subtitle("Let's make a new Paper plugin")
 
     val (displayName, slug, projectDir) = promptProjectNameAndDir()
-    val resolvedAuthor = InteractivePrompts.prompt("Author", deriveAuthor())
+    val resolvedAuthor = prompts.prompt("Author", deriveAuthor())
     val className = deriveClassName(slug)
     val resolvedPackage = promptPackageName(resolvedAuthor, slug)
 
     val versions =
-        TerminalUI.spin("Resolving Paper versions...") {
+        ui.spin("Resolving Paper versions...") {
           PaperVersionResolver().resolveRecent(PAPER_VERSIONS_TO_SHOW)
         }
     val versionLabels = versions.mapIndexed { i, v ->
       if (i == versions.lastIndex) "$v (latest)" else v
     }
-    val versionIndex =
-        InteractivePrompts.select("Paper version", versionLabels, default = versions.lastIndex)
+    val versionIndex = prompts.select("Paper version", versionLabels, default = versions.lastIndex)
     val resolvedPaperVersion = versions[versionIndex]
 
-    val langIndex = InteractivePrompts.select("Language", listOf("Java", "Kotlin"))
+    val langIndex = prompts.select("Language", listOf("Java", "Kotlin"))
     val isKotlin = langIndex == 1
 
     val modeIndex =
-        InteractivePrompts.select(
+        prompts.select(
             "Dev mode",
             DevMode.entries.map { InteractivePrompts.SelectOption(it.display, it.description) },
             note = "change anytime in paperplane.yml",
@@ -207,10 +207,10 @@ class CreateCommand : CliktCommand(name = "create") {
     val slug = name!!
     val projectDir = File(slug)
 
-    TerminalUI.header(Versions.paperplaneVersion())
+    ui.header(Versions.paperplaneVersion())
 
     if (projectDir.exists()) {
-      TerminalUI.block { error("Directory '$slug' already exists") }
+      ui.block { error("Directory '$slug' already exists") }
       return
     }
 
@@ -221,9 +221,7 @@ class CreateCommand : CliktCommand(name = "create") {
 
     val resolvedPaperVersion =
         if (paperVersion.isEmpty()) {
-          TerminalUI.spin("Resolving latest Paper version...") {
-            PaperVersionResolver().resolveLatest()
-          }
+          ui.spin("Resolving latest Paper version...") { PaperVersionResolver().resolveLatest() }
         } else paperVersion
 
     createProject(
@@ -244,18 +242,18 @@ class CreateCommand : CliktCommand(name = "create") {
 
   private fun resolveJbrSetting(): String {
     if (JavaRuntimeUtil.checkIsJbr("java")) {
-      TerminalUI.block { success("JetBrains Runtime detected") }
+      ui.block { success("JetBrains Runtime detected") }
       return "auto"
     }
 
     val jbrCache = File(Platform.paperplaneHome, "jbr")
     if (jbrCache.exists() && jbrCache.listFiles()?.isNotEmpty() == true) {
-      TerminalUI.block { success("JetBrains Runtime found") }
+      ui.block { success("JetBrains Runtime found") }
       return "auto"
     }
 
     val choice =
-        InteractivePrompts.select(
+        prompts.select(
             "JetBrains Runtime",
             listOf("Yes, use JBR", "No thanks"),
             note = "enables more reliable hot swapping (~200 MB download)",
@@ -264,16 +262,16 @@ class CreateCommand : CliktCommand(name = "create") {
   }
 
   private fun createProject(config: ProjectConfig) {
-    val wrapperOk = TerminalUI.spin(CREATING_MESSAGES.random()) { scaffoldFiles(config) }
+    val wrapperOk = ui.spin(CREATING_MESSAGES.random()) { scaffoldFiles(config) }
 
-    TerminalUI.block {
+    ui.block {
       success("${SUCCESS_MESSAGES.random()} — ${config.projectName}/")
       if (!wrapperOk) {
         error("Gradle wrapper failed — run 'gradle wrapper' manually")
       }
     }
 
-    TerminalUI.block {
+    ui.block {
       info("cd", "${config.projectName}  ${Ansi.dim("switch to your project folder")}")
       info("ppl", "dev  ${Ansi.dim("launch the dev server")}")
     }

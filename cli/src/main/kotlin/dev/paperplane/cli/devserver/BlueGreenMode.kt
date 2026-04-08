@@ -5,7 +5,6 @@ import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.server.ServerSync
 import dev.paperplane.cli.server.VelocityDownloader
 import dev.paperplane.cli.server.VelocityManager
-import dev.paperplane.cli.ui.TerminalUI
 import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
@@ -33,18 +32,20 @@ internal class BlueGreenMode(private val session: DevSession) {
               PaperServerManager(
                   File(session.ppDir, "server"),
                   session.downloader,
+                  session.ui,
                   Slot.SERVER.port,
               ),
           Slot.SWAP to
               PaperServerManager(
                   File(session.ppDir, "server-swap"),
                   session.downloader,
+                  session.ui,
                   Slot.SWAP.port,
               ),
       )
 
   private val velocityDownloader = VelocityDownloader(File(session.ppDir, "cache"))
-  private val velocityManager = VelocityManager(File(session.ppDir, "proxy"))
+  private val velocityManager = VelocityManager(File(session.ppDir, "proxy"), session.ui)
   private var activeSlot = Slot.SERVER
 
   /**
@@ -92,8 +93,7 @@ internal class BlueGreenMode(private val session: DevSession) {
         .addShutdownHook(
             Thread {
               if (!shuttingDown.get()) {
-                TerminalUI.clearPinnedFooter()
-                println()
+                session.ui.clearPinnedFooter()
               }
               shutdownAll()
             }
@@ -114,7 +114,7 @@ internal class BlueGreenMode(private val session: DevSession) {
         onChanged = { _ -> rebuildAndUpdateSlot(state.metadata, state.paperJar) },
         healthCheck = {
           if (!shuttingDown.get() && !velocityManager.isRunning()) {
-            TerminalUI.error("Proxy process exited unexpectedly")
+            session.ui.error("Proxy process exited unexpectedly")
             false
           } else true
         },
@@ -124,7 +124,7 @@ internal class BlueGreenMode(private val session: DevSession) {
 
   private fun runStartup(shuttingDown: AtomicBoolean): RunningState? {
     var state: RunningState? = null
-    TerminalUI.phase {
+    session.ui.phase {
       val metadata = session.resolveMetadataOrAbort(shuttingDown) ?: return@phase PhaseEnd.None
       val active = servers[activeSlot]!!
       val paperJar =
@@ -180,19 +180,19 @@ internal class BlueGreenMode(private val session: DevSession) {
         proxyPort = PaperServerManager.DEFAULT_PORT,
     )
     val proxyStart = System.currentTimeMillis()
-    val velocityJar = TerminalUI.spin("Downloading Velocity...") { velocityDownloader.download() }
+    val velocityJar = session.ui.spin("Downloading Velocity...") { velocityDownloader.download() }
     velocityManager.start(velocityJar)
     val proxyReady =
-        TerminalUI.spin("Starting Velocity proxy...") {
+        session.ui.spin("Starting Velocity proxy...") {
           velocityManager.waitForReady(PaperServerManager.DEFAULT_PORT)
         }
     val proxyDuration = session.formatDuration(System.currentTimeMillis() - proxyStart)
 
     return if (proxyReady) {
-      TerminalUI.success("Velocity proxy ready", proxyDuration)
+      session.ui.success("Velocity proxy ready", proxyDuration)
       true
     } else {
-      TerminalUI.error("Proxy failed to start", proxyDuration)
+      session.ui.error("Proxy failed to start", proxyDuration)
       false
     }
   }
@@ -210,15 +210,15 @@ internal class BlueGreenMode(private val session: DevSession) {
     val mcVersion = session.resolveMcVersion(metadata)
     val serverStart = System.currentTimeMillis()
     active.start(paperJar, session.config.server.jvmArgs)
-    val ready = TerminalUI.spin("Starting Paper $mcVersion server...") { active.waitForReady() }
+    val ready = session.ui.spin("Starting Paper $mcVersion server...") { active.waitForReady() }
     val serverDuration = session.formatDuration(System.currentTimeMillis() - serverStart)
 
     return if (ready) {
-      TerminalUI.success("Paper $mcVersion server ready", serverDuration)
+      session.ui.success("Paper $mcVersion server ready", serverDuration)
       active.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
       true
     } else {
-      TerminalUI.error("Server failed to start", serverDuration)
+      session.ui.error("Server failed to start", serverDuration)
       active.writeCompanionStatus("error", mapOf("message" to "Server failed to start"))
       false
     }
@@ -269,7 +269,7 @@ internal class BlueGreenMode(private val session: DevSession) {
     preWarmThread = null
 
     active.writeCompanionStatus("saving")
-    TerminalUI.spin("Saving world...") { active.waitForSave() }
+    session.ui.spin("Saving world...") { active.waitForSave() }
 
     if (standby.isRunning()) standby.stop()
 
@@ -295,11 +295,11 @@ internal class BlueGreenMode(private val session: DevSession) {
     syncThread.join()
 
     if (!buildSuccess) {
-      TerminalUI.error("Build failed", buildDuration)
+      session.ui.error("Build failed", buildDuration)
       active.writeCompanionStatus("error", mapOf("message" to "Build failed"))
       return false
     }
-    TerminalUI.success("Build succeeded", buildDuration)
+    session.ui.success("Build succeeded", buildDuration)
     return true
   }
 
@@ -325,11 +325,11 @@ internal class BlueGreenMode(private val session: DevSession) {
     val serverStart = System.currentTimeMillis()
     standby.start(paperJar, session.config.server.jvmArgs)
     val ready =
-        TerminalUI.spin("Starting ${standbySlot.serverName} server...") { standby.waitForReady() }
+        session.ui.spin("Starting ${standbySlot.serverName} server...") { standby.waitForReady() }
     val serverDuration = session.formatDuration(System.currentTimeMillis() - serverStart)
 
     if (!ready) {
-      TerminalUI.error("Standby server failed to start", serverDuration)
+      session.ui.error("Standby server failed to start", serverDuration)
       standby.stop()
       active.writeCompanionStatus("error", mapOf("message" to "Standby failed to start"))
       return false
@@ -343,8 +343,8 @@ internal class BlueGreenMode(private val session: DevSession) {
     val totalDuration = session.formatDuration(System.currentTimeMillis() - totalStart)
     standby.writeCompanionStatus("ready", mapOf("duration" to totalDuration))
 
-    TerminalUI.success("Server ready (${standbySlot.serverName})", serverDuration)
-    TerminalUI.totalTime(totalDuration)
+    session.ui.success("Server ready (${standbySlot.serverName})", serverDuration)
+    session.ui.totalTime(totalDuration)
     return true
   }
 
@@ -401,12 +401,12 @@ internal class BlueGreenMode(private val session: DevSession) {
     val ready = blue.waitForReady()
     val serverDuration = session.formatDuration(System.currentTimeMillis() - serverStart)
     return if (ready) {
-      TerminalUI.success("Server ready", serverDuration)
+      session.ui.success("Server ready", serverDuration)
       blue.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
       velocityManager.writeActiveServer("server")
       PhaseEnd.Watching
     } else {
-      TerminalUI.error("Server failed to start", serverDuration)
+      session.ui.error("Server failed to start", serverDuration)
       PhaseEnd.Waiting
     }
   }

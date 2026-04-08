@@ -16,7 +16,7 @@ data class PaperPlaneConfig(
     val dev: DevConfig = DevConfig(),
 ) {
   companion object {
-    fun load(projectDir: File): PaperPlaneConfig {
+    fun load(projectDir: File, ui: TerminalUI): PaperPlaneConfig {
       val configFile = File(projectDir, "paperplane.yml")
       if (!configFile.exists()) return PaperPlaneConfig()
       return try {
@@ -24,21 +24,21 @@ data class PaperPlaneConfig(
       } catch (e: InvalidPropertyValueException) {
         val unknown = e.cause as? UnknownPropertyException
         if (unknown != null) {
-          reportUnknownKey(unknown)
+          reportUnknownKey(ui, unknown)
         } else {
-          TerminalUI.error("Invalid paperplane.yml: ${e.message}")
+          ui.error("Invalid paperplane.yml: ${e.message}")
         }
         throw ProgramResult(1)
       } catch (e: UnknownPropertyException) {
-        reportUnknownKey(e)
+        reportUnknownKey(ui, e)
         throw ProgramResult(1)
       }
     }
 
-    private fun reportUnknownKey(e: UnknownPropertyException) {
-      TerminalUI.blank()
-      TerminalUI.error("Unknown key '${e.propertyName}' in paperplane.yml")
-      TerminalUI.status("Valid keys: ${e.validPropertyNames.sorted().joinToString(", ")}")
+    private fun reportUnknownKey(ui: TerminalUI, e: UnknownPropertyException) {
+      ui.blank()
+      ui.error("Unknown key '${e.propertyName}' in paperplane.yml")
+      ui.status("Valid keys: ${e.validPropertyNames.sorted().joinToString(", ")}")
     }
   }
 }

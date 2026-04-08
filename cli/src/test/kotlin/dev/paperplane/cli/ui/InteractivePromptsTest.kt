@@ -21,6 +21,7 @@ class InteractivePromptsTest {
 
   private val originalOut = System.out
   private val captured = ByteArrayOutputStream()
+  private val prompts = InteractivePrompts(RecordingTerminal())
 
   @BeforeEach
   fun captureStdout() {
@@ -55,28 +56,28 @@ class InteractivePromptsTest {
   @Test
   fun `typing then Enter returns the typed string`() {
     val reader = FakeReader("hi\r".map { it.code })
-    val result = InteractivePrompts.readPromptLine(default = null, reader = reader)
+    val result = prompts.readPromptLine(default = null, reader = reader)
     assertEquals("hi", result)
   }
 
   @Test
   fun `Enter alone with default returns the default`() {
     val reader = FakeReader(listOf('\r'.code))
-    val result = InteractivePrompts.readPromptLine(default = "fallback", reader = reader)
+    val result = prompts.readPromptLine(default = "fallback", reader = reader)
     assertEquals("fallback", result)
   }
 
   @Test
   fun `Enter alone without default returns null so caller can re-render`() {
     val reader = FakeReader(listOf('\r'.code))
-    val result = InteractivePrompts.readPromptLine(default = null, reader = reader)
+    val result = prompts.readPromptLine(default = null, reader = reader)
     assertNull(result)
   }
 
   @Test
   fun `LF (10) is treated as Enter`() {
     val reader = FakeReader("ok\n".map { it.code })
-    assertEquals("ok", InteractivePrompts.readPromptLine(null, reader))
+    assertEquals("ok", prompts.readPromptLine(null, reader))
   }
 
   // ── Non-ASCII input (regression for the step-1 bugfix) ─────────────
@@ -84,25 +85,25 @@ class InteractivePromptsTest {
   @Test
   fun `Latin-1 character is accepted`() {
     val reader = FakeReader(listOf('Ë'.code, 'c'.code, 'h'.code, 'o'.code, '\r'.code))
-    assertEquals("Ëcho", InteractivePrompts.readPromptLine(null, reader))
+    assertEquals("Ëcho", prompts.readPromptLine(null, reader))
   }
 
   @Test
   fun `CJK character is accepted`() {
     val reader = FakeReader(listOf('你'.code, '好'.code, '\r'.code))
-    assertEquals("你好", InteractivePrompts.readPromptLine(null, reader))
+    assertEquals("你好", prompts.readPromptLine(null, reader))
   }
 
   @Test
   fun `tab and other control chars are dropped`() {
     val reader = FakeReader(listOf('a'.code, '\t'.code, '\u0001'.code, 'b'.code, '\r'.code))
-    assertEquals("ab", InteractivePrompts.readPromptLine(null, reader))
+    assertEquals("ab", prompts.readPromptLine(null, reader))
   }
 
   @Test
   fun `DEL byte (127) is treated as backspace not as input`() {
     val reader = FakeReader(listOf('a'.code, 'b'.code, 127, '\r'.code))
-    assertEquals("a", InteractivePrompts.readPromptLine(null, reader))
+    assertEquals("a", prompts.readPromptLine(null, reader))
   }
 
   // ── Backspace ──────────────────────────────────────────────────────
@@ -110,7 +111,7 @@ class InteractivePromptsTest {
   @Test
   fun `backspace removes the last typed character`() {
     val reader = FakeReader(listOf('a'.code, 'b'.code, 'c'.code, 8, '\r'.code))
-    assertEquals("ab", InteractivePrompts.readPromptLine(null, reader))
+    assertEquals("ab", prompts.readPromptLine(null, reader))
   }
 
   @Test
@@ -118,7 +119,7 @@ class InteractivePromptsTest {
     // Default is shown as a placeholder. First backspace should clear it,
     // then normal typing replaces.
     val reader = FakeReader(listOf(8, 'x'.code, '\r'.code))
-    assertEquals("x", InteractivePrompts.readPromptLine(default = "default", reader = reader))
+    assertEquals("x", prompts.readPromptLine(default = "default", reader = reader))
   }
 
   // ── Cancellation ───────────────────────────────────────────────────
@@ -126,24 +127,18 @@ class InteractivePromptsTest {
   @Test
   fun `Ctrl+C throws PromptCancelledException`() {
     val reader = FakeReader(listOf('a'.code, 3))
-    assertThrows(PromptCancelledException::class.java) {
-      InteractivePrompts.readPromptLine(null, reader)
-    }
+    assertThrows(PromptCancelledException::class.java) { prompts.readPromptLine(null, reader) }
   }
 
   @Test
   fun `ESC throws PromptCancelledException`() {
     val reader = FakeReader(listOf('a'.code, 27))
-    assertThrows(PromptCancelledException::class.java) {
-      InteractivePrompts.readPromptLine(null, reader)
-    }
+    assertThrows(PromptCancelledException::class.java) { prompts.readPromptLine(null, reader) }
   }
 
   @Test
   fun `EOF throws PromptCancelledException`() {
     val reader = FakeReader(emptyList())
-    assertThrows(PromptCancelledException::class.java) {
-      InteractivePrompts.readPromptLine(null, reader)
-    }
+    assertThrows(PromptCancelledException::class.java) { prompts.readPromptLine(null, reader) }
   }
 }

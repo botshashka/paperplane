@@ -13,7 +13,7 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 
-class UpgradeCommand : CliktCommand(name = "upgrade") {
+class UpgradeCommand(private val ui: TerminalUI) : CliktCommand(name = "upgrade") {
   companion object {
     private const val GITHUB_API =
         "https://api.github.com/repos/botshashka/paperplane/releases/latest"
@@ -21,13 +21,12 @@ class UpgradeCommand : CliktCommand(name = "upgrade") {
 
   override fun run() {
     val currentVersion = Versions.paperplaneVersion()
-    TerminalUI.block {
+    ui.block {
       val client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()
       val gson = Gson()
 
       // Fetch latest release info
-      val latestVersion =
-          TerminalUI.spin("Checking for updates...") { fetchLatestVersion(client, gson) }
+      val latestVersion = ui.spin("Checking for updates...") { fetchLatestVersion(client, gson) }
 
       if (latestVersion == null) {
         error("Could not determine latest version")
@@ -41,9 +40,7 @@ class UpgradeCommand : CliktCommand(name = "upgrade") {
 
       // Download and extract the new version
       val ok =
-          TerminalUI.spin("Downloading v$latestVersion...") {
-            downloadAndExtract(client, latestVersion)
-          }
+          ui.spin("Downloading v$latestVersion...") { downloadAndExtract(client, latestVersion) }
 
       if (ok) {
         success("Updated ppl v$currentVersion → v$latestVersion")

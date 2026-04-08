@@ -8,12 +8,12 @@ package dev.paperplane.cli.ui
  * the only consumer that translates these into [Writer] calls.
  *
  * Vocabulary intentionally minimal — two ops cover every existing render path:
- * - [ClearFooter] erases the previously-pinned footer (n lines worth of cursor-up + clear-line
- *   ANSI sequences plus a flush)
+ * - [ClearFooter] erases the previously-pinned footer (n lines worth of cursor-up + clear-line ANSI
+ *   sequences plus a flush)
  * - [WriteLine] prints text plus a newline (with no argument: a blank line)
  *
- * Add new variants only when [BlockState] genuinely needs to express a new primitive that can't
- * be composed from these two.
+ * Add new variants only when [BlockState] genuinely needs to express a new primitive that can't be
+ * composed from these two.
  */
 internal sealed class RenderOp {
   /** Erase [lineCount] lines of pinned footer from the terminal. No-op when count is zero. */

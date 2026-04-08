@@ -8,7 +8,10 @@ import dev.paperplane.cli.ui.TerminalUI
 import dev.paperplane.cli.util.Platform
 import java.io.File
 
-class CleanCommand : CliktCommand(name = "clean") {
+class CleanCommand(
+    private val ui: TerminalUI,
+    private val prompts: InteractivePrompts,
+) : CliktCommand(name = "clean") {
 
   private val force by option("--force", "-f", help = "Skip confirmation").flag()
   private val all by
@@ -19,15 +22,15 @@ class CleanCommand : CliktCommand(name = "clean") {
     try {
       runInternal()
     } finally {
-      TerminalUI.endView()
+      ui.endView()
     }
   }
 
   private fun runInternal() {
     val ppDir = File(projectDir, ".paperplane")
     if (!ppDir.exists()) {
-      TerminalUI.blank()
-      TerminalUI.error("No .paperplane/ directory found — nothing to clean")
+      ui.blank()
+      ui.error("No .paperplane/ directory found — nothing to clean")
       return
     }
 
@@ -43,14 +46,14 @@ class CleanCommand : CliktCommand(name = "clean") {
     if (all && cacheDir.exists()) dirsToDelete.add(cacheDir)
 
     if (dirsToDelete.isEmpty()) {
-      TerminalUI.blank()
-      TerminalUI.status("Nothing to clean")
+      ui.blank()
+      ui.status("Nothing to clean")
       return
     }
 
     val totalSize = dirsToDelete.sumOf { Platform.dirSize(it) }
 
-    TerminalUI.block {
+    ui.block {
       status("This will delete:")
       for (dir in dirsToDelete) {
         info("${dir.name}/", Platform.formatSize(Platform.dirSize(dir)))
@@ -65,12 +68,12 @@ class CleanCommand : CliktCommand(name = "clean") {
       status("Total: ${Platform.formatSize(totalSize)}")
     }
 
-    if (!force && !InteractivePrompts.confirm("Are you sure?")) {
-      TerminalUI.status("Cancelled")
+    if (!force && !prompts.confirm("Are you sure?")) {
+      ui.status("Cancelled")
       return
     }
 
-    TerminalUI.block {
+    ui.block {
       for (dir in dirsToDelete) {
         dir.deleteRecursively()
         success("Deleted ${dir.name}/")

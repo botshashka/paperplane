@@ -1,5 +1,7 @@
 package dev.paperplane.cli.server
 
+import dev.paperplane.cli.ui.RecordingTerminal
+import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -9,9 +11,10 @@ import org.junit.jupiter.api.io.TempDir
 class FormatLineTest {
 
   @TempDir lateinit var tempDir: File
+  private val ui = TerminalUI(RecordingTerminal())
 
   private fun createVelocityManager(): VelocityManager {
-    return VelocityManager(File(tempDir, "proxy"))
+    return VelocityManager(File(tempDir, "proxy"), ui)
   }
 
   // ── PaperServerManager.formatServerLine ─────────────────────────────

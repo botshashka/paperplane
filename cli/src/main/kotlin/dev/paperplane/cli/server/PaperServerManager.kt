@@ -9,6 +9,7 @@ import java.nio.file.StandardCopyOption
 class PaperServerManager(
     val serverDir: File,
     private val downloader: PaperDownloader,
+    private val ui: TerminalUI,
     private val port: Int = DEFAULT_PORT,
 ) {
   companion object {
@@ -179,7 +180,7 @@ class PaperServerManager(
     Thread(
             {
               proc.inputStream.bufferedReader().forEachLine { line ->
-                if (!logSuppressed) TerminalUI.serverLog("  ${formatServerLine(line)}")
+                if (!logSuppressed) ui.serverLog("  ${formatServerLine(line)}")
               }
             },
             "server-$port-output",

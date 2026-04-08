@@ -12,23 +12,22 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 /**
- * Public CLI rendering facade. Owns concurrency (a [ReentrantLock]), formatting (Ansi colors),
- * and the spinner thread; delegates all state-machine and I/O work to [BlockState] +
- * [BlockRenderer].
+ * Public CLI rendering facade. Owns concurrency (a [ReentrantLock]), formatting (Ansi colors), and
+ * the spinner thread; delegates all state-machine and I/O work to [BlockState] + [BlockRenderer].
+ *
+ * One instance per CLI process. Constructed in `PaperPlane.main` with an [AnsiTerminal] and
+ * threaded through every command, dev-server mode, and helper via constructor injection. Tests
+ * construct a `TerminalUI(RecordingTerminal())` and assert on the recorded writes.
  *
  * The block/footer rules — separator handling, PERSIST vs TRANSIENT semantics, log interleaving
  * above the pinned footer, spinner frame management — all live in [BlockState] and are
  * unit-testable without a real terminal.
  */
-object TerminalUI {
-  private const val SPINNER_FRAME_INTERVAL_MS = 80L
-  private const val SPINNER_THREAD_JOIN_TIMEOUT_MS = 200L
-
-  private val isTty = System.console() != null
-
-  /** Backwards-compatible accessor — delegates to [Ansi.useColor]. */
-  val useColor: Boolean
-    get() = Ansi.useColor
+class TerminalUI(terminal: Terminal) {
+  companion object {
+    private const val SPINNER_FRAME_INTERVAL_MS = 80L
+    private const val SPINNER_THREAD_JOIN_TIMEOUT_MS = 200L
+  }
 
   /**
    * Controls what trailing footer [phase] opens after its body returns.
@@ -36,11 +35,19 @@ object TerminalUI {
    * - [Waiting]: "Waiting for changes..." transient footer (build/server failure flow)
    * - [None]: no trailing footer (terminal states — shutdown, unrecoverable error)
    */
-  enum class PhaseEnd { Watching, Waiting, None }
+  enum class PhaseEnd {
+    Watching,
+    Waiting,
+    None,
+  }
+
+  /** Backwards-compatible accessor — delegates to [Ansi.useColor]. */
+  val useColor: Boolean
+    get() = Ansi.useColor
 
   private val lock = ReentrantLock()
-  private val state = BlockState(isTty)
-  private val renderer = BlockRenderer
+  private val state = BlockState(terminal.isTty)
+  private val renderer = BlockRenderer(Writer(terminal))
 
   /** Drives [state] under the lock and renders the resulting ops. */
   private inline fun run(block: BlockState.() -> List<RenderOp>) {
@@ -118,6 +125,14 @@ object TerminalUI {
    */
   fun clearPinnedFooter() = run { discardBlock() }
 
+  /**
+   * Commits the current sub-group of lines and opens a fresh sub-block of the same type. Use inside
+   * a [phase] body to insert a section boundary between two visually separate groups of output
+   * without breaking out of the phase. The committed group is promoted to permanent scrollback, so
+   * if the phase body later throws, only the new group is discarded.
+   */
+  fun nextSection() = run { nextSection() }
+
   // ── Output ─────────────────────────────────────────────────────────
 
   private fun emit(text: String) = run { emit(text) }
@@ -129,12 +144,13 @@ object TerminalUI {
 
   fun cancelled() = run { cancelled("  ${yellow("⚠")}  ${dim("Cancelled")}") }
 
-  fun header(version: String) =
-      run { header("  ${cyan("✈")}  ${bold(cyan("PaperPlane"))} ${dim("v$version")}") }
+  fun header(version: String) = run {
+    header("  ${cyan("✈")}  ${bold(cyan("PaperPlane"))} ${dim("v$version")}")
+  }
 
   /**
-   * Bold subtitle line printed directly under [header]. Bypasses the block system since it
-   * appears before any block activity.
+   * Bold subtitle line printed directly under [header]. Bypasses the block system since it appears
+   * before any block activity.
    */
   fun subtitle(text: String) = run { subtitle("  ${bold(brightWhite(text))}") }
 
@@ -221,15 +237,15 @@ object TerminalUI {
   // ── Spinner ────────────────────────────────────────────────────────
 
   /**
-   * Updates the detail text shown after the spinner message on the same line. Only meaningful
-   * while a [spin] block is executing; otherwise falls back to a normal status emit.
+   * Updates the detail text shown after the spinner message on the same line. Only meaningful while
+   * a [spin] block is executing; otherwise falls back to a normal status emit.
    */
   fun spinSubstatus(text: String) = run { setSpinnerSubstatus(text) }
 
   /**
    * Runs [block] while showing a spinner with [message] pinned in the footer. Server/proxy logs
-   * scroll above; the spinner stays at the bottom. Code inside [block] can call [spinSubstatus]
-   * to update detail text.
+   * scroll above; the spinner stays at the bottom. Code inside [block] can call [spinSubstatus] to
+   * update detail text.
    */
   fun <T> spin(message: String, block: () -> T): T {
     val autoBlock = lock.withLock {
@@ -245,9 +261,7 @@ object TerminalUI {
             {
               while (!done.get()) {
                 Thread.sleep(SPINNER_FRAME_INTERVAL_MS)
-                lock.withLock {
-                  if (!done.get()) renderer.render(state.tickSpinner())
-                }
+                lock.withLock { if (!done.get()) renderer.render(state.tickSpinner()) }
               }
             },
             "spinner",

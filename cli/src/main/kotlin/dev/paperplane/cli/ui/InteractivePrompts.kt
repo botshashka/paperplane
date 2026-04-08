@@ -1,20 +1,25 @@
 package dev.paperplane.cli.ui
 
-import org.jline.terminal.Attributes
-import org.jline.terminal.Terminal
-import org.jline.terminal.TerminalBuilder
 import org.jline.utils.NonBlockingReader
 
 /**
  * Interactive input primitives: text prompts, arrow-key menus, y/N confirmations.
  *
- * Owns the JLine terminal singleton, raw-mode lifecycle, and the `PromptCancelledException` path
- * for Ctrl+C / ESC / EOF. Separate from [TerminalUI] (which owns block/footer rendering and typed
- * emit methods) because it has no overlap beyond reusing color helpers.
+ * Takes a [Terminal] dependency so tests can script prompt input through a fake. Owns nested
+ * raw-mode lifecycle (a wizard enters once via [beginInteractiveView], nested prompts reuse the
+ * outer session rather than toggling termios per prompt) and the `PromptCancelledException` path
+ * for Ctrl+C / ESC / EOF.
+ *
+ * One instance per CLI process, constructed in `PaperPlane.main` and threaded through the commands
+ * that need interactive input (create/init/implode/dev).
  */
-object InteractivePrompts {
-  private const val BOTTOM_PADDING = 1
-  private const val ARROW_KEY_PEEK_TIMEOUT_MS = 50L
+class InteractivePrompts(private val terminal: Terminal) {
+  companion object {
+    private const val BOTTOM_PADDING = 1
+    private const val ARROW_KEY_PEEK_TIMEOUT_MS = 50L
+  }
+
+  private val writer: Writer = Writer(terminal)
 
   /** ASCII control codes consumed by the raw-mode keystroke loop. */
   private object AsciiKeys {
@@ -27,21 +32,12 @@ object InteractivePrompts {
     const val DEL = 127
   }
 
-  private val isTty = System.console() != null
+  private val isTty
+    get() = terminal.isTty
 
-  // JLine terminal + raw-mode view state
-  private val terminalLock = Any()
-  private var terminalInstance: Terminal? = null
-  private var savedAttributes: Attributes? = null
-  private var viewActive = false
-
-  private fun terminal(): Terminal =
-      synchronized(terminalLock) {
-        terminalInstance
-            ?: TerminalBuilder.builder().system(true).dumb(true).build().also {
-              terminalInstance = it
-            }
-      }
+  // Nested raw-mode view state
+  private val viewLock = Any()
+  private var viewHandle: AutoCloseable? = null
 
   /**
    * Enters raw mode for the duration of an interactive wizard. Safe to call once per command;
@@ -50,32 +46,22 @@ object InteractivePrompts {
    */
   fun beginInteractiveView() {
     if (!isTty) return
-    synchronized(terminalLock) {
-      if (viewActive) return
-      val t = terminal()
-      savedAttributes = t.enterRawMode()
-      // JLine's enterRawMode leaves ISIG enabled, so Ctrl+C still generates SIGINT at the OS
-      // level instead of being delivered as byte 3 — the JVM terminates before our
-      // PromptCancelledException handler can print the "Cancelled" banner. Clear ISIG so
-      // Ctrl+C / Ctrl+\ arrive as raw bytes to the keystroke loop.
-      val attrs = Attributes(t.attributes)
-      attrs.setLocalFlag(Attributes.LocalFlag.ISIG, false)
-      t.attributes = attrs
-      viewActive = true
+    synchronized(viewLock) {
+      if (viewHandle != null) return
+      viewHandle = terminal.enterRawMode()
     }
   }
 
   /** Restores terminal attributes saved by [beginInteractiveView]. Idempotent. */
   fun endInteractiveView() {
-    synchronized(terminalLock) {
-      val saved = savedAttributes ?: return
+    synchronized(viewLock) {
+      val handle = viewHandle ?: return
       try {
-        terminalInstance?.attributes = saved
+        handle.close()
       } catch (_: Exception) {
         // best-effort
       }
-      savedAttributes = null
-      viewActive = false
+      viewHandle = null
     }
   }
 
@@ -89,31 +75,19 @@ object InteractivePrompts {
 
   /**
    * Runs [block] with the terminal in raw mode. If an interactive view is active, reuses its
-   * raw-mode state. Otherwise saves + restores attributes around [block].
+   * raw-mode state. Otherwise enters/restores raw mode around [block].
    */
   private inline fun <T> withRawTty(block: (reader: NonBlockingReader) -> T): T {
-    val t = terminal()
-    val ownsRawMode: Boolean
-    val localSaved: Attributes?
-    synchronized(terminalLock) {
-      if (viewActive) {
-        ownsRawMode = false
-        localSaved = null
-      } else {
-        ownsRawMode = true
-        localSaved = t.enterRawMode()
-        // See beginInteractiveView — clear ISIG so Ctrl+C arrives as a byte, not a signal.
-        val attrs = Attributes(t.attributes)
-        attrs.setLocalFlag(Attributes.LocalFlag.ISIG, false)
-        t.attributes = attrs
-      }
+    val localHandle: AutoCloseable?
+    synchronized(viewLock) {
+      localHandle = if (viewHandle != null) null else terminal.enterRawMode()
     }
     try {
-      return block(t.reader())
+      return block(terminal.reader())
     } finally {
-      if (ownsRawMode && localSaved != null) {
+      if (localHandle != null) {
         try {
-          t.attributes = localSaved
+          localHandle.close()
         } catch (_: Exception) {
           // best-effort
         }
@@ -144,27 +118,27 @@ object InteractivePrompts {
   }
 
   private fun renderPromptActive(label: String, default: String?) {
-    Writer.writeLine()
-    Writer.writeLine("  ${Ansi.cyan("›")}  $label:")
+    writer.writeLine()
+    writer.writeLine("  ${Ansi.cyan("›")}  $label:")
     val placeholder = default ?: ""
-    Writer.write("     ${Ansi.dim(placeholder)}")
+    writer.write("     ${Ansi.dim(placeholder)}")
     // Add bottom padding, then move cursor back to input line
-    Writer.write("\n".repeat(BOTTOM_PADDING) + "\u001b[${BOTTOM_PADDING}A\r\u001b[5C")
-    Writer.flush()
+    writer.write("\n".repeat(BOTTOM_PADDING) + "\u001b[${BOTTOM_PADDING}A\r\u001b[5C")
+    writer.flush()
   }
 
   private fun renderPromptCommitted(label: String, result: String) {
     // Collapse to completed state: move up to label line, rewrite label + input
-    Writer.write("\r\u001b[1A\u001b[2K\r")
-    Writer.writeLine("  ${Ansi.dim("◇")}  $label:")
-    Writer.write("\u001b[2K")
-    Writer.writeLine("     $result")
+    writer.write("\r\u001b[1A\u001b[2K\r")
+    writer.writeLine("  ${Ansi.dim("◇")}  $label:")
+    writer.write("\u001b[2K")
+    writer.writeLine("     $result")
     // Clear bottom padding lines
     for (i in 0 until BOTTOM_PADDING) {
-      Writer.write("\u001b[2K\n")
+      writer.write("\u001b[2K\n")
     }
-    Writer.write("\u001b[${BOTTOM_PADDING}A")
-    Writer.flush()
+    writer.write("\u001b[${BOTTOM_PADDING}A")
+    writer.flush()
   }
 
   /**
@@ -187,7 +161,7 @@ object InteractivePrompts {
       when (b) {
         -1, // EOF
         AsciiKeys.CTRL_C -> {
-          Writer.writeLine()
+          writer.writeLine()
           cancelPrompt()
         }
         AsciiKeys.ESC -> {
@@ -197,7 +171,7 @@ object InteractivePrompts {
           if (next >= 0 && reader.read() == '['.code) {
             reader.read() // consume direction byte (A/B/C/D) and ignore
           } else {
-            Writer.writeLine()
+            writer.writeLine()
             cancelPrompt()
           }
         }
@@ -206,8 +180,8 @@ object InteractivePrompts {
           val result = if (usingDefault && input.isEmpty()) default ?: "" else input.toString()
           if (result.isEmpty() && default == null) {
             // Re-render input line; caller re-enters via outer loop
-            Writer.write("\r\u001b[2K     ")
-            Writer.flush()
+            writer.write("\r\u001b[2K     ")
+            writer.flush()
             return null
           }
           return result
@@ -223,11 +197,11 @@ object InteractivePrompts {
           if (input.isEmpty() && !usingDefault && default != null) {
             // Restore placeholder when input is cleared
             usingDefault = true
-            Writer.write("\r\u001b[2K     ${Ansi.dim(default)}\r\u001b[5C")
+            writer.write("\r\u001b[2K     ${Ansi.dim(default)}\r\u001b[5C")
           } else {
-            Writer.write("\r\u001b[2K     ${input}")
+            writer.write("\r\u001b[2K     ${input}")
           }
-          Writer.flush()
+          writer.flush()
         }
         else -> {
           if (b >= AsciiKeys.FIRST_PRINTABLE && !Character.isISOControl(b)) {
@@ -236,8 +210,8 @@ object InteractivePrompts {
               usingDefault = false
             }
             input.append(b.toChar())
-            Writer.write("\r\u001b[2K     ${input}")
-            Writer.flush()
+            writer.write("\r\u001b[2K     ${input}")
+            writer.flush()
           }
         }
       }
@@ -250,8 +224,8 @@ object InteractivePrompts {
   private fun promptFallback(label: String, default: String?): String {
     while (true) {
       val suffix = if (default != null) " ${Ansi.dim("($default)")}" else ""
-      Writer.write("  $label$suffix: ")
-      Writer.flush()
+      writer.write("  $label$suffix: ")
+      writer.flush()
       val input = readlnOrNull()?.trim()
       if (!input.isNullOrEmpty()) return input
       if (default != null) return default
@@ -283,16 +257,16 @@ object InteractivePrompts {
   ): Int {
     if (!isTty) return selectFallback(label, options, default)
     renderSelectHeader(label, note)
-    Writer.write("\u001b[?25l") // hide cursor
+    writer.write("\u001b[?25l") // hide cursor
     renderSelectOptions(options, default)
-    Writer.write("\n".repeat(BOTTOM_PADDING) + "\u001b[${BOTTOM_PADDING}A")
-    Writer.flush()
+    writer.write("\n".repeat(BOTTOM_PADDING) + "\u001b[${BOTTOM_PADDING}A")
+    writer.flush()
     val selected =
         try {
           runSelectInputLoop(options, default)
         } finally {
-          Writer.write("\u001b[?25h")
-          Writer.flush()
+          writer.write("\u001b[?25h")
+          writer.flush()
         }
     renderSelectCommitted(label, options, selected)
     return selected
@@ -300,8 +274,8 @@ object InteractivePrompts {
 
   private fun renderSelectHeader(label: String, note: String?) {
     val noteText = if (note != null) "  ${Ansi.dim(note)}" else ""
-    Writer.writeLine()
-    Writer.writeLine("  ${Ansi.cyan("›")}  ${Ansi.bold(Ansi.brightWhite(label))}:$noteText")
+    writer.writeLine()
+    writer.writeLine("  ${Ansi.cyan("›")}  ${Ansi.bold(Ansi.brightWhite(label))}:$noteText")
   }
 
   private fun runSelectInputLoop(options: List<SelectOption>, initial: Int): Int {
@@ -311,8 +285,7 @@ object InteractivePrompts {
         when (reader.read()) {
           -1,
           AsciiKeys.CTRL_C -> {
-            Writer.write("\u001b[?25h")
-            Writer.writeLine()
+            writer.write("\u001b[?25h")
             cancelPrompt()
           }
           AsciiKeys.CR,
@@ -325,12 +298,11 @@ object InteractivePrompts {
                 'A'.code -> selected = (selected - 1 + options.size) % options.size
                 'B'.code -> selected = (selected + 1) % options.size
               }
-              Writer.write("\u001b[${options.size}A")
+              writer.write("\u001b[${options.size}A")
               renderSelectOptions(options, selected)
-              Writer.flush()
+              writer.flush()
             } else {
-              Writer.write("\u001b[?25h")
-              Writer.writeLine()
+              writer.write("\u001b[?25h")
               cancelPrompt()
             }
           }
@@ -342,23 +314,23 @@ object InteractivePrompts {
 
   private fun renderSelectCommitted(label: String, options: List<SelectOption>, selected: Int) {
     val totalLines = options.size + 1
-    Writer.write("\u001b[${totalLines}A")
+    writer.write("\u001b[${totalLines}A")
     for (i in 0 until totalLines) {
-      Writer.write("\u001b[2K")
-      if (i < totalLines - 1) Writer.write("\u001b[1B")
+      writer.write("\u001b[2K")
+      if (i < totalLines - 1) writer.write("\u001b[1B")
     }
-    if (totalLines > 1) Writer.write("\u001b[${totalLines - 1}A")
-    Writer.write("\r")
+    if (totalLines > 1) writer.write("\u001b[${totalLines - 1}A")
+    writer.write("\r")
 
-    Writer.writeLine("  ${Ansi.dim("◇")}  $label:")
-    Writer.writeLine("     ${options[selected].label}")
+    writer.writeLine("  ${Ansi.dim("◇")}  $label:")
+    writer.writeLine("     ${options[selected].label}")
 
     val excess = totalLines - 2 + BOTTOM_PADDING
     for (i in 0 until excess) {
-      Writer.write("\u001b[2K\n")
+      writer.write("\u001b[2K\n")
     }
-    if (excess > 0) Writer.write("\u001b[${excess}A")
-    Writer.flush()
+    if (excess > 0) writer.write("\u001b[${excess}A")
+    writer.flush()
   }
 
   /**
@@ -375,20 +347,20 @@ object InteractivePrompts {
       sb.append("    ").append(marker).append(text).append(descText)
       sb.append('\n')
     }
-    Writer.write(sb.toString())
+    writer.write(sb.toString())
   }
 
   /** Fallback selection for non-TTY environments: numbered list with line input. */
   private fun selectFallback(label: String, options: List<SelectOption>, default: Int): Int {
-    Writer.writeLine()
-    Writer.writeLine("  $label")
+    writer.writeLine()
+    writer.writeLine("  $label")
     for ((i, option) in options.withIndex()) {
       val descText = option.description?.let { " — $it" } ?: ""
       val marker = if (i == default) " (default)" else ""
-      Writer.writeLine("    ${i + 1}. ${option.label}$descText$marker")
+      writer.writeLine("    ${i + 1}. ${option.label}$descText$marker")
     }
-    Writer.write("  Choice [${default + 1}]: ")
-    Writer.flush()
+    writer.write("  Choice [${default + 1}]: ")
+    writer.flush()
     val input = readlnOrNull()?.trim()
     if (input.isNullOrEmpty()) return default
     return (input.toIntOrNull()?.minus(1))?.coerceIn(0, options.size - 1) ?: default
@@ -398,8 +370,8 @@ object InteractivePrompts {
 
   /** Prints a confirmation prompt and returns true if the user answers y/yes. */
   fun confirm(message: String): Boolean {
-    Writer.writeLine()
-    Writer.write("  $message (y/N): ")
+    writer.writeLine()
+    writer.write("  $message (y/N): ")
     val answer = readlnOrNull()?.trim()?.lowercase()
     return answer == "y" || answer == "yes"
   }

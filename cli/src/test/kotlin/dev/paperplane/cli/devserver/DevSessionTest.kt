@@ -5,6 +5,8 @@ import dev.paperplane.cli.config.PaperPlaneConfig
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.server.PaperDownloader
+import dev.paperplane.cli.ui.RecordingTerminal
+import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -16,13 +18,14 @@ import org.junit.jupiter.api.io.TempDir
 class DevSessionTest {
 
   @TempDir lateinit var tempDir: File
+  private val ui = TerminalUI(RecordingTerminal())
 
   private fun createSession(
       jbr: String = "off",
       serverVersion: String? = null,
   ): DevSession {
     val config =
-        PaperPlaneConfig.load(tempDir).let { cfg ->
+        PaperPlaneConfig.load(tempDir, ui).let { cfg ->
           cfg.copy(
               dev = cfg.dev.copy(jbr = jbr),
               server = cfg.server.copy(version = serverVersion),
@@ -31,9 +34,10 @@ class DevSessionTest {
     return DevSession(
         config = config,
         ppDir = tempDir,
-        gradle = GradleBridge(tempDir),
+        gradle = GradleBridge(tempDir, ui),
         downloader = PaperDownloader(File(tempDir, "cache")),
         projectDir = tempDir,
+        ui = ui,
     )
   }
 

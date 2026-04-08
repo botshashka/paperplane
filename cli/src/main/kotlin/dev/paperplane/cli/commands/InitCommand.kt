@@ -6,7 +6,7 @@ import dev.paperplane.cli.server.PaperVersionResolver
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 
-class InitCommand : CliktCommand(name = "init") {
+class InitCommand(private val ui: TerminalUI) : CliktCommand(name = "init") {
   companion object {
     private val PAPER_VERSION_PATTERN = Regex("""paper-api[:'"]([^'"]+)-R""")
   }
@@ -17,21 +17,21 @@ class InitCommand : CliktCommand(name = "init") {
     try {
       runInternal()
     } finally {
-      TerminalUI.endView()
+      ui.endView()
     }
   }
 
   private fun runInternal() {
     val version = Versions.paperplaneVersion()
-    TerminalUI.header(version)
+    ui.header(version)
 
     val buildFile = findBuildFile()
     if (buildFile == null) {
-      TerminalUI.block { error("No build.gradle or build.gradle.kts found in current directory") }
+      ui.block { error("No build.gradle or build.gradle.kts found in current directory") }
       return
     }
 
-    TerminalUI.block {
+    ui.block {
       status("Found ${buildFile.name}")
       val buildContent = buildFile.readText()
       ensurePluginApplied(buildFile, buildContent, version)
@@ -40,7 +40,7 @@ class InitCommand : CliktCommand(name = "init") {
       ensureGitignoreEntry()
     }
 
-    TerminalUI.block {
+    ui.block {
       success("PaperPlane setup complete")
       status("Run 'ppl dev' to start developing!")
     }
