@@ -29,6 +29,12 @@ class FakeGradleBridge(
             version = "1.0.0",
         ),
     var nextMetadataFast: ProjectMetadata? = nextMetadata,
+    /**
+     * Optional callback invoked inside [test] before it returns. Lets tests recreate JUnit XML
+     * fixture files that the production code has already cleared, since `runTestsInBlock` wipes
+     * stale results before invoking gradle.test().
+     */
+    var onTest: () -> Unit = {},
 ) : GradleBridge(projectDir, ui) {
 
   /** Ordered log of every method call, e.g. `["build", "metadata", "test(quiet=true)"]`. */
@@ -46,6 +52,7 @@ class FakeGradleBridge(
 
   override fun test(quiet: Boolean, filter: String?): Boolean {
     calls += "test(quiet=$quiet, filter=$filter)"
+    onTest()
     return nextTestResult
   }
 

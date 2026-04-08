@@ -8,10 +8,13 @@ import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 
-class FormatCommand(private val ui: TerminalUI) : CliktCommand(name = "format") {
+open class FormatCommand(private val ui: TerminalUI) : CliktCommand(name = "format") {
   private val check by
       option("--check", "-c", help = "Check formatting without modifying files").flag()
   private val projectDir = File(System.getProperty("user.dir"))
+
+  /** Factory for the underlying Gradle bridge. Tests override to inject a `FakeGradleBridge`. */
+  protected open fun newGradleBridge(): GradleBridge = GradleBridge(projectDir, ui)
 
   override fun run() {
     try {
@@ -24,7 +27,7 @@ class FormatCommand(private val ui: TerminalUI) : CliktCommand(name = "format") 
   private fun runInternal() {
     ui.header(Versions.paperplaneVersion())
 
-    val gradle = GradleBridge(projectDir, ui)
+    val gradle = newGradleBridge()
     try {
       val spinMessage = if (check) "Checking formatting..." else "Formatting..."
       val result = ui.spin(spinMessage) { gradle.format(check = check) }

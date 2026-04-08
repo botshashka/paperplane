@@ -12,7 +12,7 @@ import dev.paperplane.cli.watcher.FileWatcher
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 
-class TestCommand(private val ui: TerminalUI) : CliktCommand(name = "test") {
+open class TestCommand(private val ui: TerminalUI) : CliktCommand(name = "test") {
   companion object {
     private const val WATCH_POLL_INTERVAL_MS = 1000L
     private const val MILLIS_PER_SECOND = 1000.0
@@ -22,6 +22,9 @@ class TestCommand(private val ui: TerminalUI) : CliktCommand(name = "test") {
   private val verbose by option("--verbose", "-v", help = "Show full error messages").flag()
   private val filter by option("--filter", "-f", help = "Filter tests by name (e.g. 'blockBreak')")
   private val projectDir = File(System.getProperty("user.dir"))
+
+  /** Factory for the underlying Gradle bridge. Tests override to inject a `FakeGradleBridge`. */
+  protected open fun newGradleBridge(): GradleBridge = GradleBridge(projectDir, ui)
 
   override fun run() {
     try {
@@ -62,7 +65,7 @@ class TestCommand(private val ui: TerminalUI) : CliktCommand(name = "test") {
   }
 
   private fun runTestsInBlock() {
-    val gradle = GradleBridge(projectDir, ui)
+    val gradle = newGradleBridge()
 
     val buildStart = System.currentTimeMillis()
     // Clean stale results so filtered runs don't show old tests

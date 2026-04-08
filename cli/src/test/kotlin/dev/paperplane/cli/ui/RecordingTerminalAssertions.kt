@@ -87,6 +87,12 @@ fun RecordingTerminal.assertSeparatorBetween(before: String, after: String, blan
 /**
  * Assert that no two consecutive blank lines appear anywhere in [writes]. Catches double-blank
  * regressions (the bug we just debugged in the shutdown-hook path).
+ *
+ * **Caveat:** This matcher operates on the raw write log, which contains pinned-footer redraws with
+ * overlapping content. It is unsuitable for tests that exercise blocks containing an explicit
+ * `blank()` call — the redraw cycle puts the in-block blank adjacent to the next redraw's leading
+ * separator in the log, even though the screen is fine. Use this matcher only for sequences that
+ * don't redraw a pinned footer (single emit, simple top-level calls).
  */
 fun RecordingTerminal.assertNoConsecutiveBlanks() {
   val lines = writes

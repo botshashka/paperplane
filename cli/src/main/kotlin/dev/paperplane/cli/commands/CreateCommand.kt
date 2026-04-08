@@ -18,7 +18,7 @@ import dev.paperplane.cli.util.JavaRuntimeUtil
 import dev.paperplane.cli.util.Platform
 import java.io.File
 
-class CreateCommand(
+open class CreateCommand(
     private val ui: TerminalUI,
     private val prompts: InteractivePrompts,
 ) : CliktCommand(name = "create") {
@@ -419,7 +419,8 @@ class CreateCommand(
     )
   }
 
-  private fun runGradleWrapper(projectDir: File): Boolean {
+  /** Tests override to skip the real gradle subprocess and return a scripted result. */
+  protected open fun runGradleWrapper(projectDir: File): Boolean {
     val wp =
         ProcessBuilder("gradle", "wrapper", "--gradle-version", Versions.GRADLE_WRAPPER)
             .directory(projectDir)

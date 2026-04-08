@@ -13,7 +13,7 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 
-class UpgradeCommand(private val ui: TerminalUI) : CliktCommand(name = "upgrade") {
+open class UpgradeCommand(private val ui: TerminalUI) : CliktCommand(name = "upgrade") {
   companion object {
     private const val GITHUB_API =
         "https://api.github.com/repos/botshashka/paperplane/releases/latest"
@@ -22,11 +22,7 @@ class UpgradeCommand(private val ui: TerminalUI) : CliktCommand(name = "upgrade"
   override fun run() {
     val currentVersion = Versions.paperplaneVersion()
     ui.block {
-      val client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()
-      val gson = Gson()
-
-      // Fetch latest release info
-      val latestVersion = ui.spin("Checking for updates...") { fetchLatestVersion(client, gson) }
+      val latestVersion = ui.spin("Checking for updates...") { fetchLatestVersion() }
 
       if (latestVersion == null) {
         error("Could not determine latest version")
@@ -38,9 +34,7 @@ class UpgradeCommand(private val ui: TerminalUI) : CliktCommand(name = "upgrade"
         return@block
       }
 
-      // Download and extract the new version
-      val ok =
-          ui.spin("Downloading v$latestVersion...") { downloadAndExtract(client, latestVersion) }
+      val ok = ui.spin("Downloading v$latestVersion...") { downloadAndExtract(latestVersion) }
 
       if (ok) {
         success("Updated ppl v$currentVersion → v$latestVersion")
@@ -50,7 +44,26 @@ class UpgradeCommand(private val ui: TerminalUI) : CliktCommand(name = "upgrade"
     }
   }
 
-  private fun fetchLatestVersion(client: HttpClient, gson: Gson): String? {
+  /**
+   * Fetches the latest release tag from GitHub. Returns the version string with the leading "v"
+   * stripped, or null if the request failed. Tests override to return scripted values without
+   * touching the network.
+   */
+  protected open fun fetchLatestVersion(): String? {
+    val client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()
+    return fetchLatestVersionImpl(client, Gson())
+  }
+
+  /**
+   * Downloads the release zip and extracts it into `~/.paperplane/`. Returns true on success. Tests
+   * override to short-circuit without touching the network or filesystem.
+   */
+  protected open fun downloadAndExtract(version: String): Boolean {
+    val client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()
+    return downloadAndExtractImpl(client, version)
+  }
+
+  private fun fetchLatestVersionImpl(client: HttpClient, gson: Gson): String? {
     val request =
         HttpRequest.newBuilder()
             .uri(URI.create(GITHUB_API))
@@ -62,7 +75,7 @@ class UpgradeCommand(private val ui: TerminalUI) : CliktCommand(name = "upgrade"
     return json.get("tag_name")?.asString?.removePrefix("v")?.ifEmpty { null }
   }
 
-  private fun downloadAndExtract(client: HttpClient, version: String): Boolean {
+  private fun downloadAndExtractImpl(client: HttpClient, version: String): Boolean {
     val downloadUrl =
         "https://github.com/botshashka/paperplane/releases/download/v$version/ppl-$version.zip"
     val request = HttpRequest.newBuilder().uri(URI.create(downloadUrl)).build()
