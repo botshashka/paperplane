@@ -144,27 +144,27 @@ object InteractivePrompts {
   }
 
   private fun renderPromptActive(label: String, default: String?) {
-    println()
-    println("  ${Ansi.cyan("›")}  $label:")
+    Writer.writeLine()
+    Writer.writeLine("  ${Ansi.cyan("›")}  $label:")
     val placeholder = default ?: ""
-    print("     ${Ansi.dim(placeholder)}")
+    Writer.write("     ${Ansi.dim(placeholder)}")
     // Add bottom padding, then move cursor back to input line
-    print("\n".repeat(BOTTOM_PADDING) + "\u001b[${BOTTOM_PADDING}A\r\u001b[5C")
-    System.out.flush()
+    Writer.write("\n".repeat(BOTTOM_PADDING) + "\u001b[${BOTTOM_PADDING}A\r\u001b[5C")
+    Writer.flush()
   }
 
   private fun renderPromptCommitted(label: String, result: String) {
     // Collapse to completed state: move up to label line, rewrite label + input
-    print("\r\u001b[1A\u001b[2K\r")
-    println("  ${Ansi.dim("◇")}  $label:")
-    print("\u001b[2K")
-    println("     $result")
+    Writer.write("\r\u001b[1A\u001b[2K\r")
+    Writer.writeLine("  ${Ansi.dim("◇")}  $label:")
+    Writer.write("\u001b[2K")
+    Writer.writeLine("     $result")
     // Clear bottom padding lines
     for (i in 0 until BOTTOM_PADDING) {
-      print("\u001b[2K\n")
+      Writer.write("\u001b[2K\n")
     }
-    print("\u001b[${BOTTOM_PADDING}A")
-    System.out.flush()
+    Writer.write("\u001b[${BOTTOM_PADDING}A")
+    Writer.flush()
   }
 
   /**
@@ -187,7 +187,7 @@ object InteractivePrompts {
       when (b) {
         -1, // EOF
         AsciiKeys.CTRL_C -> {
-          println()
+          Writer.writeLine()
           cancelPrompt()
         }
         AsciiKeys.ESC -> {
@@ -197,7 +197,7 @@ object InteractivePrompts {
           if (next >= 0 && reader.read() == '['.code) {
             reader.read() // consume direction byte (A/B/C/D) and ignore
           } else {
-            println()
+            Writer.writeLine()
             cancelPrompt()
           }
         }
@@ -206,8 +206,8 @@ object InteractivePrompts {
           val result = if (usingDefault && input.isEmpty()) default ?: "" else input.toString()
           if (result.isEmpty() && default == null) {
             // Re-render input line; caller re-enters via outer loop
-            print("\r\u001b[2K     ")
-            System.out.flush()
+            Writer.write("\r\u001b[2K     ")
+            Writer.flush()
             return null
           }
           return result
@@ -223,11 +223,11 @@ object InteractivePrompts {
           if (input.isEmpty() && !usingDefault && default != null) {
             // Restore placeholder when input is cleared
             usingDefault = true
-            print("\r\u001b[2K     ${Ansi.dim(default)}\r\u001b[5C")
+            Writer.write("\r\u001b[2K     ${Ansi.dim(default)}\r\u001b[5C")
           } else {
-            print("\r\u001b[2K     ${input}")
+            Writer.write("\r\u001b[2K     ${input}")
           }
-          System.out.flush()
+          Writer.flush()
         }
         else -> {
           if (b >= AsciiKeys.FIRST_PRINTABLE && !Character.isISOControl(b)) {
@@ -236,8 +236,8 @@ object InteractivePrompts {
               usingDefault = false
             }
             input.append(b.toChar())
-            print("\r\u001b[2K     ${input}")
-            System.out.flush()
+            Writer.write("\r\u001b[2K     ${input}")
+            Writer.flush()
           }
         }
       }
@@ -250,8 +250,8 @@ object InteractivePrompts {
   private fun promptFallback(label: String, default: String?): String {
     while (true) {
       val suffix = if (default != null) " ${Ansi.dim("($default)")}" else ""
-      print("  $label$suffix: ")
-      System.out.flush()
+      Writer.write("  $label$suffix: ")
+      Writer.flush()
       val input = readlnOrNull()?.trim()
       if (!input.isNullOrEmpty()) return input
       if (default != null) return default
@@ -283,16 +283,16 @@ object InteractivePrompts {
   ): Int {
     if (!isTty) return selectFallback(label, options, default)
     renderSelectHeader(label, note)
-    print("\u001b[?25l") // hide cursor
+    Writer.write("\u001b[?25l") // hide cursor
     renderSelectOptions(options, default)
-    print("\n".repeat(BOTTOM_PADDING) + "\u001b[${BOTTOM_PADDING}A")
-    System.out.flush()
+    Writer.write("\n".repeat(BOTTOM_PADDING) + "\u001b[${BOTTOM_PADDING}A")
+    Writer.flush()
     val selected =
         try {
           runSelectInputLoop(options, default)
         } finally {
-          print("\u001b[?25h")
-          System.out.flush()
+          Writer.write("\u001b[?25h")
+          Writer.flush()
         }
     renderSelectCommitted(label, options, selected)
     return selected
@@ -300,8 +300,8 @@ object InteractivePrompts {
 
   private fun renderSelectHeader(label: String, note: String?) {
     val noteText = if (note != null) "  ${Ansi.dim(note)}" else ""
-    println()
-    println("  ${Ansi.cyan("›")}  ${Ansi.bold(Ansi.brightWhite(label))}:$noteText")
+    Writer.writeLine()
+    Writer.writeLine("  ${Ansi.cyan("›")}  ${Ansi.bold(Ansi.brightWhite(label))}:$noteText")
   }
 
   private fun runSelectInputLoop(options: List<SelectOption>, initial: Int): Int {
@@ -311,8 +311,8 @@ object InteractivePrompts {
         when (reader.read()) {
           -1,
           AsciiKeys.CTRL_C -> {
-            print("\u001b[?25h")
-            println()
+            Writer.write("\u001b[?25h")
+            Writer.writeLine()
             cancelPrompt()
           }
           AsciiKeys.CR,
@@ -325,12 +325,12 @@ object InteractivePrompts {
                 'A'.code -> selected = (selected - 1 + options.size) % options.size
                 'B'.code -> selected = (selected + 1) % options.size
               }
-              print("\u001b[${options.size}A")
+              Writer.write("\u001b[${options.size}A")
               renderSelectOptions(options, selected)
-              System.out.flush()
+              Writer.flush()
             } else {
-              print("\u001b[?25h")
-              println()
+              Writer.write("\u001b[?25h")
+              Writer.writeLine()
               cancelPrompt()
             }
           }
@@ -342,23 +342,23 @@ object InteractivePrompts {
 
   private fun renderSelectCommitted(label: String, options: List<SelectOption>, selected: Int) {
     val totalLines = options.size + 1
-    print("\u001b[${totalLines}A")
+    Writer.write("\u001b[${totalLines}A")
     for (i in 0 until totalLines) {
-      print("\u001b[2K")
-      if (i < totalLines - 1) print("\u001b[1B")
+      Writer.write("\u001b[2K")
+      if (i < totalLines - 1) Writer.write("\u001b[1B")
     }
-    if (totalLines > 1) print("\u001b[${totalLines - 1}A")
-    print("\r")
+    if (totalLines > 1) Writer.write("\u001b[${totalLines - 1}A")
+    Writer.write("\r")
 
-    println("  ${Ansi.dim("◇")}  $label:")
-    println("     ${options[selected].label}")
+    Writer.writeLine("  ${Ansi.dim("◇")}  $label:")
+    Writer.writeLine("     ${options[selected].label}")
 
     val excess = totalLines - 2 + BOTTOM_PADDING
     for (i in 0 until excess) {
-      print("\u001b[2K\n")
+      Writer.write("\u001b[2K\n")
     }
-    if (excess > 0) print("\u001b[${excess}A")
-    System.out.flush()
+    if (excess > 0) Writer.write("\u001b[${excess}A")
+    Writer.flush()
   }
 
   /**
@@ -375,20 +375,20 @@ object InteractivePrompts {
       sb.append("    ").append(marker).append(text).append(descText)
       sb.append('\n')
     }
-    print(sb.toString())
+    Writer.write(sb.toString())
   }
 
   /** Fallback selection for non-TTY environments: numbered list with line input. */
   private fun selectFallback(label: String, options: List<SelectOption>, default: Int): Int {
-    println()
-    println("  $label")
+    Writer.writeLine()
+    Writer.writeLine("  $label")
     for ((i, option) in options.withIndex()) {
       val descText = option.description?.let { " — $it" } ?: ""
       val marker = if (i == default) " (default)" else ""
-      println("    ${i + 1}. ${option.label}$descText$marker")
+      Writer.writeLine("    ${i + 1}. ${option.label}$descText$marker")
     }
-    print("  Choice [${default + 1}]: ")
-    System.out.flush()
+    Writer.write("  Choice [${default + 1}]: ")
+    Writer.flush()
     val input = readlnOrNull()?.trim()
     if (input.isNullOrEmpty()) return default
     return (input.toIntOrNull()?.minus(1))?.coerceIn(0, options.size - 1) ?: default
@@ -398,8 +398,8 @@ object InteractivePrompts {
 
   /** Prints a confirmation prompt and returns true if the user answers y/yes. */
   fun confirm(message: String): Boolean {
-    println()
-    print("  $message (y/N): ")
+    Writer.writeLine()
+    Writer.write("  $message (y/N): ")
     val answer = readlnOrNull()?.trim()?.lowercase()
     return answer == "y" || answer == "yes"
   }
