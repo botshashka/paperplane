@@ -27,7 +27,7 @@ data class ProjectMetadata(
             ?: listOfNotNull(classesDir.takeIf { it.isNotEmpty() })
 }
 
-class GradleBridge(private val projectDir: File, private val ui: TerminalUI) : AutoCloseable {
+open class GradleBridge(private val projectDir: File, private val ui: TerminalUI) : AutoCloseable {
   companion object {
     private const val MAX_DISPLAYED_ERRORS = 5
     private const val MAX_FALLBACK_LINES = 10
@@ -58,7 +58,7 @@ class GradleBridge(private val projectDir: File, private val ui: TerminalUI) : A
     return connection!!
   }
 
-  fun build(): Boolean = runTask("jar")
+  open fun build(): Boolean = runTask("jar")
 
   fun compileOnly(): Boolean = runTask("classes")
 
@@ -88,7 +88,7 @@ class GradleBridge(private val projectDir: File, private val ui: TerminalUI) : A
       val outputLines: List<String> = emptyList(),
   )
 
-  fun format(check: Boolean = false): FormatResult {
+  open fun format(check: Boolean = false): FormatResult {
     val task = if (check) "spotlessCheck" else "spotlessApply"
     val stdout = ByteArrayOutputStream()
     val stderr = ByteArrayOutputStream()
@@ -120,7 +120,7 @@ class GradleBridge(private val projectDir: File, private val ui: TerminalUI) : A
     }
   }
 
-  fun test(quiet: Boolean = false, filter: String? = null): Boolean {
+  open fun test(quiet: Boolean = false, filter: String? = null): Boolean {
     val stdout = ByteArrayOutputStream()
     val stderr = ByteArrayOutputStream()
     return try {
@@ -145,9 +145,9 @@ class GradleBridge(private val projectDir: File, private val ui: TerminalUI) : A
     }
   }
 
-  fun metadata(): ProjectMetadata? = runMetadataTask("ppMetadata")
+  open fun metadata(): ProjectMetadata? = runMetadataTask("ppMetadata")
 
-  fun metadataFast(): ProjectMetadata? = runMetadataTask("ppMetadataFast")
+  open fun metadataFast(): ProjectMetadata? = runMetadataTask("ppMetadataFast")
 
   private fun runMetadataTask(taskName: String): ProjectMetadata? {
     val stdout = ByteArrayOutputStream()
@@ -215,7 +215,10 @@ class GradleBridge(private val projectDir: File, private val ui: TerminalUI) : A
     }
   }
 
-  override fun close() {
+  override fun close() = doClose()
+
+  /** Hook for subclasses (test fakes) to override without dealing with `final override fun`. */
+  protected open fun doClose() {
     connection?.close()
     connection = null
   }

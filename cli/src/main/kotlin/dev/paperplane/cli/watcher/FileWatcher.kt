@@ -3,10 +3,10 @@ package dev.paperplane.cli.watcher
 import dev.paperplane.cli.util.Platform
 import java.io.File
 
-class FileWatcher(
+open class FileWatcher(
     private val watchDir: File,
     private val debounceMs: Long = 2000,
-    private val onChange: (List<String>) -> Unit,
+    protected val onChange: (List<String>) -> Unit,
 ) {
   companion object {
     private const val POLL_INTERVAL_MS = 500L
@@ -16,7 +16,7 @@ class FileWatcher(
   @Volatile private var running = false
   private var thread: Thread? = null
 
-  fun start() {
+  open fun start() {
     running = true
 
     // Snapshot all file modification times
@@ -70,7 +70,7 @@ class FileWatcher(
     thread!!.start()
   }
 
-  fun stop() {
+  open fun stop() {
     running = false
     thread?.join(STOP_JOIN_TIMEOUT_MS)
   }

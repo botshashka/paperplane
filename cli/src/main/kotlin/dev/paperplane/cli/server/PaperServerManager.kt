@@ -6,7 +6,7 @@ import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
-class PaperServerManager(
+open class PaperServerManager(
     val serverDir: File,
     private val downloader: PaperDownloader,
     private val ui: TerminalUI,
@@ -38,7 +38,7 @@ class PaperServerManager(
    * Cleans up stale state from a previous run that wasn't shut down cleanly. Kills any process
    * occupying the server port and removes world lock files.
    */
-  fun cleanupStale() {
+  open fun cleanupStale() {
     killProcessOnPort(port)
     // Remove stale session.lock files from world directories
     if (serverDir.exists()) {
@@ -52,7 +52,7 @@ class PaperServerManager(
     }
   }
 
-  fun configure() {
+  open fun configure() {
     serverDir.mkdirs()
     pluginsDir.mkdirs()
     // Always overwrite — PaperPlane manages these settings, and Paper rewrites
@@ -68,7 +68,7 @@ class PaperServerManager(
     )
   }
 
-  fun configureVelocityForwarding(secret: String) {
+  open fun configureVelocityForwarding(secret: String) {
     val paperConfigDir = File(serverDir, "config")
     paperConfigDir.mkdirs()
     // Always overwrite paper-global.yml when proxy is enabled to ensure velocity settings are
@@ -92,7 +92,7 @@ class PaperServerManager(
     return downloader.download(mcVersion)
   }
 
-  fun copyPlugin(jarPath: File) {
+  open fun copyPlugin(jarPath: File) {
     val target = File(pluginsDir, jarPath.name)
     val temp = File(pluginsDir, ".${jarPath.name}.tmp")
     jarPath.copyTo(temp, overwrite = true)
@@ -113,7 +113,7 @@ class PaperServerManager(
    * hot-reload mode so the companion can roll back to the original on failure. Returns the absolute
    * path to the staged file.
    */
-  fun stagePlugin(jarPath: File): String {
+  open fun stagePlugin(jarPath: File): String {
     val stageDir = File(serverDir, ".paperplane")
     stageDir.mkdirs()
     val staged = File(stageDir, "${jarPath.name}.new")
@@ -121,7 +121,7 @@ class PaperServerManager(
     return staged.absolutePath
   }
 
-  fun copyCompanion() {
+  open fun copyCompanion() {
     extractResource("paperplane-companion.bin", File(pluginsDir, "paperplane-companion.jar"))
   }
 
@@ -144,12 +144,12 @@ class PaperServerManager(
     stream.use { input -> target.outputStream().use { output -> input.copyTo(output) } }
   }
 
-  fun start(
+  open fun start(
       paperJar: File,
       jvmArgs: List<String>,
       hotReload: Boolean = false,
       javaBin: String = "java",
-  ): Process {
+  ) {
     val cmd = mutableListOf(javaBin)
     // Fast startup flags
     cmd.addAll(
@@ -187,11 +187,9 @@ class PaperServerManager(
         )
         .apply { isDaemon = true }
         .start()
-
-    return proc
   }
 
-  fun stop() {
+  open fun stop() {
     val proc = process ?: return
     if (!proc.isAlive) return
     val unit = java.util.concurrent.TimeUnit.SECONDS
@@ -225,7 +223,7 @@ class PaperServerManager(
     processStdin = null
   }
 
-  fun sendCommand(command: String) {
+  open fun sendCommand(command: String) {
     processStdin?.let {
       it.write("$command\n".toByteArray())
       it.flush()
@@ -237,7 +235,7 @@ class PaperServerManager(
    * companion-status.json, the companion does the save via Bukkit API (no broadcast), then writes a
    * flag file.
    */
-  fun waitForSave(timeoutMs: Long = 10_000): Boolean {
+  open fun waitForSave(timeoutMs: Long = 10_000): Boolean {
     val flagFile = File(serverDir, ".paperplane/save-complete")
     flagFile.delete() // Clear any stale flag
 
@@ -254,9 +252,9 @@ class PaperServerManager(
     return false
   }
 
-  fun isRunning(): Boolean = process?.isAlive == true
+  open fun isRunning(): Boolean = process?.isAlive == true
 
-  fun waitForReady(): Boolean {
+  open fun waitForReady(): Boolean {
     val proc = process ?: return false
     val flagFile = File(serverDir, ".paperplane/server-ready")
     flagFile.delete() // Clear stale flag
@@ -272,7 +270,7 @@ class PaperServerManager(
     return false
   }
 
-  fun writeCompanionStatus(state: String, extra: Map<String, Any> = emptyMap()) {
+  open fun writeCompanionStatus(state: String, extra: Map<String, Any> = emptyMap()) {
     val statusDir = File(serverDir, ".paperplane")
     statusDir.mkdirs()
     val statusFile = File(statusDir, "companion-status.json")
