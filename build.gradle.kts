@@ -42,5 +42,8 @@ subprojects {
 
 tasks.withType<Test> {
         useJUnitPlatform()
+        // Disable ANSI colors in test output so visual regression assertions read as plain
+        // text. Ansi.useColor is a val initialized once from this env var.
+        environment("NO_COLOR", "1")
     }
 }
