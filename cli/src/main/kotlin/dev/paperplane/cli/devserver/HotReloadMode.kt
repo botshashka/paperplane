@@ -8,21 +8,22 @@ import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
-internal class HotReloadMode(private val session: DevSession) {
+internal open class HotReloadMode(
+    private val session: DevSession,
+    private val serverManager: PaperServerManager =
+        PaperServerManager(File(session.ppDir, "server"), session.downloader, session.ui),
+) {
   companion object {
     private const val RELOAD_TIMEOUT_MS = 10_000L
     private const val RELOAD_POLL_INTERVAL_MS = 100L
   }
-
-  private val serverManager =
-      PaperServerManager(File(session.ppDir, "server"), session.downloader, session.ui)
 
   private var buildSnapshot: BuildSnapshot? = null
   private var cachedFastMeta: ProjectMetadata? = null
   private var lastPostBuildSnapshot: Map<String, Long>? = null
   private val javaRuntime by lazy { session.resolveJava() }
 
-  private data class RunningState(val metadata: ProjectMetadata, val paperJar: File)
+  internal data class RunningState(val metadata: ProjectMetadata, val paperJar: File)
 
   fun run() {
     val shuttingDown = AtomicBoolean(false)
@@ -54,7 +55,7 @@ internal class HotReloadMode(private val session: DevSession) {
     )
   }
 
-  private fun runStartup(shuttingDown: AtomicBoolean): RunningState? {
+  internal fun runStartup(shuttingDown: AtomicBoolean): RunningState? {
     var state: RunningState? = null
     session.ui.phase {
       val metadata = session.resolveMetadataOrAbort(shuttingDown) ?: return@phase PhaseEnd.None
@@ -78,7 +79,8 @@ internal class HotReloadMode(private val session: DevSession) {
     return state
   }
 
-  private fun enterFixRecovery(): Nothing {
+  /** Tests override to a no-op so build-failure paths don't enter the infinite fix loop. */
+  protected open fun enterFixRecovery(): Nothing {
     session.runFixWatcher(
         cleanup = {
           serverManager.stop()

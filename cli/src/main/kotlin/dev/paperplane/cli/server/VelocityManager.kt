@@ -5,7 +5,7 @@ import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import java.util.UUID
 
-class VelocityManager(private val proxyDir: File, private val ui: TerminalUI) {
+open class VelocityManager(private val proxyDir: File, private val ui: TerminalUI) {
   companion object {
     private const val TRANSFER_POLL_INTERVAL_MS = 100L
     private const val STOP_TIMEOUT_SECONDS = 5L
@@ -19,7 +19,7 @@ class VelocityManager(private val proxyDir: File, private val ui: TerminalUI) {
 
   val forwardingSecret: String = UUID.randomUUID().toString()
 
-  fun configure(serverPort: Int, swapPort: Int, proxyPort: Int) {
+  open fun configure(serverPort: Int, swapPort: Int, proxyPort: Int) {
     proxyDir.mkdirs()
     pluginsDir.mkdirs()
 
@@ -71,11 +71,11 @@ class VelocityManager(private val proxyDir: File, private val ui: TerminalUI) {
     copyTransferPlugin()
   }
 
-  fun clearTransferComplete() {
+  open fun clearTransferComplete() {
     File(proxyDir, "transfer-complete").delete()
   }
 
-  fun waitForTransferComplete(timeoutMs: Long = 5000): Boolean {
+  open fun waitForTransferComplete(timeoutMs: Long = 5000): Boolean {
     val file = File(proxyDir, "transfer-complete")
     val start = System.currentTimeMillis()
     while (System.currentTimeMillis() - start < timeoutMs) {
@@ -88,12 +88,12 @@ class VelocityManager(private val proxyDir: File, private val ui: TerminalUI) {
     return false
   }
 
-  fun writeActiveServer(serverName: String, transfer: Boolean = false) {
+  open fun writeActiveServer(serverName: String, transfer: Boolean = false) {
     File(proxyDir, "active-server.json")
         .writeText("""{"active":"$serverName","transfer":$transfer}""")
   }
 
-  fun start(velocityJar: File, javaBin: String = "java"): Process {
+  open fun start(velocityJar: File, javaBin: String = "java") {
     val cmd =
         listOf(
             javaBin,
@@ -125,11 +125,9 @@ class VelocityManager(private val proxyDir: File, private val ui: TerminalUI) {
         )
         .apply { isDaemon = true }
         .start()
-
-    return proc
   }
 
-  fun stop() {
+  open fun stop() {
     val proc = process ?: return
     if (!proc.isAlive) return
 
@@ -142,9 +140,9 @@ class VelocityManager(private val proxyDir: File, private val ui: TerminalUI) {
     process = null
   }
 
-  fun isRunning(): Boolean = process?.isAlive == true
+  open fun isRunning(): Boolean = process?.isAlive == true
 
-  fun waitForReady(port: Int = PaperServerManager.DEFAULT_PORT): Boolean {
+  open fun waitForReady(port: Int = PaperServerManager.DEFAULT_PORT): Boolean {
     val proc = process ?: return false
     val startTime = System.currentTimeMillis()
     val timeout = READY_TIMEOUT_MS

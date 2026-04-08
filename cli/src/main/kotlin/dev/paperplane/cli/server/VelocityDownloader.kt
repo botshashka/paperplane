@@ -11,12 +11,12 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 
-class VelocityDownloader(private val cacheDir: File) {
+open class VelocityDownloader(private val cacheDir: File) {
   private val client = HttpClient.newHttpClient()
   private val gson = Gson()
   private val baseUrl = "https://api.papermc.io/v2/projects/velocity"
 
-  fun download(version: String? = null): File {
+  open fun download(version: String? = null): File {
     val resolvedVersion = version ?: latestVersion()
     val jarFile = File(cacheDir, "velocity-$resolvedVersion.jar")
     if (jarFile.exists()) {

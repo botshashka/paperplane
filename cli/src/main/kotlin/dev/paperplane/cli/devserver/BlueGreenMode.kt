@@ -9,7 +9,30 @@ import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
-internal class BlueGreenMode(private val session: DevSession) {
+internal open class BlueGreenMode(
+    private val session: DevSession,
+    private val servers: Map<Slot, PaperServerManager> =
+        mapOf(
+            Slot.SERVER to
+                PaperServerManager(
+                    File(session.ppDir, "server"),
+                    session.downloader,
+                    session.ui,
+                    Slot.SERVER.port,
+                ),
+            Slot.SWAP to
+                PaperServerManager(
+                    File(session.ppDir, "server-swap"),
+                    session.downloader,
+                    session.ui,
+                    Slot.SWAP.port,
+                ),
+        ),
+    private val velocityDownloader: VelocityDownloader =
+        VelocityDownloader(File(session.ppDir, "cache")),
+    private val velocityManager: VelocityManager =
+        VelocityManager(File(session.ppDir, "proxy"), session.ui),
+) {
   companion object {
     // Blue-green backend ports. The Velocity proxy listens on DEFAULT_PORT (25565);
     // these sit behind it. Not used in restart or hot-reload modes.
@@ -26,26 +49,6 @@ internal class BlueGreenMode(private val session: DevSession) {
     fun other() = if (this == SERVER) SWAP else SERVER
   }
 
-  private val servers =
-      mapOf(
-          Slot.SERVER to
-              PaperServerManager(
-                  File(session.ppDir, "server"),
-                  session.downloader,
-                  session.ui,
-                  Slot.SERVER.port,
-              ),
-          Slot.SWAP to
-              PaperServerManager(
-                  File(session.ppDir, "server-swap"),
-                  session.downloader,
-                  session.ui,
-                  Slot.SWAP.port,
-              ),
-      )
-
-  private val velocityDownloader = VelocityDownloader(File(session.ppDir, "cache"))
-  private val velocityManager = VelocityManager(File(session.ppDir, "proxy"), session.ui)
   private var activeSlot = Slot.SERVER
 
   /**
@@ -86,7 +89,7 @@ internal class BlueGreenMode(private val session: DevSession) {
     session.gradle.close()
   }
 
-  private data class RunningState(val metadata: ProjectMetadata, val paperJar: File)
+  internal data class RunningState(val metadata: ProjectMetadata, val paperJar: File)
 
   fun run() {
     Runtime.getRuntime()
@@ -122,7 +125,7 @@ internal class BlueGreenMode(private val session: DevSession) {
     )
   }
 
-  private fun runStartup(shuttingDown: AtomicBoolean): RunningState? {
+  internal fun runStartup(shuttingDown: AtomicBoolean): RunningState? {
     var state: RunningState? = null
     session.ui.phase {
       val metadata = session.resolveMetadataOrAbort(shuttingDown) ?: return@phase PhaseEnd.None
@@ -148,7 +151,8 @@ internal class BlueGreenMode(private val session: DevSession) {
     return state
   }
 
-  private fun enterFixRecovery(): Nothing {
+  /** Tests override to a no-op so build-failure paths don't enter the infinite fix loop. */
+  protected open fun enterFixRecovery(): Nothing {
     session.runFixWatcher(cleanup = { shutdownAll() }) {
       when (val attempt = session.handleFixAttempt(null)) {
         is DevSession.FixAttempt.BuildFailed -> PhaseEnd.Waiting

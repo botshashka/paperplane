@@ -10,12 +10,12 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 
-class PaperDownloader(private val cacheDir: File) {
+open class PaperDownloader(private val cacheDir: File) {
   private val client = HttpClient.newHttpClient()
   private val gson = Gson()
   private val baseUrl = "https://api.papermc.io/v2/projects/paper"
 
-  fun download(mcVersion: String): File {
+  open fun download(mcVersion: String): File {
     val jarFile = File(cacheDir, "paper-$mcVersion.jar")
     if (jarFile.exists()) {
       return jarFile

@@ -34,7 +34,7 @@ class DevSessionFixture(tempDir: File, config: PaperPlaneConfig = PaperPlaneConf
 
   val ppDir: File = File(tempDir, ".paperplane").apply { mkdirs() }
   val projectDir: File = tempDir
-  val downloader: PaperDownloader = PaperDownloader(File(ppDir, "cache"))
+  val downloader: PaperDownloader = FakePaperDownloader(File(ppDir, "cache"))
   val gradle: FakeGradleBridge = FakeGradleBridge(projectDir, ui)
 
   internal val session: DevSession =

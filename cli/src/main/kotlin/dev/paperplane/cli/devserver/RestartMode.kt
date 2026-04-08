@@ -6,11 +6,13 @@ import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
-internal class RestartMode(private val session: DevSession) {
-  private val serverManager =
-      PaperServerManager(File(session.ppDir, "server"), session.downloader, session.ui)
+internal open class RestartMode(
+    private val session: DevSession,
+    private val serverManager: PaperServerManager =
+        PaperServerManager(File(session.ppDir, "server"), session.downloader, session.ui),
+) {
 
-  private data class RunningState(val metadata: ProjectMetadata, val paperJar: File)
+  internal data class RunningState(val metadata: ProjectMetadata, val paperJar: File)
 
   fun run() {
     val shuttingDown = AtomicBoolean(false)
@@ -49,7 +51,7 @@ internal class RestartMode(private val session: DevSession) {
    *
    * On a failed initial build, transfers to the fix-recovery loop which blocks forever.
    */
-  private fun runStartup(shuttingDown: AtomicBoolean): RunningState? {
+  internal fun runStartup(shuttingDown: AtomicBoolean): RunningState? {
     var state: RunningState? = null
     session.ui.phase {
       val metadata = session.resolveMetadataOrAbort(shuttingDown) ?: return@phase PhaseEnd.None
@@ -76,7 +78,8 @@ internal class RestartMode(private val session: DevSession) {
     return state
   }
 
-  private fun enterFixRecovery(): Nothing {
+  /** Tests override this to a no-op so build-failure paths don't enter the infinite fix loop. */
+  protected open fun enterFixRecovery(): Nothing {
     session.runFixWatcher(
         cleanup = {
           serverManager.stop()
@@ -122,7 +125,7 @@ internal class RestartMode(private val session: DevSession) {
     }
   }
 
-  private fun rebuild(metadata: ProjectMetadata, paperJar: File): PhaseEnd {
+  internal fun rebuild(metadata: ProjectMetadata, paperJar: File): PhaseEnd {
     val totalStart = System.currentTimeMillis()
     serverManager.stop()
 
