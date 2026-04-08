@@ -103,7 +103,7 @@ class DevSessionTest {
   fun `formatDurationMs matches DevSession formatDuration`() {
     val session = createSession()
     for (ms in listOf(0L, 1L, 500L, 999L, 1000L, 1500L, 5000L, 12345L)) {
-      assertEquals(session.formatDuration(ms), formatDurationMs(ms))
+      assertEquals(session.formatDuration(ms), dev.paperplane.cli.util.formatDurationMs(ms))
     }
   }
 

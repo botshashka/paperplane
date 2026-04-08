@@ -1,6 +1,6 @@
 package dev.paperplane.cli.ui
 
-/** ANSI color helpers. Honors NO_COLOR. */
+/** ANSI color and cursor helpers. Honors NO_COLOR. */
 internal object Ansi {
   private val noColor = System.getenv("NO_COLOR") != null
   val useColor: Boolean = !noColor
@@ -13,6 +13,19 @@ internal object Ansi {
   private const val YELLOW = "\u001b[33m"
   private const val CYAN = "\u001b[36m"
   private const val BRIGHT_WHITE = "\u001b[97m"
+
+  // Cursor control. These are not color codes and are emitted unconditionally —
+  // NO_COLOR does not affect cursor movement.
+  const val CLEAR_LINE = "\u001b[2K"
+  const val HIDE_CURSOR = "\u001b[?25l"
+  const val SHOW_CURSOR = "\u001b[?25h"
+  const val CR = "\r"
+
+  fun cursorUp(n: Int = 1): String = "\u001b[${n}A"
+
+  fun cursorDown(n: Int = 1): String = "\u001b[${n}B"
+
+  fun cursorRight(n: Int): String = "\u001b[${n}C"
 
   fun color(code: String, text: String): String = if (noColor) text else "$code$text$RESET"
 

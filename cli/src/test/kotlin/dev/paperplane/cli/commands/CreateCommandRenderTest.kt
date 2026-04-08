@@ -8,6 +8,7 @@ import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -118,6 +119,55 @@ class CreateCommandRenderTest {
     assertTrue(srcMain.walkTopDown().any { it.name.endsWith(".kt") })
     // Java source dir should NOT be present.
     assertFalse(File(projectDir, "src/main/java").exists())
+  }
+
+  // ── Rollback ───────────────────────────────────────────────────────
+
+  /**
+   * Test subclass whose `runGradleWrapper` throws. This is the only injection point available to
+   * simulate a mid-scaffold failure without stubbing out template writes — by the time
+   * `runGradleWrapper` fires, `doScaffold` has already written build/source/config files into the
+   * new directory, so rollback has real work to do.
+   */
+  private class SimulatedWrapperCrash : RuntimeException("simulated wrapper crash")
+
+  private class ThrowingCreateCommand(ui: TerminalUI, prompts: InteractivePrompts) :
+      CreateCommand(ui, prompts) {
+    override fun runGradleWrapper(projectDir: File): Boolean = throw SimulatedWrapperCrash()
+  }
+
+  @Test
+  fun `rollback deletes scaffolded directory when wrapper throws`() {
+    val projectDir = File(canonicalTempDir, "doomed-plugin")
+    val terminal = RecordingTerminal(scriptedReader = FakeReader(emptyList()))
+    val ui = TerminalUI(terminal)
+    val prompts = InteractivePrompts(terminal)
+    val cmd = ThrowingCreateCommand(ui, prompts)
+
+    assertThrows(SimulatedWrapperCrash::class.java) {
+      cmd.parse(listOf(projectDir.absolutePath, "--paper", "1.21.4", "--name", "Doomed"))
+    }
+
+    assertFalse(
+        projectDir.exists(),
+        "rollback should have deleted the directory it created mid-scaffold",
+    )
+  }
+
+  @Test
+  fun `successful scaffold leaves directory intact and does not roll back`() {
+    val projectDir = File(canonicalTempDir, "keeper")
+    val (cmd, _, _) = newCommand()
+    cmd.parse(listOf(projectDir.absolutePath, "--paper", "1.21.4", "--name", "Keeper"))
+
+    assertTrue(projectDir.exists())
+    // Running the command a second time should hit the "already exists" branch, proving the
+    // happy-path finally block reset scaffoldState cleanly (a stale InProgress would have been
+    // wiped by a shutdown hook or subsequent rollback call).
+    val (cmd2, t2, _) = newCommand()
+    cmd2.parse(listOf(projectDir.absolutePath, "--paper", "1.21.4", "--name", "Keeper"))
+    assertTrue(projectDir.exists(), "pre-existing directory must not be rolled back")
+    assertTrue(t2.writes.any { it.contains("already exists") })
   }
 
   // ── Custom plugin name and author ──────────────────────────────────

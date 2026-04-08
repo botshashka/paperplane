@@ -10,6 +10,7 @@ import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.TerminalUI
 import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
 import dev.paperplane.cli.util.JavaRuntimeUtil
+import dev.paperplane.cli.util.formatDurationMs
 import dev.paperplane.cli.watcher.FileWatcher
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
@@ -230,9 +231,7 @@ internal class DevSession(
 
   fun resolveJava(): JavaRuntime {
     return when (config.dev.jbr) {
-      "auto" -> {
-        if (checkIsJbr("java")) JavaRuntime("java", true) else JavaRuntime("java", false)
-      }
+      "auto" -> JavaRuntime("java", checkIsJbr("java"))
       "on" -> {
         val jbrDownloader = JbrDownloader(ui)
         val javaBin = ui.spin("Downloading JBR...") { jbrDownloader.download() }
@@ -250,11 +249,4 @@ internal class DevSession(
   }
 
   private fun checkIsJbr(javaBin: String): Boolean = JavaRuntimeUtil.checkIsJbr(javaBin)
-}
-
-private const val FORMAT_THRESHOLD_MS = 1000
-
-internal fun formatDurationMs(ms: Long): String {
-  return if (ms >= FORMAT_THRESHOLD_MS) "%.1fs".format(ms / FORMAT_THRESHOLD_MS.toDouble())
-  else "${ms}ms"
 }

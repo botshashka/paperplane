@@ -8,5 +8,5 @@ private val serverLineRegex = Regex("""\[[\d:]+] \[([^]]+)] (.+)""")
 internal fun formatServerLine(line: String): String {
   val match = serverLineRegex.find(line) ?: return line
   val (thread, message) = match.destructured
-  return if (Ansi.useColor) "\u001b[2m[$thread]\u001b[0m $message" else "[$thread] $message"
+  return "${Ansi.dim("[$thread]")} $message"
 }

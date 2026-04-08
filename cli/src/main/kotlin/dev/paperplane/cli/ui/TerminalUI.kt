@@ -226,12 +226,12 @@ class TerminalUI(terminal: Terminal) {
     emit("     $icon $name ${dim(duration)}")
   }
 
-  fun testSummary(passed: Int, failed: Int, total: Int, buildTime: String, testTime: String) {
+  fun testSummary(passed: Int, failed: Int, total: Int, totalTime: String, testTime: String) {
     emit("")
     val passedText = green("$passed passed")
     val failedText = if (failed > 0) "  ${red("$failed failed")}" else ""
     emit("  Tests   $passedText$failedText  ${dim("($total)")}")
-    emit("  Time    ${buildTime} ${dim("(build ${buildTime}, tests ${testTime})")}")
+    emit("  Time    $totalTime  ${dim("(tests $testTime)")}")
   }
 
   // ── Spinner ────────────────────────────────────────────────────────

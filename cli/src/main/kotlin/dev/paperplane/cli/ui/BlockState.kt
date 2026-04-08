@@ -28,9 +28,6 @@ internal class BlockState(
     TRANSIENT,
   }
 
-  // ── State ──────────────────────────────────────────────────────────
-  // Visible to tests via the package-private accessors below; mutated only by transitions here.
-
   private var blockActive = false
   private var currentBlockType = BlockType.PERSIST
   private val blockLines = mutableListOf<String>()
@@ -42,7 +39,6 @@ internal class BlockState(
   private var hasLogOutput = false
   private var viewClosed = false
 
-  // Test introspection ------------------------------------------------
   internal val isBlockActive: Boolean
     get() = blockActive
 
@@ -57,8 +53,6 @@ internal class BlockState(
 
   internal val separatorPending: Boolean
     get() = needsSeparator
-
-  // ── Block lifecycle ────────────────────────────────────────────────
 
   /** Marks a new block open. Pure state change — no I/O until lines are emitted into it. */
   fun beginBlock(type: BlockType): List<RenderOp> {
@@ -118,8 +112,6 @@ internal class BlockState(
     resetBlock()
     return ops
   }
-
-  // ── Output ─────────────────────────────────────────────────────────
 
   /**
    * Adds [text] to the active block. In TTY mode the pinned footer is redrawn so the buffered lines
@@ -181,11 +173,8 @@ internal class BlockState(
     return ops
   }
 
-  // ── Out-of-block primitives (header, subtitle, endView, cancelled) ──
-  //
   // These bypass the block system — they print directly and only manipulate the separator/view
-  // flags. Kept here so all flag mutation lives in one class. Callers pass already-formatted
-  // strings (Ansi colors applied at the facade); BlockState never knows about colors.
+  // flags. Callers pass already-formatted strings; BlockState never knows about colors.
 
   /** Header at command start (prints `<blank>` + [headerLine], opens a new "view"). */
   fun header(headerLine: String): List<RenderOp> {
@@ -212,8 +201,6 @@ internal class BlockState(
     needsSeparator = true
     return listOf(WriteLine(), WriteLine(cancelledLine))
   }
-
-  // ── Spinner ────────────────────────────────────────────────────────
 
   /**
    * Sets the spinner message/substatus and (re)draws the footer. If no block is active, the caller
@@ -256,8 +243,6 @@ internal class BlockState(
     displayedLineCount = 0
     return ops
   }
-
-  // ── Internals ──────────────────────────────────────────────────────
 
   /**
    * Recomputes the pinned-footer ops: clear, optional separator, block lines, optional spinner.

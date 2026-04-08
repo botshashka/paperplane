@@ -22,9 +22,9 @@ internal class BlockRenderer(private val writer: Writer) {
 
   private fun clearFooter(lineCount: Int) {
     if (lineCount <= 0) return
-    writer.write("\u001b[${lineCount}A")
-    repeat(lineCount) { writer.write("\u001b[2K\n") }
-    writer.write("\u001b[${lineCount}A")
+    writer.write(Ansi.cursorUp(lineCount))
+    repeat(lineCount) { writer.write("${Ansi.CLEAR_LINE}\n") }
+    writer.write(Ansi.cursorUp(lineCount))
     writer.flush()
   }
 }

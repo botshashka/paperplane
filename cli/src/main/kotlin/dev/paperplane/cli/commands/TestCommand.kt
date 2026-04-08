@@ -4,10 +4,10 @@ import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import dev.paperplane.cli.Versions
-import dev.paperplane.cli.devserver.formatDurationMs
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.ui.TerminalUI
 import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
+import dev.paperplane.cli.util.formatDurationMs
 import dev.paperplane.cli.watcher.FileWatcher
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
@@ -87,15 +87,15 @@ open class TestCommand(private val ui: TerminalUI) : CliktCommand(name = "test")
       val passed = results.sumOf { it.passed }
       val failed = results.sumOf { it.failed }
       val total = passed + failed
-      val totalTime = formatDuration(totalDuration)
-      val testTime = formatDuration(results.sumOf { it.timeMs }.toLong())
+      val totalTime = formatDurationMs(totalDuration)
+      val testTime = formatDurationMs(results.sumOf { it.timeMs }.toLong())
 
       ui.testSummary(passed, failed, total, totalTime, testTime)
       if (failed > 0 && !verbose) {
         ui.status("Run with --verbose for full stack traces")
       }
     } else if (!success) {
-      ui.error("Tests failed (no results found)", formatDuration(totalDuration))
+      ui.error("Tests failed (no results found)", formatDurationMs(totalDuration))
     }
 
     gradle.close()
@@ -142,18 +142,16 @@ open class TestCommand(private val ui: TerminalUI) : CliktCommand(name = "test")
   private fun displayResults(results: List<TestSuiteResult>) {
     for (suite in results) {
       val allPassed = suite.cases.all { it.failure == null }
-      ui.testClass(suite.name, allPassed, formatDuration(suite.timeMs.toLong()))
+      ui.testClass(suite.name, allPassed, formatDurationMs(suite.timeMs.toLong()))
       for (case in suite.cases) {
         val passed = case.failure == null
-        ui.testCase(case.name, passed, formatDuration(case.timeMs.toLong()))
+        ui.testCase(case.name, passed, formatDurationMs(case.timeMs.toLong()))
         if (case.failure != null) {
           ui.testFailure(case.failure)
         }
       }
     }
   }
-
-  private fun formatDuration(ms: Long): String = formatDurationMs(ms)
 
   private data class TestSuiteResult(
       val name: String,

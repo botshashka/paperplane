@@ -17,6 +17,7 @@ import dev.paperplane.cli.ui.TerminalUI
 import dev.paperplane.cli.util.JavaRuntimeUtil
 import dev.paperplane.cli.util.Platform
 import java.io.File
+import java.io.IOException
 
 open class CreateCommand(
     private val ui: TerminalUI,
@@ -58,9 +59,30 @@ open class CreateCommand(
       val author: String,
       val paperVersion: String,
       val useKotlin: Boolean,
-      val devMode: String,
+      val devMode: DevMode,
       val jbr: String,
   )
+
+  /** Tracks a scaffold in progress so cancellation (prompt, shutdown) can roll it back. */
+  private sealed class ScaffoldState {
+    object None : ScaffoldState()
+
+    data class InProgress(val dir: File, var wrapperProcess: Process? = null) : ScaffoldState()
+  }
+
+  @Volatile private var scaffoldState: ScaffoldState = ScaffoldState.None
+
+  /** Idempotent rollback. Destroys the wrapper subprocess and deletes the scaffold directory. */
+  private fun rollback() {
+    val state = scaffoldState as? ScaffoldState.InProgress ?: return
+    scaffoldState = ScaffoldState.None
+    state.wrapperProcess?.destroyForcibly()
+    try {
+      if (state.dir.exists()) state.dir.deleteRecursively()
+    } catch (_: IOException) {
+      // best-effort
+    }
+  }
 
   private val name by argument(help = "Project directory name").optional()
   private val pluginName by option("--name", "-n", help = "Plugin display name").default("")
@@ -77,30 +99,12 @@ open class CreateCommand(
         runNonInteractive()
       }
     } catch (_: PromptCancelledException) {
-      rollbackScaffold()
+      rollback()
       ui.cancelled()
       throw ProgramResult(EXIT_CANCELLED)
     } finally {
       prompts.endInteractiveView()
       ui.endView()
-    }
-  }
-
-  @Volatile private var scaffoldInProgress: File? = null
-  @Volatile private var wrapperProcess: Process? = null
-
-  private fun rollbackScaffold() {
-    val dir = scaffoldInProgress ?: return
-    scaffoldInProgress = null
-    try {
-      wrapperProcess?.destroyForcibly()
-    } catch (_: Exception) {
-      // best-effort
-    }
-    try {
-      if (dir.exists()) dir.deleteRecursively()
-    } catch (_: Exception) {
-      // best-effort
     }
   }
 
@@ -197,7 +201,7 @@ open class CreateCommand(
             author = resolvedAuthor,
             paperVersion = resolvedPaperVersion,
             useKotlin = isKotlin,
-            devMode = devMode.value,
+            devMode = devMode,
             jbr = jbr,
         )
     )
@@ -234,7 +238,7 @@ open class CreateCommand(
             author = resolvedAuthor,
             paperVersion = resolvedPaperVersion,
             useKotlin = useKotlin,
-            devMode = DevMode.HOT_RELOAD.value,
+            devMode = DevMode.HOT_RELOAD,
             jbr = "auto",
         )
     )
@@ -278,57 +282,25 @@ open class CreateCommand(
   }
 
   private fun scaffoldFiles(c: ProjectConfig): Boolean {
+    // Only track for rollback if we're the ones who created the directory — never wipe a
+    // pre-existing one.
     val createdByUs = !c.projectDir.exists()
-    scaffoldInProgress = if (createdByUs) c.projectDir else null
-    val hook = if (createdByUs) installRollbackHook() else null
+    if (!createdByUs) return doScaffold(c)
+
+    scaffoldState = ScaffoldState.InProgress(c.projectDir)
+    val hook = Thread({ rollback() }, "create-scaffold-rollback")
+    Runtime.getRuntime().addShutdownHook(hook)
     var completed = false
     try {
       return doScaffold(c).also { completed = true }
     } finally {
-      rollbackOnFailure(c, completed, createdByUs)
-      scaffoldInProgress = null
-      wrapperProcess = null
-      removeShutdownHookSafely(hook)
-    }
-  }
-
-  private fun installRollbackHook(): Thread {
-    val hook =
-        Thread(
-            {
-              val dir = scaffoldInProgress ?: return@Thread
-              try {
-                wrapperProcess?.destroyForcibly()
-              } catch (_: Exception) {
-                // best-effort
-              }
-              try {
-                if (dir.exists()) dir.deleteRecursively()
-              } catch (_: Exception) {
-                // best-effort
-              }
-            },
-            "create-scaffold-rollback",
-        )
-    Runtime.getRuntime().addShutdownHook(hook)
-    return hook
-  }
-
-  private fun rollbackOnFailure(c: ProjectConfig, completed: Boolean, createdByUs: Boolean) {
-    if (completed || !createdByUs || !c.projectDir.exists()) return
-    try {
-      c.projectDir.deleteRecursively()
-    } catch (_: java.io.IOException) {
-      // best-effort
-    }
-  }
-
-  private fun removeShutdownHookSafely(hook: Thread?) {
-    if (hook == null) return
-    try {
-      Runtime.getRuntime().removeShutdownHook(hook)
-    } catch (_: IllegalStateException) {
-      // JVM already shutting down
+      if (!completed) rollback()
+      scaffoldState = ScaffoldState.None
+      try {
+        Runtime.getRuntime().removeShutdownHook(hook)
+      } catch (_: IllegalStateException) {
+        // JVM already shutting down — hook will run on its own.
+      }
     }
   }
 
@@ -399,7 +371,7 @@ open class CreateCommand(
     ProjectTemplates.writeTemplate(
         c.projectDir,
         "paperplane.yml",
-        ProjectTemplates.paperplaneYml(c.paperVersion, c.devMode, c.jbr),
+        ProjectTemplates.paperplaneYml(c.paperVersion, c.devMode.value, c.jbr),
     )
     ProjectTemplates.writeTemplate(c.projectDir, ".gitignore", ProjectTemplates.gitignore())
     ProjectTemplates.writeTemplate(
@@ -426,7 +398,7 @@ open class CreateCommand(
             .directory(projectDir)
             .redirectErrorStream(true)
             .start()
-    wrapperProcess = wp
+    (scaffoldState as? ScaffoldState.InProgress)?.wrapperProcess = wp
     val finished = wp.waitFor(WRAPPER_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
     return if (!finished) {
       wp.destroyForcibly()

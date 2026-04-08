@@ -1,5 +1,6 @@
 package dev.paperplane.cli.ui
 
+import java.io.IOException
 import org.jline.utils.NonBlockingReader
 
 /**
@@ -17,6 +18,9 @@ class InteractivePrompts(private val terminal: Terminal) {
   companion object {
     private const val BOTTOM_PADDING = 1
     private const val ARROW_KEY_PEEK_TIMEOUT_MS = 50L
+
+    /** Column (0-indexed) where prompt input starts — 5 spaces of left padding. */
+    private const val INPUT_COL = 5
   }
 
   private val writer: Writer = Writer(terminal)
@@ -58,8 +62,8 @@ class InteractivePrompts(private val terminal: Terminal) {
       val handle = viewHandle ?: return
       try {
         handle.close()
-      } catch (_: Exception) {
-        // best-effort
+      } catch (_: IOException) {
+        // Terminal already detached — nothing to restore.
       }
       viewHandle = null
     }
@@ -88,8 +92,8 @@ class InteractivePrompts(private val terminal: Terminal) {
       if (localHandle != null) {
         try {
           localHandle.close()
-        } catch (_: Exception) {
-          // best-effort
+        } catch (_: IOException) {
+          // Terminal already detached — nothing to restore.
         }
       }
     }
@@ -122,22 +126,24 @@ class InteractivePrompts(private val terminal: Terminal) {
     writer.writeLine("  ${Ansi.cyan("›")}  $label:")
     val placeholder = default ?: ""
     writer.write("     ${Ansi.dim(placeholder)}")
-    // Add bottom padding, then move cursor back to input line
-    writer.write("\n".repeat(BOTTOM_PADDING) + "\u001b[${BOTTOM_PADDING}A\r\u001b[5C")
+    // Add bottom padding, then move cursor back to the start of the input column.
+    writer.write(
+        "\n".repeat(BOTTOM_PADDING) +
+            Ansi.cursorUp(BOTTOM_PADDING) +
+            Ansi.CR +
+            Ansi.cursorRight(INPUT_COL)
+    )
     writer.flush()
   }
 
   private fun renderPromptCommitted(label: String, result: String) {
     // Collapse to completed state: move up to label line, rewrite label + input
-    writer.write("\r\u001b[1A\u001b[2K\r")
+    writer.write(Ansi.CR + Ansi.cursorUp(1) + Ansi.CLEAR_LINE + Ansi.CR)
     writer.writeLine("  ${Ansi.dim("◇")}  $label:")
-    writer.write("\u001b[2K")
+    writer.write(Ansi.CLEAR_LINE)
     writer.writeLine("     $result")
-    // Clear bottom padding lines
-    for (i in 0 until BOTTOM_PADDING) {
-      writer.write("\u001b[2K\n")
-    }
-    writer.write("\u001b[${BOTTOM_PADDING}A")
+    repeat(BOTTOM_PADDING) { writer.write("${Ansi.CLEAR_LINE}\n") }
+    writer.write(Ansi.cursorUp(BOTTOM_PADDING))
     writer.flush()
   }
 
@@ -156,6 +162,7 @@ class InteractivePrompts(private val terminal: Terminal) {
   internal fun readPromptLine(default: String?, reader: NonBlockingReader): String? {
     val input = StringBuilder()
     var usingDefault = default != null
+    val clearInputLine = "${Ansi.CR}${Ansi.CLEAR_LINE}     "
     while (true) {
       val b = reader.read()
       when (b) {
@@ -180,7 +187,7 @@ class InteractivePrompts(private val terminal: Terminal) {
           val result = if (usingDefault && input.isEmpty()) default ?: "" else input.toString()
           if (result.isEmpty() && default == null) {
             // Re-render input line; caller re-enters via outer loop
-            writer.write("\r\u001b[2K     ")
+            writer.write(clearInputLine)
             writer.flush()
             return null
           }
@@ -197,9 +204,11 @@ class InteractivePrompts(private val terminal: Terminal) {
           if (input.isEmpty() && !usingDefault && default != null) {
             // Restore placeholder when input is cleared
             usingDefault = true
-            writer.write("\r\u001b[2K     ${Ansi.dim(default)}\r\u001b[5C")
+            writer.write(
+                "$clearInputLine${Ansi.dim(default)}${Ansi.CR}${Ansi.cursorRight(INPUT_COL)}"
+            )
           } else {
-            writer.write("\r\u001b[2K     ${input}")
+            writer.write("$clearInputLine$input")
           }
           writer.flush()
         }
@@ -210,14 +219,12 @@ class InteractivePrompts(private val terminal: Terminal) {
               usingDefault = false
             }
             input.append(b.toChar())
-            writer.write("\r\u001b[2K     ${input}")
+            writer.write("$clearInputLine$input")
             writer.flush()
           }
         }
       }
     }
-    @Suppress("UNREACHABLE_CODE")
-    return null
   }
 
   /** Fallback prompt for non-TTY environments. */
@@ -257,15 +264,15 @@ class InteractivePrompts(private val terminal: Terminal) {
   ): Int {
     if (!isTty) return selectFallback(label, options, default)
     renderSelectHeader(label, note)
-    writer.write("\u001b[?25l") // hide cursor
+    writer.write(Ansi.HIDE_CURSOR)
     renderSelectOptions(options, default)
-    writer.write("\n".repeat(BOTTOM_PADDING) + "\u001b[${BOTTOM_PADDING}A")
+    writer.write("\n".repeat(BOTTOM_PADDING) + Ansi.cursorUp(BOTTOM_PADDING))
     writer.flush()
     val selected =
         try {
           runSelectInputLoop(options, default)
         } finally {
-          writer.write("\u001b[?25h")
+          writer.write(Ansi.SHOW_CURSOR)
           writer.flush()
         }
     renderSelectCommitted(label, options, selected)
@@ -285,7 +292,7 @@ class InteractivePrompts(private val terminal: Terminal) {
         when (reader.read()) {
           -1,
           AsciiKeys.CTRL_C -> {
-            writer.write("\u001b[?25h")
+            writer.write(Ansi.SHOW_CURSOR)
             cancelPrompt()
           }
           AsciiKeys.CR,
@@ -298,11 +305,11 @@ class InteractivePrompts(private val terminal: Terminal) {
                 'A'.code -> selected = (selected - 1 + options.size) % options.size
                 'B'.code -> selected = (selected + 1) % options.size
               }
-              writer.write("\u001b[${options.size}A")
+              writer.write(Ansi.cursorUp(options.size))
               renderSelectOptions(options, selected)
               writer.flush()
             } else {
-              writer.write("\u001b[?25h")
+              writer.write(Ansi.SHOW_CURSOR)
               cancelPrompt()
             }
           }
@@ -314,22 +321,20 @@ class InteractivePrompts(private val terminal: Terminal) {
 
   private fun renderSelectCommitted(label: String, options: List<SelectOption>, selected: Int) {
     val totalLines = options.size + 1
-    writer.write("\u001b[${totalLines}A")
+    writer.write(Ansi.cursorUp(totalLines))
     for (i in 0 until totalLines) {
-      writer.write("\u001b[2K")
-      if (i < totalLines - 1) writer.write("\u001b[1B")
+      writer.write(Ansi.CLEAR_LINE)
+      if (i < totalLines - 1) writer.write(Ansi.cursorDown(1))
     }
-    if (totalLines > 1) writer.write("\u001b[${totalLines - 1}A")
-    writer.write("\r")
+    if (totalLines > 1) writer.write(Ansi.cursorUp(totalLines - 1))
+    writer.write(Ansi.CR)
 
     writer.writeLine("  ${Ansi.dim("◇")}  $label:")
     writer.writeLine("     ${options[selected].label}")
 
     val excess = totalLines - 2 + BOTTOM_PADDING
-    for (i in 0 until excess) {
-      writer.write("\u001b[2K\n")
-    }
-    if (excess > 0) writer.write("\u001b[${excess}A")
+    repeat(excess) { writer.write("${Ansi.CLEAR_LINE}\n") }
+    if (excess > 0) writer.write(Ansi.cursorUp(excess))
     writer.flush()
   }
 
@@ -340,7 +345,7 @@ class InteractivePrompts(private val terminal: Terminal) {
   private fun renderSelectOptions(options: List<SelectOption>, selected: Int) {
     val sb = StringBuilder()
     for ((i, option) in options.withIndex()) {
-      sb.append("\u001b[2K\r")
+      sb.append(Ansi.CLEAR_LINE).append(Ansi.CR)
       val marker = if (i == selected) "${Ansi.cyan("›")} " else "  "
       val descText = option.description?.let { " ${Ansi.dim("— $it")}" } ?: ""
       val text = if (i == selected) Ansi.brightWhite(option.label) else Ansi.dim(option.label)

@@ -122,9 +122,9 @@ class TerminalUITest {
   @Test
   fun `testSummary emits a blank then the summary lines`() {
     val (ui, t) = newUi()
-    ui.testSummary(passed = 5, failed = 0, total = 5, buildTime = "1.0s", testTime = "200ms")
+    ui.testSummary(passed = 5, failed = 0, total = 5, totalTime = "1.2s", testTime = "200ms")
     assertEquals(
-        listOf("", "  Tests   5 passed  (5)", "  Time    1.0s (build 1.0s, tests 200ms)"),
+        listOf("", "  Tests   5 passed  (5)", "  Time    1.2s  (tests 200ms)"),
         t.writes,
     )
   }
@@ -132,12 +132,12 @@ class TerminalUITest {
   @Test
   fun `testSummary with failures shows the failed count`() {
     val (ui, t) = newUi()
-    ui.testSummary(passed = 3, failed = 2, total = 5, buildTime = "1.0s", testTime = "200ms")
+    ui.testSummary(passed = 3, failed = 2, total = 5, totalTime = "1.2s", testTime = "200ms")
     assertEquals(
         listOf(
             "",
             "  Tests   3 passed  2 failed  (5)",
-            "  Time    1.0s (build 1.0s, tests 200ms)",
+            "  Time    1.2s  (tests 200ms)",
         ),
         t.writes,
     )
