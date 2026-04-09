@@ -1,5 +1,6 @@
 package dev.paperplane.cli.testing
 
+import dev.paperplane.cli.config.ServerConfig
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.TerminalUI
@@ -29,7 +30,7 @@ class FakePaperServerManager(
     calls += "cleanupStale"
   }
 
-  override fun configure() {
+  override fun configure(serverConfig: ServerConfig) {
     calls += "configure"
   }
 

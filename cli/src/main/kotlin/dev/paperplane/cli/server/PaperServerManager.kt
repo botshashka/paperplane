@@ -1,10 +1,13 @@
 package dev.paperplane.cli.server
 
+import com.charleskorn.kaml.YamlMap
+import dev.paperplane.cli.config.ServerConfig
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.util.UUID
 
 open class PaperServerManager(
     val serverDir: File,
@@ -26,6 +29,13 @@ open class PaperServerManager(
   private var processStdin: java.io.OutputStream? = null
   private val pluginsDir = File(serverDir, "plugins")
   private val gson = com.google.gson.Gson()
+
+  /**
+   * The most recently merged `paper-global.yml` contents, captured by [configure]. Used by
+   * [configureVelocityForwarding] so it can layer velocity settings on top of the user's
+   * paperGlobal overrides without round-tripping through the filesystem.
+   */
+  private var lastPaperGlobalYml: String = ServerConfigs.paperGlobalYml
 
   /**
    * When true, log lines from this server's output thread are dropped instead of forwarded to the
@@ -52,40 +62,135 @@ open class PaperServerManager(
     }
   }
 
-  open fun configure() {
+  open fun configure(serverConfig: ServerConfig = ServerConfig()) {
     serverDir.mkdirs()
     pluginsDir.mkdirs()
-    // Always overwrite — PaperPlane manages these settings, and Paper rewrites
-    // the file on first boot (making writeIfMissing a no-op for new properties)
-    File(serverDir, "server.properties").writeText(ServerConfigs.serverProperties(port))
-    writeIfMissing("bukkit.yml", ServerConfigs.bukkitYml)
-    writeIfMissing("spigot.yml", ServerConfigs.spigotYml)
-    val paperConfigDir = File(serverDir, "config").apply { mkdirs() }
-    writeIfMissing(File(paperConfigDir, "paper-global.yml"), ServerConfigs.paperGlobalYml)
-    writeIfMissing(
-        File(paperConfigDir, "paper-world-defaults.yml"),
+    // paperplane.yml is the source of truth for all server configuration. Every configure() call
+    // rewrites these files from the in-memory config, so direct edits in .paperplane/server/ are
+    // not supported — change paperplane.yml instead.
+    File(serverDir, ServerConfigs.SERVER_PROPERTIES_FILE)
+        .writeText(ServerConfigs.serverProperties(port, serverConfig.properties))
+    File(serverDir, ServerConfigs.BUKKIT_YML_FILE).writeText(ServerConfigs.bukkitYml)
+    File(serverDir, ServerConfigs.SPIGOT_YML_FILE).writeText(ServerConfigs.spigotYml)
+    val paperConfigDir = File(serverDir, ServerConfigs.PAPER_CONFIG_DIR).apply { mkdirs() }
+    // Only paper-global's merge result is captured — configureVelocityForwarding() needs it to
+    // layer velocity settings on top without re-reading the file. paper-world-defaults has no
+    // such follow-up, so its return value is discarded.
+    lastPaperGlobalYml =
+        writeMerged(
+            paperConfigDir,
+            ServerConfigs.PAPER_GLOBAL_YML_FILE,
+            ServerConfigs.paperGlobalYml,
+            serverConfig.paperGlobal,
+        )
+    writeMerged(
+        paperConfigDir,
+        ServerConfigs.PAPER_WORLD_DEFAULTS_YML_FILE,
         ServerConfigs.paperWorldDefaultsYml,
+        serverConfig.paperWorldDefaults,
     )
+    val banned = serverConfig.opBanlist.toSet()
+    writeOpsJson(serverConfig.ops.filter { it !in banned })
+    writeOpBanlist(serverConfig.opBanlist)
+  }
+
+  /**
+   * Merges [override] on top of [base] and writes the result to `[dir]/[name]`. Returns the
+   * merged YAML so callers can cache it in memory instead of re-reading the file.
+   */
+  private fun writeMerged(dir: File, name: String, base: String, override: YamlMap?): String {
+    val merged = YamlDeepMerge.merge(base, override)
+    File(dir, name).writeText(merged)
+    return merged
+  }
+
+  /**
+   * Writes `ops.json` if [names] is non-empty. Uses offline-mode UUIDs (deterministic from name)
+   * since the dev server runs with `online-mode=false`. PaperPlane's companion plugin also
+   * auto-ops joining players at runtime — this list seeds known ops across fresh server
+   * directories.
+   */
+  private fun writeOpsJson(names: List<String>) {
+    val opsFile = File(serverDir, "ops.json")
+    if (names.isEmpty()) {
+      opsFile.delete() // idempotent — no exists() pre-check
+      return
+    }
+    val entries =
+        names.map { name ->
+          mapOf(
+              "uuid" to offlineUuid(name).toString(),
+              "name" to name,
+              "level" to 4,
+              "bypassesPlayerLimit" to false,
+          )
+        }
+    opsFile.writeText(gson.toJson(entries))
+  }
+
+  /**
+   * Writes the op banlist to `.paperplane/op-banlist.json` as a JSON array of names. The
+   * companion plugin reads this file on join events and skips auto-opping any listed name. Also
+   * consulted by the CLI's reverse-sync to keep banned names out of `paperplane.yml`.
+   */
+  private fun writeOpBanlist(names: List<String>) {
+    val statusDir = File(serverDir, ".paperplane").apply { mkdirs() }
+    val file = File(statusDir, "op-banlist.json")
+    if (names.isEmpty()) {
+      file.delete()
+      return
+    }
+    file.writeText(gson.toJson(names))
+  }
+
+  /** Deterministic UUID that Minecraft uses for offline-mode players. */
+  private fun offlineUuid(name: String): UUID =
+      UUID.nameUUIDFromBytes("OfflinePlayer:$name".toByteArray(Charsets.UTF_8))
+
+  /**
+   * Reads current op names from `ops.json` in this server's directory. Returns an empty list if
+   * the file is missing or malformed. Used for reverse-sync of auto-opped players back into
+   * `paperplane.yml`.
+   */
+  fun readOpNames(): List<String> {
+    return try {
+      @Suppress("UNCHECKED_CAST")
+      val arr =
+          gson.fromJson(File(serverDir, "ops.json").readText(), List::class.java)
+              as? List<Map<String, Any>>
+      arr?.mapNotNull { it["name"] as? String } ?: emptyList()
+    } catch (_: Exception) {
+      // ops.json missing, unreadable, or malformed — treat as no ops.
+      emptyList()
+    }
   }
 
   open fun configureVelocityForwarding(secret: String) {
-    val paperConfigDir = File(serverDir, "config")
-    paperConfigDir.mkdirs()
-    // Always overwrite paper-global.yml when proxy is enabled to ensure velocity settings are
-    // correct
-    File(paperConfigDir, "paper-global.yml")
-        .writeText(
-            """
-            proxies:
-              velocity:
-                enabled: true
-                online-mode: true
-                secret: "$secret"
-            timings:
-              enabled: false
+    val paperConfigDir = File(serverDir, ServerConfigs.PAPER_CONFIG_DIR).apply { mkdirs() }
+    // Layer velocity forwarding on top of the in-memory paper-global.yml that configure() just
+    // built. Using [lastPaperGlobalYml] (not re-reading from disk) keeps user's paperGlobal
+    // overrides without an unnecessary file round-trip. proxies.velocity.* is PaperPlane-managed
+    // and must always win.
+    val merged = YamlDeepMerge.merge(lastPaperGlobalYml, velocityOverlay(secret))
+    File(paperConfigDir, ServerConfigs.PAPER_GLOBAL_YML_FILE).writeText(merged)
+    lastPaperGlobalYml = merged
+  }
+
+  private fun velocityOverlay(secret: String): YamlMap {
+    // Escape backslashes and double quotes so a pathological secret can't produce malformed YAML
+    // or inject extra keys. The secret is internally generated today, but belt-and-braces keeps
+    // this safe if the source ever changes.
+    val escaped = secret.replace("\\", "\\\\").replace("\"", "\\\"")
+    return yamlMap(
         """
-                .trimIndent() + "\n"
-        )
+        proxies:
+          velocity:
+            enabled: true
+            online-mode: true
+            secret: "$escaped"
+        """
+            .trimIndent() + "\n"
+    )
   }
 
   fun downloadServer(mcVersion: String): File {
@@ -282,14 +387,4 @@ open class PaperServerManager(
     Files.move(tmpFile.toPath(), statusFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
   }
 
-  private fun writeIfMissing(name: String, content: String) {
-    writeIfMissing(File(serverDir, name), content)
-  }
-
-  private fun writeIfMissing(file: File, content: String) {
-    if (!file.exists()) {
-      file.parentFile.mkdirs()
-      file.writeText(content)
-    }
-  }
 }

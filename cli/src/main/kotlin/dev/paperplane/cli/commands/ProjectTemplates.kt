@@ -277,6 +277,50 @@ internal object ProjectTemplates {
           jvm-args:
             - "-Xmx2G"
 
+          # server.properties. Add any key you need — these are just the common ones.
+          # server-port, online-mode and accepts-transfers are forced by PaperPlane.
+          properties:
+            # Gameplay
+            difficulty: "easy"
+            gamemode: "survival"
+            hardcore: "false"
+            pvp: "true"
+            allow-flight: "false"
+            allow-nether: "true"
+            spawn-animals: "true"
+            spawn-monsters: "true"
+            spawn-npcs: "true"
+            spawn-protection: "0"
+            enable-command-block: "true"
+
+            # World
+            level-name: "world"
+            level-seed: ""
+            level-type: "flat"
+            generate-structures: "false"
+            view-distance: "4"
+            simulation-distance: "4"
+
+            # Players
+            max-players: "2"
+            white-list: "false"
+            motd: "PaperPlane Dev Server"
+
+            # Resource pack
+            resource-pack: ""
+            resource-pack-sha1: ""
+            require-resource-pack: "false"
+
+          # Sparse overrides merged on top of Paper's config files.
+          paper-global: {}
+          paper-world-defaults: {}
+
+          # Pre-opped players. Auto-populated as new players join.
+          ops: []
+
+          # Players that must never be auto-opped. Takes precedence over `ops`.
+          op-banlist: []
+
         dev:
           mode: $devMode      # hot-reload | blue-green | restart
           jbr: "$jbr"             # auto | on | off | /path/to/jbr

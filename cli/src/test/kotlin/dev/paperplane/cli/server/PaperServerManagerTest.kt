@@ -1,5 +1,6 @@
 package dev.paperplane.cli.server
 
+import dev.paperplane.cli.config.ServerConfig
 import dev.paperplane.cli.ui.RecordingTerminal
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
@@ -61,14 +62,252 @@ class PaperServerManagerTest {
   }
 
   @Test
+  fun `configure merges user properties into server properties`() {
+    val manager = createManager(25566)
+    manager.configure(
+        ServerConfig(
+            properties =
+                mapOf(
+                    "view-distance" to "10",
+                    "gamemode" to "creative",
+                    "level-seed" to "12345",
+                    "resource-pack" to "https://example.com/pack.zip",
+                )
+        )
+    )
+
+    val props = File(manager.serverDir, "server.properties").readText()
+    assertTrue(props.contains("view-distance=10"), "user override should win")
+    assertFalse(props.contains("view-distance=4"), "default should be replaced")
+    assertTrue(props.contains("gamemode=creative"), "new key should be added")
+    assertTrue(props.contains("level-seed=12345"))
+    assertTrue(props.contains("resource-pack=https://example.com/pack.zip"))
+    // Defaults for unrelated keys still present
+    assertTrue(props.contains("simulation-distance=4"))
+  }
+
+  @Test
+  fun `configure ignores user attempts to override managed keys`() {
+    val manager = createManager(25566)
+    manager.configure(
+        ServerConfig(
+            properties =
+                mapOf(
+                    "server-port" to "9999",
+                    "online-mode" to "true",
+                    "accepts-transfers" to "false",
+                )
+        )
+    )
+
+    val props = File(manager.serverDir, "server.properties").readText()
+    assertTrue(props.contains("server-port=25566"), "managed port cannot be overridden")
+    assertFalse(props.contains("server-port=9999"))
+    assertTrue(props.contains("online-mode=false"), "managed online-mode cannot be overridden")
+    assertFalse(props.contains("online-mode=true"))
+    assertTrue(
+        props.contains("accepts-transfers=true"),
+        "managed accepts-transfers cannot be overridden",
+    )
+  }
+
+  @Test
+  fun `configure writes ops json when ops list is non-empty`() {
+    val manager = createManager()
+    manager.configure(ServerConfig(ops = listOf("alice", "bob")))
+
+    val opsFile = File(manager.serverDir, "ops.json")
+    assertTrue(opsFile.exists())
+    val content = opsFile.readText()
+    assertTrue(content.contains("\"name\":\"alice\""))
+    assertTrue(content.contains("\"name\":\"bob\""))
+    assertTrue(content.contains("\"level\":4"))
+    // Offline-mode UUID for "alice" — deterministic hash of "OfflinePlayer:alice"
+    val expectedAliceUuid =
+        java.util.UUID.nameUUIDFromBytes("OfflinePlayer:alice".toByteArray()).toString()
+    assertTrue(content.contains(expectedAliceUuid))
+  }
+
+  @Test
+  fun `configure writes no ops json when ops list is empty`() {
+    val manager = createManager()
+    manager.configure(ServerConfig(ops = emptyList()))
+
+    assertFalse(File(manager.serverDir, "ops.json").exists())
+  }
+
+  @Test
+  fun `readOpNames returns names from ops json`() {
+    val manager = createManager()
+    manager.configure(ServerConfig(ops = listOf("alice", "bob")))
+
+    val names = manager.readOpNames()
+    assertEquals(listOf("alice", "bob"), names)
+  }
+
+  @Test
+  fun `readOpNames returns empty list when ops json is missing`() {
+    val manager = createManager()
+    manager.configure()
+    assertTrue(manager.readOpNames().isEmpty())
+  }
+
+  @Test
+  fun `readOpNames returns empty list when ops json is malformed`() {
+    val manager = createManager()
+    manager.configure()
+    File(manager.serverDir, "ops.json").writeText("not valid json")
+    assertTrue(manager.readOpNames().isEmpty())
+  }
+
+  @Test
+  fun `configure writes op-banlist json when non-empty`() {
+    val manager = createManager()
+    manager.configure(ServerConfig(opBanlist = listOf("alice", "bob")))
+
+    val banlistFile = File(manager.serverDir, ".paperplane/op-banlist.json")
+    assertTrue(banlistFile.exists())
+    val content = banlistFile.readText()
+    assertTrue(content.contains("alice"))
+    assertTrue(content.contains("bob"))
+  }
+
+  @Test
+  fun `configure deletes op-banlist json when empty`() {
+    val manager = createManager()
+    // First write a banlist...
+    manager.configure(ServerConfig(opBanlist = listOf("alice")))
+    assertTrue(File(manager.serverDir, ".paperplane/op-banlist.json").exists())
+    // ...then clear it.
+    manager.configure(ServerConfig(opBanlist = emptyList()))
+    assertFalse(File(manager.serverDir, ".paperplane/op-banlist.json").exists())
+  }
+
+  @Test
+  fun `configure filters banlisted names out of ops json`() {
+    val manager = createManager()
+    manager.configure(
+        ServerConfig(ops = listOf("alice", "bob", "charlie"), opBanlist = listOf("bob"))
+    )
+
+    val opsContent = File(manager.serverDir, "ops.json").readText()
+    assertTrue(opsContent.contains("alice"))
+    assertFalse(opsContent.contains("\"name\":\"bob\""))
+    assertTrue(opsContent.contains("charlie"))
+  }
+
+  @Test
+  fun `configure deletes stale ops json when ops list becomes empty`() {
+    val manager = createManager()
+    manager.configure(ServerConfig(ops = listOf("alice")))
+    assertTrue(File(manager.serverDir, "ops.json").exists())
+    manager.configure(ServerConfig(ops = emptyList()))
+    assertFalse(
+        File(manager.serverDir, "ops.json").exists(),
+        "stale ops.json from a previous run should be cleared",
+    )
+  }
+
+  @Test
   fun `configureVelocityForwarding writes velocity secret`() {
     val manager = createManager()
     manager.configure()
     manager.configureVelocityForwarding("test-secret-123")
 
     val paperConfig = File(manager.serverDir, "config/paper-global.yml").readText()
-    assertTrue(paperConfig.contains("enabled: true"))
-    assertTrue(paperConfig.contains("secret: \"test-secret-123\""))
+    assertTrue(paperConfig.contains("secret") && paperConfig.contains("test-secret-123"))
+  }
+
+  @Test
+  fun `configure deep-merges user paperGlobal into paper-global yml`() {
+    val manager = createManager()
+    val userOverride =
+        yamlMap(
+            """
+            chunks:
+              delay-chunk-unloads-by: "0s"
+            anticheat:
+              anti-xray:
+                enabled: false
+            """
+                .trimIndent() + "\n"
+        )
+    manager.configure(dev.paperplane.cli.config.ServerConfig(paperGlobal = userOverride))
+
+    val content = File(manager.serverDir, "config/paper-global.yml").readText()
+    // User overrides present
+    assertTrue(content.contains("delay-chunk-unloads-by"))
+    assertTrue(content.contains("anticheat"))
+    // PaperPlane default preserved
+    assertTrue(content.contains("timings"))
+  }
+
+  @Test
+  fun `configure deep-merges user paperWorldDefaults`() {
+    val manager = createManager()
+    val userOverride =
+        yamlMap(
+            """
+            entity-tracking-range:
+              players: "96"
+            """
+                .trimIndent() + "\n"
+        )
+    manager.configure(
+        dev.paperplane.cli.config.ServerConfig(paperWorldDefaults = userOverride)
+    )
+
+    val content = File(manager.serverDir, "config/paper-world-defaults.yml").readText()
+    assertTrue(content.contains("entity-tracking-range"))
+    // Default keys preserved
+    assertTrue(content.contains("auto-save-interval"))
+    assertTrue(content.contains("keep-spawn-loaded"))
+  }
+
+  @Test
+  fun `configureVelocityForwarding preserves user paperGlobal overrides`() {
+    val manager = createManager()
+    val userOverride =
+        yamlMap(
+            """
+            chunks:
+              delay-chunk-unloads-by: "0s"
+            """
+                .trimIndent() + "\n"
+        )
+    manager.configure(dev.paperplane.cli.config.ServerConfig(paperGlobal = userOverride))
+    manager.configureVelocityForwarding("secret-xyz")
+
+    val content = File(manager.serverDir, "config/paper-global.yml").readText()
+    // Velocity settings present (managed — must win)
+    assertTrue(content.contains("secret") && content.contains("secret-xyz"))
+    // User override still present (wasn't clobbered)
+    assertTrue(content.contains("delay-chunk-unloads-by"))
+    // PaperPlane default still present
+    assertTrue(content.contains("timings"))
+  }
+
+  @Test
+  fun `configureVelocityForwarding secret wins over user paperGlobal override`() {
+    val manager = createManager()
+    val userOverride =
+        yamlMap(
+            """
+            proxies:
+              velocity:
+                secret: "user-attempted-secret"
+            """
+                .trimIndent() + "\n"
+        )
+    manager.configure(dev.paperplane.cli.config.ServerConfig(paperGlobal = userOverride))
+    manager.configureVelocityForwarding("managed-secret-xyz")
+
+    val content = File(manager.serverDir, "config/paper-global.yml").readText()
+    assertTrue(content.contains("managed-secret-xyz"), "managed secret must win")
+    assertFalse(
+        content.contains("user-attempted-secret"),
+        "user-supplied velocity secret must be clobbered",
+    )
   }
 
   @Test

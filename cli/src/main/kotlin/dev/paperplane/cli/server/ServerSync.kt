@@ -8,30 +8,22 @@ import java.nio.file.attribute.FileTime
 object ServerSync {
 
   /**
-   * Syncs all runtime state from source server to target server. Uses incremental sync (timestamp +
-   * size) to skip unchanged files. Copies everything except lock files and CLI state, then patches
-   * the port in server.properties. The dev plugin jar and companion jar are skipped (deployed fresh
-   * after sync).
+   * Syncs runtime state (world data, player data, plugin data directories, etc) from source to
+   * target. Uses incremental sync (timestamp + size) to skip unchanged files. Skips lock files,
+   * CLI state, the dev plugin jar, the companion jar, and all PaperPlane-managed config files —
+   * those come from `paperplane.yml` directly via configure().
    */
-  fun syncServerState(sourceDir: File, targetDir: File, targetPort: Int, devPluginJarName: String) {
+  fun syncServerState(sourceDir: File, targetDir: File, devPluginJarName: String) {
     syncChildren(
         sourceDir,
         targetDir,
-        skipName = { it.endsWith(".lock") || it == ".paperplane" },
+        skipName = {
+          it.endsWith(".lock") || it == ".paperplane" || it in ServerConfigs.MANAGED_CONFIG_FILES
+        },
         onDirectory = { s, d ->
           if (s.name == "plugins") syncPlugins(s, d, devPluginJarName) else incrementalSyncDir(s, d)
         },
     )
-    patchServerPort(targetDir, targetPort)
-  }
-
-  private fun patchServerPort(targetDir: File, targetPort: Int) {
-    val props = File(targetDir, "server.properties")
-    if (props.exists()) {
-      props.writeText(
-          props.readText().replace(Regex("server-port=\\d+"), "server-port=$targetPort")
-      )
-    }
   }
 
   private fun syncPlugins(srcPlugins: File, dstPlugins: File, devPluginJarName: String) {

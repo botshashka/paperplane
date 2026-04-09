@@ -16,13 +16,21 @@ import java.io.File
 import java.util.concurrent.LinkedBlockingQueue
 
 internal class DevSession(
-    val config: PaperPlaneConfig,
+    config: PaperPlaneConfig,
     val ppDir: File,
     val gradle: GradleBridge,
     val downloader: PaperDownloader,
     val projectDir: File,
     val ui: TerminalUI,
 ) {
+  /**
+   * Holds the current config. This is `var` because the reverse-sync of `server.ops` on shutdown
+   * may update it (and persist it back to `paperplane.yml`) based on the companion plugin's
+   * runtime auto-ops. All other config fields are treated as immutable for the lifetime of the
+   * session.
+   */
+  var config: PaperPlaneConfig = config
+    private set
   companion object {
     private const val MAIN_LOOP_POLL_INTERVAL_MS = 1000L
   }
@@ -268,7 +276,7 @@ internal class DevSession(
       extraConfigure: (PaperServerManager) -> Unit = {},
   ): RunningState? {
     serverManager.cleanupStale()
-    serverManager.configure()
+    serverManager.configure(config.server)
     extraConfigure(serverManager)
     val builtJar = File(projectDir, metadata.jarPath)
     serverManager.copyPlugin(builtJar)
@@ -286,6 +294,35 @@ internal class DevSession(
       ui.error("Server failed to start", serverDuration)
       serverManager.writeCompanionStatus("error", mapOf("message" to "Server failed to start"))
       null
+    }
+  }
+
+  /**
+   * Reverse-sync of auto-opped players from the running server's `ops.json` back into
+   * `paperplane.yml`. The companion plugin ops joining players via Bukkit API at runtime; Paper
+   * persists that to `ops.json`. This walks the file, unions the names with
+   * `config.server.ops` (preserving order; existing names keep their position, new names are
+   * appended), and if the set changed, rewrites `paperplane.yml`. Best-effort — any failure is
+   * swallowed silently because this runs during shutdown when there's no meaningful error path.
+   *
+   * Idempotent: safe to call multiple times from different shutdown paths.
+   */
+  fun syncOpsBackToConfig(serverManager: PaperServerManager) {
+    try {
+      val liveNames = serverManager.readOpNames()
+      if (liveNames.isEmpty()) return
+      val existing = config.server.ops
+      val existingSet = existing.toSet()
+      val banned = config.server.opBanlist.toSet()
+      // Exclude existing names (already in list) and banned names (must never be auto-added).
+      val newNames = liveNames.filter { it !in existingSet && it !in banned }
+      if (newNames.isEmpty()) return
+      val merged = existing + newNames
+      val updated = config.copy(server = config.server.copy(ops = merged))
+      PaperPlaneConfig.save(projectDir, updated)
+      config = updated
+    } catch (_: Exception) {
+      // Best effort — shutdown path must not fail.
     }
   }
 

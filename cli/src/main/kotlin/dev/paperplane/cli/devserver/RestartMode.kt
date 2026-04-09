@@ -19,6 +19,7 @@ internal open class RestartMode(
             Thread {
               session.ui.clearPinnedFooter()
               serverManager.stop()
+              session.syncOpsBackToConfig(serverManager)
               session.gradle.close()
             }
         )
@@ -40,6 +41,7 @@ internal open class RestartMode(
         },
         cleanup = {
           serverManager.stop()
+          session.syncOpsBackToConfig(serverManager)
           session.gradle.close()
         },
     )

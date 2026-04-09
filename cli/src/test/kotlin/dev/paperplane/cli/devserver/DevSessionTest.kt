@@ -5,6 +5,7 @@ import dev.paperplane.cli.config.PaperPlaneConfig
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.server.PaperDownloader
+import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.RecordingTerminal
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
@@ -139,6 +140,101 @@ class DevSessionTest {
         }
     assertTrue(ex.message!!.contains("not supported"))
     assertTrue(ex.message!!.contains("1.17"))
+  }
+
+  // ── syncOpsBackToConfig ─────────────────────────────────────────────
+
+  private fun opsBackSetup(
+      initialOps: List<String> = emptyList(),
+      opBanlist: List<String> = emptyList(),
+      liveOpNames: List<String>,
+  ): Pair<DevSession, PaperServerManager> {
+    // Seed paperplane.yml so PaperPlaneConfig.load picks up ops/opBanlist.
+    val yaml = buildString {
+      append("server:\n")
+      if (initialOps.isNotEmpty()) {
+        append("  ops:\n")
+        initialOps.forEach { append("    - \"$it\"\n") }
+      }
+      if (opBanlist.isNotEmpty()) {
+        append("  op-banlist:\n")
+        opBanlist.forEach { append("    - \"$it\"\n") }
+      }
+    }
+    File(tempDir, "paperplane.yml").writeText(yaml)
+    val config = PaperPlaneConfig.load(tempDir, ui)
+    val session =
+        DevSession(
+            config = config,
+            ppDir = tempDir,
+            gradle = GradleBridge(tempDir, ui),
+            downloader = PaperDownloader(File(tempDir, "cache")),
+            projectDir = tempDir,
+            ui = ui,
+        )
+    val serverDir = File(tempDir, "server").apply { mkdirs() }
+    val manager = PaperServerManager(serverDir, PaperDownloader(File(tempDir, "cache")), ui)
+    // Seed ops.json in the format PaperServerManager writes — readOpNames parses it.
+    val entries = liveOpNames.joinToString(",") { "{\"name\":\"$it\",\"level\":4}" }
+    File(serverDir, "ops.json").writeText("[$entries]")
+    return session to manager
+  }
+
+  @Test
+  fun `syncOpsBackToConfig appends new auto-opped names preserving order`() {
+    val (session, manager) =
+        opsBackSetup(
+            initialOps = listOf("alice", "bob"),
+            liveOpNames = listOf("alice", "charlie", "bob", "dave"),
+        )
+    session.syncOpsBackToConfig(manager)
+
+    assertEquals(listOf("alice", "bob", "charlie", "dave"), session.config.server.ops)
+    // Persisted to paperplane.yml too
+    val reloaded = PaperPlaneConfig.load(tempDir, ui)
+    assertEquals(listOf("alice", "bob", "charlie", "dave"), reloaded.server.ops)
+  }
+
+  @Test
+  fun `syncOpsBackToConfig excludes banlisted names`() {
+    val (session, manager) =
+        opsBackSetup(
+            initialOps = listOf("alice"),
+            opBanlist = listOf("eve"),
+            liveOpNames = listOf("alice", "eve", "bob"),
+        )
+    session.syncOpsBackToConfig(manager)
+
+    assertEquals(listOf("alice", "bob"), session.config.server.ops)
+  }
+
+  @Test
+  fun `syncOpsBackToConfig is a no-op when no new names appeared`() {
+    val (session, manager) =
+        opsBackSetup(
+            initialOps = listOf("alice", "bob"),
+            liveOpNames = listOf("alice", "bob"),
+        )
+    // Delete paperplane.yml after setup so we can detect a write.
+    File(tempDir, "paperplane.yml").delete()
+    session.syncOpsBackToConfig(manager)
+
+    assertFalse(
+        File(tempDir, "paperplane.yml").exists(),
+        "no-op sync must not rewrite paperplane.yml",
+    )
+    assertEquals(listOf("alice", "bob"), session.config.server.ops)
+  }
+
+  @Test
+  fun `syncOpsBackToConfig is a no-op when ops json is missing`() {
+    val (session, manager) =
+        opsBackSetup(initialOps = listOf("alice"), liveOpNames = emptyList())
+    File(manager.serverDir, "ops.json").delete()
+    File(tempDir, "paperplane.yml").delete()
+    session.syncOpsBackToConfig(manager)
+
+    assertFalse(File(tempDir, "paperplane.yml").exists())
   }
 
   @Test

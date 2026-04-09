@@ -3,12 +3,15 @@ package dev.paperplane.cli.config
 import com.charleskorn.kaml.InvalidPropertyValueException
 import com.charleskorn.kaml.UnknownPropertyException
 import com.charleskorn.kaml.Yaml
+import com.charleskorn.kaml.YamlConfiguration
+import com.charleskorn.kaml.YamlMap
 import com.github.ajalt.clikt.core.ProgramResult
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 
 @Serializable
 data class PaperPlaneConfig(
@@ -35,6 +38,18 @@ data class PaperPlaneConfig(
       }
     }
 
+    /**
+     * Serializes [config] back to `paperplane.yml` in [projectDir]. Used for reverse-sync of
+     * machine-managed fields like `server.ops` after a dev session. Note: comments and custom
+     * formatting in the existing file are not preserved — kaml does a round-trip serialization.
+     */
+    fun save(projectDir: File, config: PaperPlaneConfig) {
+      val yaml =
+          Yaml(configuration = YamlConfiguration(encodeDefaults = false, breakScalarsAt = 120))
+      val text = yaml.encodeToString(config)
+      File(projectDir, "paperplane.yml").writeText(text)
+    }
+
     private fun reportUnknownKey(ui: TerminalUI, e: UnknownPropertyException) {
       ui.blank()
       ui.error("Unknown key '${e.propertyName}' in paperplane.yml")
@@ -47,6 +62,37 @@ data class PaperPlaneConfig(
 data class ServerConfig(
     val version: String? = null,
     @SerialName("jvm-args") val jvmArgs: List<String> = listOf("-Xmx2G"),
+    /**
+     * User overrides for `server.properties`. Merged on top of PaperPlane's defaults. Managed keys
+     * (`server-port`, `accepts-transfers`, `online-mode`) cannot be overridden — they're required
+     * for the dev server to function.
+     */
+    val properties: Map<String, String> = emptyMap(),
+    /**
+     * Player names to pre-op on the dev server. Written to `ops.json` on each `ppl dev`.
+     * PaperPlane also auto-ops joining players, and their names are synced back into this list
+     * on shutdown so they persist across `ppl clean` runs.
+     */
+    val ops: List<String> = emptyList(),
+    /**
+     * Names that must never be auto-opped. Takes precedence over [ops] (a name appearing in
+     * both is never opped) and blocks the auto-op-on-join behavior as well as the reverse-sync
+     * that otherwise grows [ops] organically. Use this to deop a player permanently: add them
+     * here and they stay deopped across sessions.
+     */
+    @SerialName("op-banlist") val opBanlist: List<String> = emptyList(),
+    /**
+     * Passthrough overrides for `config/paper-global.yml`. Deep-merged on top of PaperPlane's
+     * defaults at configure time (user wins on leaf conflicts). Leave empty to use defaults.
+     * Paper's full schema is very large, so we don't enumerate keys here — users only set the
+     * ones they care about.
+     */
+    @SerialName("paper-global") val paperGlobal: YamlMap? = null,
+    /**
+     * Passthrough overrides for `config/paper-world-defaults.yml`. Deep-merged the same way as
+     * [paperGlobal].
+     */
+    @SerialName("paper-world-defaults") val paperWorldDefaults: YamlMap? = null,
 )
 
 @Serializable

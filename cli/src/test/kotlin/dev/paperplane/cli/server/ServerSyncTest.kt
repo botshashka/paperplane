@@ -31,7 +31,7 @@ class ServerSyncTest {
     File(sourceDir, "world_nether/region").mkdirs()
     File(sourceDir, "world_nether/region/r.0.0.mca").writeText("nether-data")
 
-    ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+    ServerSync.syncServerState(sourceDir, targetDir, "my-plugin.jar")
 
     assertEquals("region-data", File(targetDir, "world/region/r.0.0.mca").readText())
     assertEquals("player-data", File(targetDir, "world/playerdata/uuid.dat").readText())
@@ -39,30 +39,46 @@ class ServerSyncTest {
   }
 
   @Test
-  fun `patches port in server properties`() {
+  fun `does not sync server properties (re-derived per server from paperplane yml)`() {
     File(sourceDir, "server.properties")
-        .writeText("online-mode=false\nserver-port=25566\nmotd=test\n")
+        .writeText("online-mode=false\nserver-port=25566\nmotd=active-only\n")
 
-    ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+    ServerSync.syncServerState(sourceDir, targetDir, "my-plugin.jar")
 
-    val props = File(targetDir, "server.properties").readText()
-    assertTrue(props.contains("server-port=25567"))
-    assertFalse(props.contains("server-port=25566"))
-    assertTrue(props.contains("online-mode=false"))
+    assertFalse(
+        File(targetDir, "server.properties").exists(),
+        "server.properties should be skipped by sync — configure() writes it per-server",
+    )
   }
 
   @Test
-  fun `syncs config files`() {
+  fun `does not sync managed config files`() {
     File(sourceDir, "bukkit.yml").writeText("bukkit-config")
     File(sourceDir, "spigot.yml").writeText("spigot-config")
     File(sourceDir, "config").mkdirs()
     File(sourceDir, "config/paper-global.yml").writeText("paper-config")
+    File(sourceDir, "config/paper-world-defaults.yml").writeText("paper-world-defaults-config")
 
-    ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+    ServerSync.syncServerState(sourceDir, targetDir, "my-plugin.jar")
 
-    assertEquals("bukkit-config", File(targetDir, "bukkit.yml").readText())
-    assertEquals("spigot-config", File(targetDir, "spigot.yml").readText())
-    assertEquals("paper-config", File(targetDir, "config/paper-global.yml").readText())
+    assertFalse(File(targetDir, "bukkit.yml").exists())
+    assertFalse(File(targetDir, "spigot.yml").exists())
+    assertFalse(File(targetDir, "config/paper-global.yml").exists())
+    assertFalse(File(targetDir, "config/paper-world-defaults.yml").exists())
+  }
+
+  @Test
+  fun `does not overwrite existing managed configs on target`() {
+    File(sourceDir, "server.properties").writeText("active-port=25566")
+    File(sourceDir, "bukkit.yml").writeText("active-bukkit")
+    File(targetDir, "server.properties").writeText("standby-port=25567")
+    File(targetDir, "bukkit.yml").writeText("standby-bukkit")
+
+    ServerSync.syncServerState(sourceDir, targetDir, "my-plugin.jar")
+
+    // Standby's copies (written by configure() earlier) must survive.
+    assertEquals("standby-port=25567", File(targetDir, "server.properties").readText())
+    assertEquals("standby-bukkit", File(targetDir, "bukkit.yml").readText())
   }
 
   @Test
@@ -71,7 +87,7 @@ class ServerSyncTest {
     File(sourceDir, "banned-players.json").writeText("[]")
     File(sourceDir, "whitelist.json").writeText("[]")
 
-    ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+    ServerSync.syncServerState(sourceDir, targetDir, "my-plugin.jar")
 
     assertEquals("[{\"name\":\"dev\"}]", File(targetDir, "ops.json").readText())
     assertEquals("[]", File(targetDir, "banned-players.json").readText())
@@ -85,7 +101,7 @@ class ServerSyncTest {
     File(sourceDir, "plugins/paperplane-companion.jar").writeText("old-companion")
     File(sourceDir, "plugins/WorldEdit.jar").writeText("worldedit")
 
-    ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+    ServerSync.syncServerState(sourceDir, targetDir, "my-plugin.jar")
 
     assertFalse(File(targetDir, "plugins/my-plugin.jar").exists())
     assertFalse(File(targetDir, "plugins/paperplane-companion.jar").exists())
@@ -99,7 +115,7 @@ class ServerSyncTest {
     File(sourceDir, "plugins/WorldEdit.jar").writeText("worldedit-data")
     File(sourceDir, "plugins/EssentialsX.jar").writeText("essentials-data")
 
-    ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+    ServerSync.syncServerState(sourceDir, targetDir, "my-plugin.jar")
 
     assertEquals("worldedit-data", File(targetDir, "plugins/WorldEdit.jar").readText())
     assertEquals("essentials-data", File(targetDir, "plugins/EssentialsX.jar").readText())
@@ -112,7 +128,7 @@ class ServerSyncTest {
     File(sourceDir, "plugins/MyPlugin/data").mkdirs()
     File(sourceDir, "plugins/MyPlugin/data/cities.yml").writeText("city-data")
 
-    ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+    ServerSync.syncServerState(sourceDir, targetDir, "my-plugin.jar")
 
     assertEquals("plugin-config", File(targetDir, "plugins/MyPlugin/config.yml").readText())
     assertEquals("city-data", File(targetDir, "plugins/MyPlugin/data/cities.yml").readText())
@@ -124,7 +140,7 @@ class ServerSyncTest {
     File(sourceDir, "world/session.lock").writeText("locked")
     File(sourceDir, "server.lock").writeText("locked")
 
-    ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+    ServerSync.syncServerState(sourceDir, targetDir, "my-plugin.jar")
 
     assertFalse(
         File(targetDir, "world/session.lock").exists(),
@@ -144,7 +160,7 @@ class ServerSyncTest {
     File(sourceDir, "world/region").mkdirs()
     File(sourceDir, "world/region/r.0.0.mca").writeText("new-data")
 
-    ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+    ServerSync.syncServerState(sourceDir, targetDir, "my-plugin.jar")
 
     assertEquals("new-data", File(targetDir, "world/region/r.0.0.mca").readText())
     assertFalse(File(targetDir, "world/region/r.1.1.mca").exists(), "stale chunk should be deleted")
@@ -157,7 +173,7 @@ class ServerSyncTest {
 
     File(sourceDir, "eula.txt").writeText("eula=true")
 
-    ServerSync.syncServerState(sourceDir, freshTarget, 25567, "my-plugin.jar")
+    ServerSync.syncServerState(sourceDir, freshTarget, "my-plugin.jar")
 
     assertTrue(freshTarget.exists())
     assertEquals("eula=true", File(freshTarget, "eula.txt").readText())
@@ -169,7 +185,7 @@ class ServerSyncTest {
     File(sourceDir, ".paperplane/companion-status.json").writeText("""{"state":"saving"}""")
     File(sourceDir, "eula.txt").writeText("eula=true")
 
-    ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+    ServerSync.syncServerState(sourceDir, targetDir, "my-plugin.jar")
 
     assertFalse(File(targetDir, ".paperplane").exists(), ".paperplane dir should not be synced")
     assertTrue(File(targetDir, "eula.txt").exists(), "other files should still sync")
@@ -177,7 +193,7 @@ class ServerSyncTest {
 
   @Test
   fun `handles empty source directory`() {
-    ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+    ServerSync.syncServerState(sourceDir, targetDir, "my-plugin.jar")
     // Should not throw, target should still exist
     assertTrue(targetDir.exists())
   }
@@ -190,7 +206,7 @@ class ServerSyncTest {
     File(sourceDir, "eula.txt").writeText("eula=true")
 
     // First sync
-    ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+    ServerSync.syncServerState(sourceDir, targetDir, "my-plugin.jar")
 
     // Record target timestamps
     val worldFile = File(targetDir, "world/region/r.0.0.mca")
@@ -202,7 +218,7 @@ class ServerSyncTest {
     Thread.sleep(50)
 
     // Second sync without modifying source
-    ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+    ServerSync.syncServerState(sourceDir, targetDir, "my-plugin.jar")
 
     // Timestamps should be unchanged (files were not re-copied)
     assertEquals(
@@ -221,7 +237,7 @@ class ServerSyncTest {
     File(sourceDir, "eula.txt").writeText("eula=true")
 
     // First sync
-    ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+    ServerSync.syncServerState(sourceDir, targetDir, "my-plugin.jar")
 
     val worldFile = File(targetDir, "world/region/r.0.0.mca")
     val worldTimestamp = worldFile.lastModified()
@@ -231,7 +247,7 @@ class ServerSyncTest {
     File(sourceDir, "eula.txt").writeText("eula=false")
 
     // Second sync
-    ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+    ServerSync.syncServerState(sourceDir, targetDir, "my-plugin.jar")
 
     // Modified file should be updated
     assertEquals("eula=false", File(targetDir, "eula.txt").readText())
@@ -251,14 +267,14 @@ class ServerSyncTest {
     File(sourceDir, "world/region/r.1.1.mca").writeText("extra-region")
 
     // First sync
-    ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+    ServerSync.syncServerState(sourceDir, targetDir, "my-plugin.jar")
     assertTrue(File(targetDir, "world/region/r.1.1.mca").exists())
 
     // Delete a file from source
     File(sourceDir, "world/region/r.1.1.mca").delete()
 
     // Second sync
-    ServerSync.syncServerState(sourceDir, targetDir, 25567, "my-plugin.jar")
+    ServerSync.syncServerState(sourceDir, targetDir, "my-plugin.jar")
 
     // Remaining file should still be there
     assertTrue(File(targetDir, "world/region/r.0.0.mca").exists())

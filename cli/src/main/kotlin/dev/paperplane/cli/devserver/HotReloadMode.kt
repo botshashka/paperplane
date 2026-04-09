@@ -30,6 +30,7 @@ internal open class HotReloadMode(
             Thread {
               session.ui.clearPinnedFooter()
               serverManager.stop()
+              session.syncOpsBackToConfig(serverManager)
               session.gradle.close()
             }
         )
@@ -51,6 +52,7 @@ internal open class HotReloadMode(
         },
         cleanup = {
           serverManager.stop()
+          session.syncOpsBackToConfig(serverManager)
           session.gradle.close()
         },
     )

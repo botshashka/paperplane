@@ -20,7 +20,7 @@ class CompanionPlugin : JavaPlugin() {
       buildStatusBar = BuildStatusBar(this)
 
       server.pluginManager.registerEvents(errorCatcher, this)
-      server.pluginManager.registerEvents(AutoOpListener(), this)
+      server.pluginManager.registerEvents(AutoOpListener(serverRoot()), this)
       server.pluginManager.registerEvents(SaveProtectionListener(buildStatusBar), this)
       buildStatusBar.start()
 
@@ -31,7 +31,7 @@ class CompanionPlugin : JavaPlugin() {
           object : Listener {
             @EventHandler
             fun onServerLoad(@Suppress("UNUSED_PARAMETER") event: ServerLoadEvent) {
-              val readyFlag = File(dataFolder.parentFile.parentFile, ".paperplane/server-ready")
+              val readyFlag = File(serverRoot(), ".paperplane/server-ready")
               readyFlag.parentFile.mkdirs()
               readyFlag.writeText(System.currentTimeMillis().toString())
             }
@@ -47,6 +47,13 @@ class CompanionPlugin : JavaPlugin() {
       logger.severe(e.stackTraceToString())
     }
   }
+
+  /**
+   * Resolves the Paper server root directory. Bukkit's [dataFolder] is
+   * `<serverRoot>/plugins/<plugin-name>`, so the root is two levels up. Centralized here so any
+   * future layout change only needs one fix.
+   */
+  private fun serverRoot(): File = dataFolder.parentFile.parentFile
 
   override fun onDisable() {
     try {

@@ -87,6 +87,9 @@ internal open class BlueGreenMode(
           Thread({ mgr.stop() }, "shutdown-stop-${mgr.serverDir.name}").apply { start() }
         }
     stopThreads.forEach { it.join() }
+    // Sync auto-opped players back to paperplane.yml from whichever server is currently active.
+    // Must happen after stop() (so ops.json is fully flushed) but before proxy teardown.
+    servers[activeSlot]?.let { session.syncOpsBackToConfig(it) }
     velocityManager.stop()
     session.gradle.close()
   }
@@ -113,7 +116,6 @@ internal open class BlueGreenMode(
     preWarmStandby(
         servers[Slot.SWAP]!!,
         servers[activeSlot]!!,
-        Slot.SWAP.port,
         builtJar,
         state.paperJar,
     )
@@ -247,7 +249,7 @@ internal open class BlueGreenMode(
         Thread(
                 {
                   active.stop()
-                  preWarmStandby(active, standby, activeSlot.port, builtJar, paperJar)
+                  preWarmStandby(active, standby, builtJar, paperJar)
                 },
                 "stop-and-prewarm-${activeSlot.serverName}",
             )
@@ -281,12 +283,7 @@ internal open class BlueGreenMode(
     val syncThread =
         Thread(
             {
-              ServerSync.syncServerState(
-                  active.serverDir,
-                  standby.serverDir,
-                  standbySlot.port,
-                  builtJar.name,
-              )
+              ServerSync.syncServerState(active.serverDir, standby.serverDir, builtJar.name)
             },
             "sync-to-${standbySlot.serverName}",
         )
@@ -353,7 +350,6 @@ internal open class BlueGreenMode(
   private fun preWarmStandby(
       standby: PaperServerManager,
       source: PaperServerManager,
-      standbyPort: Int,
       pluginJar: File,
       paperJar: File,
   ) {
@@ -361,9 +357,9 @@ internal open class BlueGreenMode(
       if (standby.isRunning()) return
       standby.serverDir.mkdirs()
       standby.cleanupStale()
-      standby.configure()
+      standby.configure(session.config.server)
       standby.configureVelocityForwarding(velocityManager.forwardingSecret)
-      ServerSync.syncServerState(source.serverDir, standby.serverDir, standbyPort, pluginJar.name)
+      ServerSync.syncServerState(source.serverDir, standby.serverDir, pluginJar.name)
       standby.copyPlugin(pluginJar)
       standby.copyCompanion()
       // Pre-warmed standby runs silently — its logs would interleave with the active server's.
@@ -392,7 +388,7 @@ internal open class BlueGreenMode(
   private fun startFixedServer(metadata: ProjectMetadata, paperJar: File): RunningState? {
     val blue = servers[Slot.SERVER]!!
     blue.cleanupStale()
-    blue.configure()
+    blue.configure(session.config.server)
     blue.configureVelocityForwarding(velocityManager.forwardingSecret)
     val builtJar = File(session.projectDir, metadata.jarPath)
     blue.copyPlugin(builtJar)
