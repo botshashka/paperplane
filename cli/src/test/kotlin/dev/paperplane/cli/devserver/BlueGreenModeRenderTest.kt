@@ -154,7 +154,7 @@ class BlueGreenModeRenderTest {
     val outcome = m.runStartup(AtomicBoolean(false))
 
     assertEquals(DevSession.StartupOutcome.Aborted, outcome)
-    assertTrue(f.terminal.writes.any { it.contains("PaperPlane Gradle plugin not found") })
+    assertTrue(f.terminal.writes.any { it.contains("Could not read project metadata") })
     assertFalse(p.calls.any { it.startsWith("configure") })
   }
 

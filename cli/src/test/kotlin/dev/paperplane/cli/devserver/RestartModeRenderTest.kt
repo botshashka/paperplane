@@ -97,7 +97,7 @@ class RestartModeRenderTest {
     assertEquals(DevSession.StartupOutcome.Aborted, outcome)
     assertTrue(shuttingDown.get(), "should set shuttingDown when metadata is missing")
     assertTrue(
-        fixture.terminal.writes.any { it.contains("PaperPlane Gradle plugin not found") },
+        fixture.terminal.writes.any { it.contains("Could not read project metadata") },
         "expected the plugin-not-found error",
     )
     // No Watching footer should be opened.

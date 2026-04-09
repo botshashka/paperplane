@@ -68,12 +68,13 @@ internal class DevSession(
   /**
    * Runs the metadata-resolution step. Emits directly into whatever block/phase the caller has
    * open; never touches block lifecycle. Returns null if the metadata can't be resolved (plugin not
-   * applied) and signals shutdown via [shuttingDown].
+   * applied, compile error, or any other gradle failure) and signals shutdown via [shuttingDown].
+   * The underlying [GradleBridge] has already emitted the specific cause.
    */
   fun resolveMetadataOrAbort(shuttingDown: AtomicBoolean): ProjectMetadata? {
     val metadata = ui.spin("Reading project metadata...") { gradle.metadata() }
     if (metadata == null) {
-      pluginNotFoundError()
+      metadataResolutionError()
       shuttingDown.set(true)
       gradle.close()
       return null
@@ -287,9 +288,9 @@ internal class DevSession(
     }
   }
 
-  private fun pluginNotFoundError() {
-    ui.error("PaperPlane Gradle plugin not found.")
-    ui.info("ppl init", "add PaperPlane to this project")
+  private fun metadataResolutionError() {
+    ui.error("Could not read project metadata.")
+    ui.info("ppl init", "add PaperPlane to an existing project")
     ui.info("ppl create", "scaffold a new plugin")
   }
 

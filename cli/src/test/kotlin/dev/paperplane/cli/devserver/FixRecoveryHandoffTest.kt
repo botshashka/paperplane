@@ -103,10 +103,13 @@ class FixRecoveryHandoffTest {
   fun `runFixRecoveryAndWait returns null and runs onShutdown when interrupted`() {
     val fixture = newFixture()
     val onShutdownCalled = CountDownLatch(1)
-    val result = AtomicReference<DevSession.RunningState?>(DevSession.RunningState(
-        fixture.gradle.nextMetadata!!,
-        File(tempDir, "paper.jar"),
-    ))
+    val result =
+        AtomicReference<DevSession.RunningState?>(
+            DevSession.RunningState(
+                fixture.gradle.nextMetadata!!,
+                File(tempDir, "paper.jar"),
+            )
+        )
 
     val thread =
         Thread(

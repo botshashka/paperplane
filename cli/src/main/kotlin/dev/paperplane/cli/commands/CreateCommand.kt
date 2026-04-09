@@ -208,13 +208,22 @@ open class CreateCommand(
   }
 
   private fun runNonInteractive() {
-    val slug = name!!
-    val projectDir = File(slug)
+    // The positional argument may be a simple slug ("my-plugin") or a path ("./foo/my-plugin",
+    // "/abs/path/my-plugin"). Split the two: the File honors the user's intent for where the
+    // project lives; the slug is derived from the basename and drives rootProject.name, the class
+    // name, and the package — all of which must be simple identifiers, never paths.
+    val raw = name!!
+    val projectDir = File(raw)
+    val slug = deriveSlug(projectDir.name)
 
     ui.header(Versions.paperplaneVersion())
 
+    if (slug.isEmpty()) {
+      ui.block { error("Could not derive a project name from '$raw'") }
+      return
+    }
     if (projectDir.exists()) {
-      ui.block { error("Directory '$slug' already exists") }
+      ui.block { error("Directory '${projectDir.path}' already exists") }
       return
     }
 

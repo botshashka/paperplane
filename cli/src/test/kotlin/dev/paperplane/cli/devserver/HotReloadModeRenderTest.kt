@@ -80,7 +80,7 @@ class HotReloadModeRenderTest {
 
     assertEquals(DevSession.StartupOutcome.Aborted, outcome)
     assertTrue(shuttingDown.get())
-    assertTrue(fixture.terminal.writes.any { it.contains("PaperPlane Gradle plugin not found") })
+    assertTrue(fixture.terminal.writes.any { it.contains("Could not read project metadata") })
     assertFalse(fixture.terminal.writes.any { it.contains("Watching for changes") })
   }
 

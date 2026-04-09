@@ -74,11 +74,25 @@ open class GradleBridge(private val projectDir: File, private val ui: TerminalUI
           .run()
       true
     } catch (e: GradleConnectionException) {
-      ui.status("Build failed: ${e.message}")
+      ui.status("Build failed: ${rootCauseMessage(e)}")
       val output = stderr.toString() + stdout.toString()
       parseBuildErrors(output)
       false
     }
+  }
+
+  /**
+   * Walks [e]'s cause chain to find the deepest non-null message. The Tooling API wraps every
+   * failure in a generic `GradleConnectionException` whose message always references the
+   * distribution URL ("Could not execute build using connection to Gradle distribution …"),
+   * regardless of the actual cause. Walking the chain surfaces the real error (compile error,
+   * missing task, configuration failure) instead of the misleading wrapper. Falls back to the outer
+   * message if every cause is null.
+   */
+  private fun rootCauseMessage(e: Throwable): String {
+    var root: Throwable = e
+    while (root.cause != null && root.cause !== root) root = root.cause!!
+    return root.message?.lines()?.firstOrNull { it.isNotBlank() } ?: e.message ?: "unknown error"
   }
 
   data class FormatResult(
@@ -96,13 +110,10 @@ open class GradleBridge(private val projectDir: File, private val ui: TerminalUI
       connect().newBuild().forTasks(task).setStandardOutput(stdout).setStandardError(stderr).run()
       FormatResult(success = true)
     } catch (e: GradleConnectionException) {
-      var root: Throwable = e
-      while (root.cause != null && root.cause !== root) root = root.cause!!
-      val rootMsg = root.message?.lines()?.firstOrNull { it.isNotBlank() }
-
+      val rootMsg = rootCauseMessage(e)
       // Detecting "task not found" from the exception (rather than pre-loading the GradleProject
       // model via Tooling API) skips a full configuration phase on the happy path.
-      if (isTaskNotFoundMessage(root.message, task) || isTaskNotFoundMessage(e.message, task)) {
+      if (isTaskNotFoundMessage(rootMsg, task) || isTaskNotFoundMessage(e.message, task)) {
         return FormatResult(success = false, taskMissing = true)
       }
 
@@ -137,7 +148,7 @@ open class GradleBridge(private val projectDir: File, private val ui: TerminalUI
       true
     } catch (e: GradleConnectionException) {
       if (!quiet) {
-        ui.status("Test failed: ${e.message}")
+        ui.status("Test failed: ${rootCauseMessage(e)}")
         val output = stderr.toString() + stdout.toString()
         parseBuildErrors(output)
       }
@@ -161,11 +172,19 @@ open class GradleBridge(private val projectDir: File, private val ui: TerminalUI
           .run()
 
       val metadataFile = File(projectDir, "build/paperplane/metadata.json")
-      if (!metadataFile.exists()) return null
+      if (!metadataFile.exists()) {
+        ui.status("Metadata file not produced at build/paperplane/metadata.json")
+        return null
+      }
 
       parseMetadataFile(metadataFile)
     } catch (e: GradleConnectionException) {
-      ui.status("Metadata task failed: ${e.message}")
+      // Show the *real* cause, not the Tooling API's misleading wrapper message which always
+      // blames the distribution URL. Also render any compile errors from the captured output so
+      // the user sees "MyPlugin.java:9: error: ';' expected" instead of just "Build failed".
+      ui.status("Metadata task failed: ${rootCauseMessage(e)}")
+      val output = stderr.toString() + stdout.toString()
+      parseBuildErrors(output)
       null
     }
   }
@@ -189,7 +208,16 @@ open class GradleBridge(private val projectDir: File, private val ui: TerminalUI
   }
 
   private fun parseBuildErrors(output: String) {
-    val errors = BUILD_ERROR_PATTERN.findAll(output).toList()
+    // Dedupe by (file, line, message) — Gradle prints the same compile error twice (once in the
+    // ":compileJava FAILED" output section and once in the indented "* What went wrong" section).
+    // The regex isn't anchored, so the indented occurrence captures a file path with leading
+    // whitespace. Normalize with trim() before keying.
+    val seen = LinkedHashMap<Triple<String, String, String>, MatchResult>()
+    for (match in BUILD_ERROR_PATTERN.findAll(output)) {
+      val (file, line, message) = match.destructured
+      seen.putIfAbsent(Triple(file.trim(), line, message.trim()), match)
+    }
+    val errors = seen.values.toList()
 
     if (errors.isNotEmpty()) {
       for (match in errors.take(MAX_DISPLAYED_ERRORS)) {
