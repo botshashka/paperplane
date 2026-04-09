@@ -1,5 +1,7 @@
 package dev.paperplane.cli.devserver
 
+import dev.paperplane.cli.devserver.DevSession.RunningState
+import dev.paperplane.cli.devserver.DevSession.StartupOutcome
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.server.ServerSync
@@ -89,8 +91,6 @@ internal open class BlueGreenMode(
     session.gradle.close()
   }
 
-  internal data class RunningState(val metadata: ProjectMetadata, val paperJar: File)
-
   fun run() {
     Runtime.getRuntime()
         .addShutdownHook(
@@ -102,7 +102,12 @@ internal open class BlueGreenMode(
             }
         )
 
-    val state = runStartup(shuttingDown) ?: return
+    val state: RunningState =
+        when (val outcome = runStartup(shuttingDown)) {
+          is StartupOutcome.Running -> outcome.state
+          StartupOutcome.BuildFailed -> enterFixRecovery() ?: return
+          StartupOutcome.Aborted -> return
+        }
 
     val builtJar = File(session.projectDir, state.metadata.jarPath)
     preWarmStandby(
@@ -125,16 +130,16 @@ internal open class BlueGreenMode(
     )
   }
 
-  internal fun runStartup(shuttingDown: AtomicBoolean): RunningState? {
-    var state: RunningState? = null
+  internal fun runStartup(shuttingDown: AtomicBoolean): StartupOutcome {
+    var outcome: StartupOutcome = StartupOutcome.Aborted
     session.ui.phase {
       val metadata = session.resolveMetadataOrAbort(shuttingDown) ?: return@phase PhaseEnd.None
       val active = servers[activeSlot]!!
       val paperJar =
-          when (val outcome = session.initialBuild(metadata, active)) {
-            is DevSession.BuildOutcome.Success -> outcome.paperJar
+          when (val result = session.initialBuild(metadata, active)) {
+            is DevSession.BuildOutcome.Success -> result.paperJar
             is DevSession.BuildOutcome.BuildFailed -> {
-              enterFixRecovery()
+              outcome = StartupOutcome.BuildFailed
               return@phase PhaseEnd.Waiting
             }
           }
@@ -145,25 +150,29 @@ internal open class BlueGreenMode(
           "localhost:${PaperServerManager.DEFAULT_PORT} (via proxy)",
           "blue-green (zero-downtime)",
       )
-      state = RunningState(metadata, paperJar)
+      outcome = StartupOutcome.Running(RunningState(metadata, paperJar))
       PhaseEnd.Watching
     }
-    return state
+    return outcome
   }
 
-  /** Tests override to a no-op so build-failure paths don't enter the infinite fix loop. */
-  protected open fun enterFixRecovery(): Nothing {
-    session.runFixWatcher(cleanup = { shutdownAll() }) {
-      when (val attempt = session.handleFixAttempt(null)) {
-        is DevSession.FixAttempt.BuildFailed -> PhaseEnd.Waiting
-        is DevSession.FixAttempt.Success -> {
-          ensureProxyRunning()
-          startFixedServer(attempt.metadata, attempt.paperJar)
+  /**
+   * Blocks on the fix-recovery file watcher. Returns the recovered [RunningState] on a successful
+   * post-failure build + server start, or null on Ctrl+C. Test overrides may return a scripted
+   * state to bypass the real file watcher.
+   */
+  protected open fun enterFixRecovery(): RunningState? =
+      session.runFixRecoveryAndWait(
+          onShutdown = { shutdownAll() },
+      ) { _ ->
+        when (val attempt = session.handleFixAttempt(null)) {
+          is DevSession.FixAttempt.BuildFailed -> null
+          is DevSession.FixAttempt.Success -> {
+            ensureProxyRunning()
+            startFixedServer(attempt.metadata, attempt.paperJar)
+          }
         }
       }
-    }
-    error("fix recovery loop returned")
-  }
 
   /**
    * Wraps [rebuild] so it can update [activeSlot] as a side effect while returning only [PhaseEnd]
@@ -391,7 +400,7 @@ internal open class BlueGreenMode(
     velocityManager.waitForReady(PaperServerManager.DEFAULT_PORT)
   }
 
-  private fun startFixedServer(metadata: ProjectMetadata, paperJar: File): PhaseEnd {
+  private fun startFixedServer(metadata: ProjectMetadata, paperJar: File): RunningState? {
     val blue = servers[Slot.SERVER]!!
     blue.cleanupStale()
     blue.configure()
@@ -408,10 +417,10 @@ internal open class BlueGreenMode(
       session.ui.success("Server ready", serverDuration)
       blue.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
       velocityManager.writeActiveServer("server")
-      PhaseEnd.Watching
+      RunningState(metadata, paperJar)
     } else {
       session.ui.error("Server failed to start", serverDuration)
-      PhaseEnd.Waiting
+      null
     }
   }
 }

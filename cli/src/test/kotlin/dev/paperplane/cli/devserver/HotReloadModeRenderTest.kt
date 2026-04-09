@@ -5,9 +5,9 @@ import dev.paperplane.cli.testing.FakePaperServerManager
 import dev.paperplane.cli.ui.assertEmittedInOrder
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -25,19 +25,20 @@ class HotReloadModeRenderTest {
 
   @TempDir lateinit var tempDir: File
 
-  /** Test subclass that stubs the fix-recovery loop so build failures don't block forever. */
+  /**
+   * Test subclass that stubs the fix-recovery loop so tests don't block on the real file watcher.
+   * Records that recovery was entered; returns null (as if Ctrl+C) so `run()` exits cleanly.
+   */
   private class TestableHotReloadMode(
       session: DevSession,
       serverManager: FakePaperServerManager,
       var fixRecoveryEntered: Boolean = false,
   ) : HotReloadMode(session, serverManager) {
-    override fun enterFixRecovery(): Nothing {
+    override fun enterFixRecovery(): DevSession.RunningState? {
       fixRecoveryEntered = true
-      throw FixRecoveryEnteredSentinel
+      return null
     }
   }
-
-  private object FixRecoveryEnteredSentinel : RuntimeException("fix recovery entered (test escape)")
 
   // ── Happy startup ──────────────────────────────────────────────────
 
@@ -47,9 +48,9 @@ class HotReloadModeRenderTest {
     val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
     val mode = TestableHotReloadMode(fixture.session, server)
 
-    val state = mode.runStartup(AtomicBoolean(false))
+    val outcome = mode.runStartup(AtomicBoolean(false))
 
-    assertNotNull(state)
+    assertInstanceOf(DevSession.StartupOutcome.Running::class.java, outcome)
     fixture.terminal.assertEmittedInOrder(
         "Reading project metadata",
         "Building",
@@ -75,9 +76,9 @@ class HotReloadModeRenderTest {
     val mode = TestableHotReloadMode(fixture.session, server)
 
     val shuttingDown = AtomicBoolean(false)
-    val state = mode.runStartup(shuttingDown)
+    val outcome = mode.runStartup(shuttingDown)
 
-    assertNull(state)
+    assertEquals(DevSession.StartupOutcome.Aborted, outcome)
     assertTrue(shuttingDown.get())
     assertTrue(fixture.terminal.writes.any { it.contains("PaperPlane Gradle plugin not found") })
     assertFalse(fixture.terminal.writes.any { it.contains("Watching for changes") })
@@ -86,20 +87,20 @@ class HotReloadModeRenderTest {
   // ── Build failure → fix recovery ───────────────────────────────────
 
   @Test
-  fun `build failure during startup transfers to fix recovery`() {
+  fun `build failure during startup returns BuildFailed outcome`() {
     val fixture = DevSessionFixture(tempDir).withMetadata()
     fixture.gradle.nextBuildResult = false
     val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
     val mode = TestableHotReloadMode(fixture.session, server)
 
-    try {
-      mode.runStartup(AtomicBoolean(false))
-    } catch (_: RuntimeException) {
-      // sentinel
-    }
+    val outcome = mode.runStartup(AtomicBoolean(false))
 
-    assertTrue(mode.fixRecoveryEntered)
+    assertEquals(DevSession.StartupOutcome.BuildFailed, outcome)
     assertTrue(fixture.terminal.writes.any { it.contains("Build failed") })
+    assertFalse(
+        mode.fixRecoveryEntered,
+        "runStartup must not call enterFixRecovery internally; control returns to run()",
+    )
   }
 
   // ── Server failed to start ─────────────────────────────────────────
@@ -116,9 +117,9 @@ class HotReloadModeRenderTest {
         )
     val mode = TestableHotReloadMode(fixture.session, server)
 
-    val state = mode.runStartup(AtomicBoolean(false))
+    val outcome = mode.runStartup(AtomicBoolean(false))
 
-    assertNull(state)
+    assertEquals(DevSession.StartupOutcome.Aborted, outcome)
     assertTrue(fixture.terminal.writes.any { it.contains("Server failed to start") })
     assertFalse(fixture.terminal.writes.any { it.contains("Watching for changes") })
   }

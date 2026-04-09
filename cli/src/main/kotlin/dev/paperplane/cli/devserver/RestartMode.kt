@@ -1,5 +1,7 @@
 package dev.paperplane.cli.devserver
 
+import dev.paperplane.cli.devserver.DevSession.RunningState
+import dev.paperplane.cli.devserver.DevSession.StartupOutcome
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
@@ -11,8 +13,6 @@ internal open class RestartMode(
     private val serverManager: PaperServerManager =
         PaperServerManager(File(session.ppDir, "server"), session.downloader, session.ui),
 ) {
-
-  internal data class RunningState(val metadata: ProjectMetadata, val paperJar: File)
 
   fun run() {
     val shuttingDown = AtomicBoolean(false)
@@ -27,7 +27,12 @@ internal open class RestartMode(
             }
         )
 
-    val state = runStartup(shuttingDown) ?: return
+    val state: RunningState =
+        when (val outcome = runStartup(shuttingDown)) {
+          is StartupOutcome.Running -> outcome.state
+          StartupOutcome.BuildFailed -> enterFixRecovery() ?: return
+          StartupOutcome.Aborted -> return
+        }
 
     session.runMainWatchLoop(
         onChanged = { _ -> rebuild(state.metadata, state.paperJar) },
@@ -46,23 +51,19 @@ internal open class RestartMode(
 
   /**
    * Runs the startup sequence (metadata → build → paper download → server start → info) inside a
-   * single phase. Returns the running state on success, or null on failure (in which case the
-   * phase's trailing footer is PhaseEnd.None and the mode exits).
-   *
-   * On a failed initial build, transfers to the fix-recovery loop which blocks forever.
+   * single phase. Returns [StartupOutcome.Running] on success, [StartupOutcome.BuildFailed] if the
+   * initial build failed (caller should enter fix recovery), or [StartupOutcome.Aborted] for
+   * unrecoverable failures (metadata missing, server failed to start).
    */
-  internal fun runStartup(shuttingDown: AtomicBoolean): RunningState? {
-    var state: RunningState? = null
+  internal fun runStartup(shuttingDown: AtomicBoolean): StartupOutcome {
+    var outcome: StartupOutcome = StartupOutcome.Aborted
     session.ui.phase {
       val metadata = session.resolveMetadataOrAbort(shuttingDown) ?: return@phase PhaseEnd.None
       val paperJar =
-          when (val outcome = session.initialBuild(metadata, serverManager)) {
-            is DevSession.BuildOutcome.Success -> outcome.paperJar
+          when (val result = session.initialBuild(metadata, serverManager)) {
+            is DevSession.BuildOutcome.Success -> result.paperJar
             is DevSession.BuildOutcome.BuildFailed -> {
-              // Enter the fix-recovery loop. It blocks on the file watcher and never returns
-              // normally; on a successful fix it transitions into the main loop via
-              // startAndReport, which also never returns.
-              enterFixRecovery()
+              outcome = StartupOutcome.BuildFailed
               return@phase PhaseEnd.Waiting
             }
           }
@@ -72,33 +73,30 @@ internal open class RestartMode(
           "localhost:${PaperServerManager.DEFAULT_PORT}",
           "restart",
       )
-      state = RunningState(metadata, paperJar)
+      outcome = StartupOutcome.Running(RunningState(metadata, paperJar))
       PhaseEnd.Watching
     }
-    return state
+    return outcome
   }
 
-  /** Tests override this to a no-op so build-failure paths don't enter the infinite fix loop. */
-  protected open fun enterFixRecovery(): Nothing {
-    session.runFixWatcher(
-        cleanup = {
-          serverManager.stop()
-          session.gradle.close()
-        },
-    ) {
-      when (val attempt = session.handleFixAttempt(serverManager)) {
-        is DevSession.FixAttempt.BuildFailed -> PhaseEnd.Waiting
-        is DevSession.FixAttempt.Success -> {
-          session.startServerAndReport(serverManager, attempt.metadata, attempt.paperJar)
-          // We still need to hand off to the main watch loop. In practice the fix watcher
-          // stays in control here — a fuller restructure would be to have the fix watcher
-          // return to run() so the main loop could take over, but that's a bigger rework.
-          PhaseEnd.Watching
+  /**
+   * Blocks on the fix-recovery file watcher. Returns the recovered [RunningState] on a successful
+   * post-failure build + server start, or null on Ctrl+C. Test overrides may return a scripted
+   * state to bypass the real file watcher.
+   */
+  protected open fun enterFixRecovery(): RunningState? =
+      session.runFixRecoveryAndWait(
+          onShutdown = {
+            serverManager.stop()
+            session.gradle.close()
+          },
+      ) { _ ->
+        when (val attempt = session.handleFixAttempt(serverManager)) {
+          is DevSession.FixAttempt.BuildFailed -> null
+          is DevSession.FixAttempt.Success ->
+              session.startServerAndReport(serverManager, attempt.metadata, attempt.paperJar)
         }
       }
-    }
-    error("fix recovery loop returned")
-  }
 
   private fun startServer(metadata: ProjectMetadata, paperJar: File): Boolean {
     serverManager.cleanupStale()

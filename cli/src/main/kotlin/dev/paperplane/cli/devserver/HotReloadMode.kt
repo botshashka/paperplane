@@ -1,5 +1,7 @@
 package dev.paperplane.cli.devserver
 
+import dev.paperplane.cli.devserver.DevSession.RunningState
+import dev.paperplane.cli.devserver.DevSession.StartupOutcome
 import dev.paperplane.cli.gradle.BuildSnapshot
 import dev.paperplane.cli.gradle.ClassChanges
 import dev.paperplane.cli.gradle.ProjectMetadata
@@ -23,8 +25,6 @@ internal open class HotReloadMode(
   private var lastPostBuildSnapshot: Map<String, Long>? = null
   private val javaRuntime by lazy { session.resolveJava() }
 
-  internal data class RunningState(val metadata: ProjectMetadata, val paperJar: File)
-
   fun run() {
     val shuttingDown = AtomicBoolean(false)
     Runtime.getRuntime()
@@ -38,7 +38,12 @@ internal open class HotReloadMode(
             }
         )
 
-    val state = runStartup(shuttingDown) ?: return
+    val state: RunningState =
+        when (val outcome = runStartup(shuttingDown)) {
+          is StartupOutcome.Running -> outcome.state
+          StartupOutcome.BuildFailed -> enterFixRecovery() ?: return
+          StartupOutcome.Aborted -> return
+        }
 
     session.runMainWatchLoop(
         onChanged = { _ -> rebuild(state.metadata) },
@@ -55,15 +60,15 @@ internal open class HotReloadMode(
     )
   }
 
-  internal fun runStartup(shuttingDown: AtomicBoolean): RunningState? {
-    var state: RunningState? = null
+  internal fun runStartup(shuttingDown: AtomicBoolean): StartupOutcome {
+    var outcome: StartupOutcome = StartupOutcome.Aborted
     session.ui.phase {
       val metadata = session.resolveMetadataOrAbort(shuttingDown) ?: return@phase PhaseEnd.None
       val paperJar =
-          when (val outcome = session.initialBuild(metadata, serverManager)) {
-            is DevSession.BuildOutcome.Success -> outcome.paperJar
+          when (val result = session.initialBuild(metadata, serverManager)) {
+            is DevSession.BuildOutcome.Success -> result.paperJar
             is DevSession.BuildOutcome.BuildFailed -> {
-              enterFixRecovery()
+              outcome = StartupOutcome.BuildFailed
               return@phase PhaseEnd.Waiting
             }
           }
@@ -73,29 +78,30 @@ internal open class HotReloadMode(
           "localhost:${PaperServerManager.DEFAULT_PORT}",
           if (javaRuntime.isJbr) "hot-reload (enhanced — JBR)" else "hot-reload",
       )
-      state = RunningState(metadata, paperJar)
+      outcome = StartupOutcome.Running(RunningState(metadata, paperJar))
       PhaseEnd.Watching
     }
-    return state
+    return outcome
   }
 
-  /** Tests override to a no-op so build-failure paths don't enter the infinite fix loop. */
-  protected open fun enterFixRecovery(): Nothing {
-    session.runFixWatcher(
-        cleanup = {
-          serverManager.stop()
-          session.gradle.close()
-        },
-    ) {
-      when (val attempt = session.handleFixAttempt(serverManager)) {
-        is DevSession.FixAttempt.BuildFailed -> PhaseEnd.Waiting
-        is DevSession.FixAttempt.Success -> {
-          session.startServerAndReport(serverManager, attempt.metadata, attempt.paperJar)
+  /**
+   * Blocks on the fix-recovery file watcher. Returns the recovered [RunningState] on a successful
+   * post-failure build + server start, or null on Ctrl+C. Test overrides may return a scripted
+   * state to bypass the real file watcher.
+   */
+  protected open fun enterFixRecovery(): RunningState? =
+      session.runFixRecoveryAndWait(
+          onShutdown = {
+            serverManager.stop()
+            session.gradle.close()
+          },
+      ) { _ ->
+        when (val attempt = session.handleFixAttempt(serverManager)) {
+          is DevSession.FixAttempt.BuildFailed -> null
+          is DevSession.FixAttempt.Success ->
+              session.startServerAndReport(serverManager, attempt.metadata, attempt.paperJar)
         }
       }
-    }
-    error("fix recovery loop returned")
-  }
 
   private fun startServer(metadata: ProjectMetadata, paperJar: File): Boolean {
     serverManager.cleanupStale()

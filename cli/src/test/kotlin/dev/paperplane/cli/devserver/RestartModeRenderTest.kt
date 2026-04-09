@@ -8,8 +8,7 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -27,20 +26,21 @@ class RestartModeRenderTest {
 
   @TempDir lateinit var tempDir: File
 
-  /** Test subclass that stubs the fix-recovery loop so build failures don't block forever. */
+  /**
+   * Test subclass that stubs the fix-recovery loop so tests don't block on the real file watcher.
+   * Records that the recovery path was entered; returns null (as if Ctrl+C) so `run()` exits
+   * cleanly.
+   */
   private class TestableRestartMode(
       session: DevSession,
       serverManager: FakePaperServerManager,
       var fixRecoveryEntered: Boolean = false,
   ) : RestartMode(session, serverManager) {
-    override fun enterFixRecovery(): Nothing {
+    override fun enterFixRecovery(): DevSession.RunningState? {
       fixRecoveryEntered = true
-      throw FixRecoveryEnteredSentinel
+      return null
     }
   }
-
-  /** Sentinel exception used to escape the never-returning enterFixRecovery in tests. */
-  private object FixRecoveryEnteredSentinel : RuntimeException("fix recovery entered (test escape)")
 
   // ── runStartup happy path ──────────────────────────────────────────
 
@@ -51,9 +51,9 @@ class RestartModeRenderTest {
     val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
     val mode = TestableRestartMode(fixture.session, server)
 
-    val state = mode.runStartup(AtomicBoolean(false))
+    val outcome = mode.runStartup(AtomicBoolean(false))
 
-    assertNotNull(state)
+    assertInstanceOf(DevSession.StartupOutcome.Running::class.java, outcome)
     fixture.terminal.assertEmittedInOrder(
         "Reading project metadata",
         "Building",
@@ -92,9 +92,9 @@ class RestartModeRenderTest {
     val mode = TestableRestartMode(fixture.session, server)
 
     val shuttingDown = AtomicBoolean(false)
-    val state = mode.runStartup(shuttingDown)
+    val outcome = mode.runStartup(shuttingDown)
 
-    assertNull(state, "should bail out before producing a RunningState")
+    assertEquals(DevSession.StartupOutcome.Aborted, outcome)
     assertTrue(shuttingDown.get(), "should set shuttingDown when metadata is missing")
     assertTrue(
         fixture.terminal.writes.any { it.contains("PaperPlane Gradle plugin not found") },
@@ -107,20 +107,21 @@ class RestartModeRenderTest {
   // ── runStartup build failure → fix recovery ────────────────────────
 
   @Test
-  fun `build failure during startup transfers to fix recovery`() {
+  fun `build failure during startup returns BuildFailed outcome`() {
     val fixture = DevSessionFixture(tempDir).withMetadata()
     fixture.gradle.nextBuildResult = false
     val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
     val mode = TestableRestartMode(fixture.session, server)
 
-    try {
-      mode.runStartup(AtomicBoolean(false))
-    } catch (_: RuntimeException) {
-      // FixRecoveryEnteredSentinel — escaping the never-returning enterFixRecovery
-    }
+    val outcome = mode.runStartup(AtomicBoolean(false))
 
-    assertTrue(mode.fixRecoveryEntered, "should have entered fix recovery on build failure")
+    assertEquals(DevSession.StartupOutcome.BuildFailed, outcome)
     assertTrue(fixture.terminal.writes.any { it.contains("Build failed") })
+    // runStartup must NOT enter fix recovery itself — the caller (run()) owns that handoff.
+    assertFalse(
+        mode.fixRecoveryEntered,
+        "runStartup must not call enterFixRecovery internally; control returns to run()",
+    )
   }
 
   // ── runStartup server-failed-to-start ──────────────────────────────
@@ -137,9 +138,9 @@ class RestartModeRenderTest {
         )
     val mode = TestableRestartMode(fixture.session, server)
 
-    val state = mode.runStartup(AtomicBoolean(false))
+    val outcome = mode.runStartup(AtomicBoolean(false))
 
-    assertNull(state)
+    assertEquals(DevSession.StartupOutcome.Aborted, outcome)
     assertTrue(fixture.terminal.writes.any { it.contains("Server failed to start") })
     assertFalse(fixture.terminal.writes.any { it.contains("Watching for changes") })
   }

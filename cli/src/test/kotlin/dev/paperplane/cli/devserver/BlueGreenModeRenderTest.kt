@@ -8,9 +8,9 @@ import dev.paperplane.cli.ui.assertEmittedInOrder
 import dev.paperplane.cli.ui.assertSeparatorBetween
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -29,7 +29,9 @@ class BlueGreenModeRenderTest {
 
   @TempDir lateinit var tempDir: File
 
-  /** Test subclass that stubs the fix-recovery loop. */
+  /**
+   * Test subclass that stubs the fix-recovery loop so tests don't block on the real file watcher.
+   */
   private class TestableBlueGreenMode(
       session: DevSession,
       servers: Map<Slot, dev.paperplane.cli.server.PaperServerManager>,
@@ -43,13 +45,11 @@ class BlueGreenModeRenderTest {
           velocityDownloader = velocityDownloader,
           velocityManager = velocityManager,
       ) {
-    override fun enterFixRecovery(): Nothing {
+    override fun enterFixRecovery(): DevSession.RunningState? {
       fixRecoveryEntered = true
-      throw FixRecoveryEnteredSentinel
+      return null
     }
   }
-
-  private object FixRecoveryEnteredSentinel : RuntimeException("fix recovery entered (test escape)")
 
   private fun newMode(
       readyResult: Boolean = true,
@@ -99,9 +99,9 @@ class BlueGreenModeRenderTest {
   @Test
   fun `happy startup emits build, proxy ready, server ready, info section, Watching footer`() {
     val (mode, fixture, _) = newMode()
-    val state = mode.runStartup(AtomicBoolean(false))
+    val outcome = mode.runStartup(AtomicBoolean(false))
 
-    assertNotNull(state)
+    assertInstanceOf(DevSession.StartupOutcome.Running::class.java, outcome)
     fixture.terminal.assertEmittedInOrder(
         "Reading project metadata",
         "Building",
@@ -150,16 +150,10 @@ class BlueGreenModeRenderTest {
 
   @Test
   fun `metadata resolve failure aborts before touching velocity`() {
-    val (_, fixture, proxy) = newMode()
-    fixture.gradle.nextMetadata = null
-    val mode2 = newMode().first.also { /* take the proxy from the new fixture */ }
-    val state = mode2.runStartup(AtomicBoolean(false))
-
-    // The first newMode() above set up state we don't use; rebuild a fresh mode for this assert.
     val (m, f, p) = newMode().also { it.second.gradle.nextMetadata = null }
-    val s2 = m.runStartup(AtomicBoolean(false))
+    val outcome = m.runStartup(AtomicBoolean(false))
 
-    assertNull(s2)
+    assertEquals(DevSession.StartupOutcome.Aborted, outcome)
     assertTrue(f.terminal.writes.any { it.contains("PaperPlane Gradle plugin not found") })
     assertFalse(p.calls.any { it.startsWith("configure") })
   }
@@ -167,19 +161,19 @@ class BlueGreenModeRenderTest {
   // ── Build failure → fix recovery ───────────────────────────────────
 
   @Test
-  fun `build failure during startup transfers to fix recovery before starting proxy`() {
+  fun `build failure during startup returns BuildFailed without touching the proxy`() {
     val (mode, fixture, proxy) = newMode(buildResult = false)
 
-    try {
-      mode.runStartup(AtomicBoolean(false))
-    } catch (_: RuntimeException) {
-      // sentinel
-    }
+    val outcome = mode.runStartup(AtomicBoolean(false))
 
-    assertTrue(mode.fixRecoveryEntered)
+    assertEquals(DevSession.StartupOutcome.BuildFailed, outcome)
     assertTrue(fixture.terminal.writes.any { it.contains("Build failed") })
     // Proxy should not have been configured because the build failed before that step.
     assertFalse(proxy.calls.any { it.startsWith("configure") })
+    assertFalse(
+        mode.fixRecoveryEntered,
+        "runStartup must not call enterFixRecovery internally; control returns to run()",
+    )
   }
 
   // ── Proxy failed to start ──────────────────────────────────────────
@@ -188,9 +182,9 @@ class BlueGreenModeRenderTest {
   fun `proxy failed to start emits failure line and bails before paper server`() {
     val (mode, fixture, proxy) = newMode(proxyReadyResult = false)
 
-    val state = mode.runStartup(AtomicBoolean(false))
+    val outcome = mode.runStartup(AtomicBoolean(false))
 
-    assertNull(state)
+    assertEquals(DevSession.StartupOutcome.Aborted, outcome)
     assertTrue(fixture.terminal.writes.any { it.contains("Proxy failed to start") })
     assertFalse(fixture.terminal.writes.any { it.contains("Watching for changes") })
     assertTrue(proxy.calls.contains("waitForReady"))
@@ -200,11 +194,11 @@ class BlueGreenModeRenderTest {
 
   @Test
   fun `paper server failed to start emits failure line after proxy is up`() {
-    val (mode, fixture, proxy) = newMode(readyResult = false)
+    val (mode, fixture, _) = newMode(readyResult = false)
 
-    val state = mode.runStartup(AtomicBoolean(false))
+    val outcome = mode.runStartup(AtomicBoolean(false))
 
-    assertNull(state)
+    assertEquals(DevSession.StartupOutcome.Aborted, outcome)
     // Proxy did come up successfully.
     assertTrue(fixture.terminal.writes.any { it.contains("Velocity proxy ready") })
     // But the paper server failed.

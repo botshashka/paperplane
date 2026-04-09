@@ -13,6 +13,7 @@ import dev.paperplane.cli.util.JavaRuntimeUtil
 import dev.paperplane.cli.util.formatDurationMs
 import dev.paperplane.cli.watcher.FileWatcher
 import java.io.File
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal class DevSession(
@@ -25,6 +26,29 @@ internal class DevSession(
 ) {
   companion object {
     private const val MAIN_LOOP_POLL_INTERVAL_MS = 1000L
+  }
+
+  /**
+   * The live server + metadata pair shared between startup, fix recovery, and the main watch loop.
+   */
+  data class RunningState(val metadata: ProjectMetadata, val paperJar: File)
+
+  /**
+   * What a mode's [runStartup] produced. Modeled as a sealed type so the caller in `run()` handles
+   * every case explicitly — in particular, `BuildFailed` signals that fix-recovery should be
+   * entered and, on recovery success, control should return to `run()` so `runMainWatchLoop` can
+   * take over. Prior to this refactor, fix-recovery was entered from inside `runStartup` via a
+   * never-returning helper, which left the main watch loop permanently unreachable after an
+   * initial-build failure.
+   */
+  sealed class StartupOutcome {
+    data class Running(val state: RunningState) : StartupOutcome()
+
+    /** Initial build failed — caller should enter fix recovery. */
+    object BuildFailed : StartupOutcome()
+
+    /** Unrecoverable (metadata missing, server failed to start, proxy failed, etc.). */
+    object Aborted : StartupOutcome()
   }
 
   /** Result of an initial-build-and-resolve attempt used during startup or fix recovery. */
@@ -113,27 +137,47 @@ internal class DevSession(
   }
 
   /**
-   * Blocks on the fix-recovery file watcher. On every change, wraps the [onFix] callback in a phase
-   * whose trailing footer is determined by [onFix]'s returned [PhaseEnd]. A "Change detected"
-   * change() line is prepended automatically inside the phase.
+   * Blocks on the fix-recovery file watcher until either (a) [onFix] returns a non-null
+   * [RunningState] (the fix landed and a live server is ready to hand off to the main watch loop),
+   * or (b) the thread is interrupted (Ctrl+C shutdown). On interrupt, [onShutdown] runs and the
+   * function returns null. On successful recovery, the returned [RunningState] should be passed to
+   * [runMainWatchLoop] so normal rebuild iteration resumes.
+   *
+   * Prior to this refactor this function was named `runFixWatcher`, blocked on `while (true)
+   * Thread.sleep(...)` forever, and had no way to return a recovered state. That left all three
+   * dev-server modes permanently stuck under the fix-recovery callback after an initial- build
+   * failure — defeating hot-reload, defeating blue-green, and hiding the main-loop health check.
+   * The blocking queue below is the handoff channel that replaces the broken sleep loop.
    */
-  fun runFixWatcher(cleanup: () -> Unit, onFix: TerminalUI.() -> PhaseEnd) {
+  fun runFixRecoveryAndWait(
+      onShutdown: () -> Unit,
+      onFix: TerminalUI.(changedFiles: List<String>) -> RunningState?,
+  ): RunningState? {
     val srcDir = File(projectDir, "src")
+    val recovered = LinkedBlockingQueue<RunningState>(1)
     val watcher =
         FileWatcher(srcDir, config.dev.debounceMs) { changedFiles ->
           ui.phase {
             val shortName = changedFiles.firstOrNull()?.let { File(it).name } ?: "files"
             change("Change detected: $shortName")
-            onFix()
+            val state = onFix(changedFiles)
+            if (state != null) {
+              recovered.offer(state)
+              PhaseEnd.None // caller opens its own watching footer post-handoff
+            } else {
+              PhaseEnd.Waiting
+            }
           }
         }
     watcher.start()
 
-    try {
-      while (true) Thread.sleep(MAIN_LOOP_POLL_INTERVAL_MS)
+    return try {
+      recovered.take()
     } catch (_: InterruptedException) {
+      onShutdown()
+      null
+    } finally {
       watcher.stop()
-      cleanup()
     }
   }
 
@@ -196,14 +240,15 @@ internal class DevSession(
   }
 
   /**
-   * Starts a server after a successful fix-recovery build and transitions to the main loop. Returns
-   * the [PhaseEnd] that the caller should emit.
+   * Starts a server after a successful fix-recovery build. Returns a [RunningState] on success (the
+   * caller hands it off to [runMainWatchLoop]) or null on failure (the caller stays in fix
+   * recovery).
    */
   fun startServerAndReport(
       serverManager: PaperServerManager,
       metadata: ProjectMetadata,
       paperJar: File,
-  ): PhaseEnd {
+  ): RunningState? {
     serverManager.cleanupStale()
     serverManager.configure()
     val builtJar = File(projectDir, metadata.jarPath)
@@ -217,11 +262,11 @@ internal class DevSession(
     return if (ready) {
       ui.success("Server ready", serverDuration)
       serverManager.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
-      PhaseEnd.Watching
+      RunningState(metadata, paperJar)
     } else {
       ui.error("Server failed to start", serverDuration)
       serverManager.writeCompanionStatus("error", mapOf("message" to "Server failed to start"))
-      PhaseEnd.Waiting
+      null
     }
   }
 
