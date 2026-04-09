@@ -97,7 +97,9 @@ class InitCommand(private val ui: TerminalUI) : CliktCommand(name = "init") {
     }
     val match = PAPER_VERSION_PATTERN.find(buildContent)
     val detectedVersion = match?.groupValues?.get(1) ?: PaperVersionResolver().resolveLatest()
-    configFile.writeText(ProjectTemplates.paperplaneYml(detectedVersion, "hot-reload", "auto"))
+    configFile.writeText(
+        ProjectTemplates.paperplaneYml(detectedVersion, DevMode.HOT_RELOAD.value, "auto")
+    )
     fileCreated("paperplane.yml")
   }
 

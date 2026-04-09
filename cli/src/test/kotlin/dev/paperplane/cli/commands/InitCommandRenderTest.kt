@@ -1,47 +1,30 @@
 package dev.paperplane.cli.commands
 
 import com.github.ajalt.clikt.core.parse
+import dev.paperplane.cli.testing.RenderTestBase
 import dev.paperplane.cli.ui.RecordingTerminal
-import dev.paperplane.cli.ui.TerminalUI
 import dev.paperplane.cli.ui.assertEmittedInOrder
 import java.io.File
-import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.io.TempDir
 
 /**
  * Visual regression tests for [InitCommand]. Drives the command via `parse(emptyList())` against a
- * temp project directory with `user.dir` swapped in [BeforeEach].
+ * temp project directory.
  *
  * Tests always supply a `paper-api:N.N.N-R...` pattern in the build file so the command's fallback
  * path through `PaperVersionResolver().resolveLatest()` (a network call) never fires.
  */
-class InitCommandRenderTest {
-
-  @TempDir lateinit var tempDir: File
-
-  private val originalUserDir = System.getProperty("user.dir")
-
-  @BeforeEach
-  fun setUp() {
-    System.setProperty("user.dir", tempDir.absolutePath)
-  }
-
-  @AfterEach
-  fun tearDown() {
-    System.setProperty("user.dir", originalUserDir)
-  }
+class InitCommandRenderTest : RenderTestBase() {
 
   private fun newCommand(): Pair<InitCommand, RecordingTerminal> {
-    val terminal = RecordingTerminal()
-    return InitCommand(TerminalUI(terminal)) to terminal
+    val (ui, terminal) = newUi()
+    return InitCommand(ui) to terminal
   }
 
   private fun writeKtsBuildFile(paperVersion: String = "1.21.4") {
-    File(tempDir, "build.gradle.kts")
+    File(canonicalTempDir, "build.gradle.kts")
         .writeText(
             """
             plugins {
@@ -72,10 +55,10 @@ class InitCommandRenderTest {
     val (cmd, t) = newCommand()
     cmd.parse(emptyList())
 
-    val updated = File(tempDir, "build.gradle.kts").readText()
+    val updated = File(canonicalTempDir, "build.gradle.kts").readText()
     assertTrue(updated.contains("dev.paperplane"), "plugin entry should be added")
 
-    val configFile = File(tempDir, "paperplane.yml")
+    val configFile = File(canonicalTempDir, "paperplane.yml")
     assertTrue(configFile.exists(), "paperplane.yml should be created")
 
     t.assertEmittedInOrder(
@@ -106,7 +89,7 @@ class InitCommandRenderTest {
 
   @Test
   fun `groovy build file is also recognized`() {
-    File(tempDir, "build.gradle")
+    File(canonicalTempDir, "build.gradle")
         .writeText(
             """
             plugins {
@@ -121,7 +104,7 @@ class InitCommandRenderTest {
     val (cmd, t) = newCommand()
     cmd.parse(emptyList())
     assertTrue(t.writes.any { it.contains("Found build.gradle") })
-    assertTrue(File(tempDir, "build.gradle").readText().contains("dev.paperplane"))
+    assertTrue(File(canonicalTempDir, "build.gradle").readText().contains("dev.paperplane"))
   }
 
   // ── paperplane.yml is preserved if already present ────────────────
@@ -129,7 +112,7 @@ class InitCommandRenderTest {
   @Test
   fun `existing paperplane yml is left alone`() {
     writeKtsBuildFile()
-    val existing = File(tempDir, "paperplane.yml").apply { writeText("existing: true\n") }
+    val existing = File(canonicalTempDir, "paperplane.yml").apply { writeText("existing: true\n") }
     val (cmd, t) = newCommand()
     cmd.parse(emptyList())
     assertTrue(t.writes.any { it.contains("paperplane.yml already exists") })
@@ -141,7 +124,7 @@ class InitCommandRenderTest {
   @Test
   fun `gitignore gets a paperplane entry when one exists`() {
     writeKtsBuildFile()
-    val gitignore = File(tempDir, ".gitignore").apply { writeText("# existing\nbuild/\n") }
+    val gitignore = File(canonicalTempDir, ".gitignore").apply { writeText("# existing\nbuild/\n") }
     val (cmd, t) = newCommand()
     cmd.parse(emptyList())
     assertTrue(gitignore.readText().contains(".paperplane/"))

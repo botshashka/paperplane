@@ -1,18 +1,15 @@
 package dev.paperplane.cli.commands
 
 import com.github.ajalt.clikt.core.parse
-import dev.paperplane.cli.ui.FakeReader
+import dev.paperplane.cli.testing.RenderTestBase
 import dev.paperplane.cli.ui.InteractivePrompts
 import dev.paperplane.cli.ui.RecordingTerminal
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
-import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.io.TempDir
 
 /**
  * Visual regression tests for [CreateCommand]'s non-interactive path.
@@ -23,25 +20,7 @@ import org.junit.jupiter.api.io.TempDir
  * The interactive prompt path is exercised separately by [InteractivePromptsRenderTest] and
  * [InteractivePromptsTest]; this file focuses on the scaffold output rendering.
  */
-class CreateCommandRenderTest {
-
-  @TempDir lateinit var tempDir: File
-
-  private val originalUserDir = System.getProperty("user.dir")
-
-  // Use canonicalPath so the user.dir we set matches the canonical filesystem path the
-  // command's File operations resolve to (avoids macOS /var → /private/var symlink mismatch).
-  private val canonicalTempDir: File by lazy { tempDir.canonicalFile }
-
-  @BeforeEach
-  fun setUp() {
-    System.setProperty("user.dir", canonicalTempDir.absolutePath)
-  }
-
-  @AfterEach
-  fun tearDown() {
-    System.setProperty("user.dir", originalUserDir)
-  }
+class CreateCommandRenderTest : RenderTestBase() {
 
   /** Test subclass that stubs out the gradle wrapper subprocess. */
   private class TestableCreateCommand(
@@ -55,9 +34,8 @@ class CreateCommandRenderTest {
   private fun newCommand(
       wrapperResult: Boolean = true
   ): Triple<TestableCreateCommand, RecordingTerminal, InteractivePrompts> {
-    val terminal = RecordingTerminal(scriptedReader = FakeReader(emptyList()))
-    val ui = TerminalUI(terminal)
-    val prompts = InteractivePrompts(terminal)
+    val (ui, terminal) = newUi()
+    val prompts = newPrompts(terminal)
     return Triple(TestableCreateCommand(ui, prompts, wrapperResult), terminal, prompts)
   }
 
@@ -139,10 +117,8 @@ class CreateCommandRenderTest {
   @Test
   fun `rollback deletes scaffolded directory when wrapper throws`() {
     val projectDir = File(canonicalTempDir, "doomed-plugin")
-    val terminal = RecordingTerminal(scriptedReader = FakeReader(emptyList()))
-    val ui = TerminalUI(terminal)
-    val prompts = InteractivePrompts(terminal)
-    val cmd = ThrowingCreateCommand(ui, prompts)
+    val (ui, terminal) = newUi()
+    val cmd = ThrowingCreateCommand(ui, newPrompts(terminal))
 
     assertThrows(SimulatedWrapperCrash::class.java) {
       cmd.parse(listOf(projectDir.absolutePath, "--paper", "1.21.4", "--name", "Doomed"))

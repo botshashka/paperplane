@@ -44,12 +44,6 @@ open class CreateCommand(
         )
   }
 
-  private enum class DevMode(val display: String, val description: String, val value: String) {
-    HOT_RELOAD("Hot reload", "fastest iteration, reloads plugin in-place", "hot-reload"),
-    BLUE_GREEN("Blue-green", "zero-downtime via Velocity proxy", "blue-green"),
-    RESTART("Restart", "stop, rebuild, restart", "restart"),
-  }
-
   private data class ProjectConfig(
       val projectDir: File,
       val projectName: String,

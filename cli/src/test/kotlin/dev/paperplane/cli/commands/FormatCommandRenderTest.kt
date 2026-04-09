@@ -3,14 +3,11 @@ package dev.paperplane.cli.commands
 import com.github.ajalt.clikt.core.parse
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.testing.FakeGradleBridge
+import dev.paperplane.cli.testing.RenderTestBase
 import dev.paperplane.cli.ui.RecordingTerminal
 import dev.paperplane.cli.ui.TerminalUI
-import java.io.File
-import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.io.TempDir
 
 /**
  * Visual regression tests for [FormatCommand].
@@ -19,21 +16,7 @@ import org.junit.jupiter.api.io.TempDir
  * factory, so no real Spotless / Gradle daemon spawns. Tests script the [FakeGradleBridge]'s
  * `nextFormatResult` to drive each output branch.
  */
-class FormatCommandRenderTest {
-
-  @TempDir lateinit var tempDir: File
-
-  private val originalUserDir = System.getProperty("user.dir")
-
-  @BeforeEach
-  fun setUp() {
-    System.setProperty("user.dir", tempDir.absolutePath)
-  }
-
-  @AfterEach
-  fun tearDown() {
-    System.setProperty("user.dir", originalUserDir)
-  }
+class FormatCommandRenderTest : RenderTestBase() {
 
   /** Test subclass that overrides newGradleBridge to return a configured fake. */
   private class TestableFormatCommand(
@@ -46,9 +29,8 @@ class FormatCommandRenderTest {
   private fun newCommand(
       result: GradleBridge.FormatResult = GradleBridge.FormatResult(success = true)
   ): Triple<TestableFormatCommand, RecordingTerminal, FakeGradleBridge> {
-    val terminal = RecordingTerminal()
-    val ui = TerminalUI(terminal)
-    val fake = FakeGradleBridge(tempDir, ui, nextFormatResult = result)
+    val (ui, terminal) = newUi()
+    val fake = FakeGradleBridge(canonicalTempDir, ui, nextFormatResult = result)
     return Triple(TestableFormatCommand(ui, fake), terminal, fake)
   }
 

@@ -3,14 +3,12 @@ package dev.paperplane.cli.commands
 import com.github.ajalt.clikt.core.parse
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.testing.FakeGradleBridge
+import dev.paperplane.cli.testing.RenderTestBase
 import dev.paperplane.cli.ui.RecordingTerminal
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
-import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.io.TempDir
 
 /**
  * Visual regression tests for [TestCommand].
@@ -22,21 +20,7 @@ import org.junit.jupiter.api.io.TempDir
  * The watch mode is not exercised here because it spawns a real `FileWatcher` and blocks in
  * `Thread.sleep(WATCH_POLL_INTERVAL_MS)` until interrupted.
  */
-class TestCommandRenderTest {
-
-  @TempDir lateinit var tempDir: File
-
-  private val originalUserDir = System.getProperty("user.dir")
-
-  @BeforeEach
-  fun setUp() {
-    System.setProperty("user.dir", tempDir.absolutePath)
-  }
-
-  @AfterEach
-  fun tearDown() {
-    System.setProperty("user.dir", originalUserDir)
-  }
+class TestCommandRenderTest : RenderTestBase() {
 
   private class TestableTestCommand(
       ui: TerminalUI,
@@ -48,14 +32,13 @@ class TestCommandRenderTest {
   private fun newCommand(
       buildResult: Boolean = true
   ): Triple<TestableTestCommand, RecordingTerminal, FakeGradleBridge> {
-    val terminal = RecordingTerminal()
-    val ui = TerminalUI(terminal)
-    val fake = FakeGradleBridge(tempDir, ui, nextTestResult = buildResult)
+    val (ui, terminal) = newUi()
+    val fake = FakeGradleBridge(canonicalTempDir, ui, nextTestResult = buildResult)
     return Triple(TestableTestCommand(ui, fake), terminal, fake)
   }
 
   private fun writeJunitXml(suiteName: String, vararg cases: Triple<String, Double, String?>) {
-    val resultsDir = File(tempDir, "build/test-results/test").apply { mkdirs() }
+    val resultsDir = File(canonicalTempDir, "build/test-results/test").apply { mkdirs() }
     val xml = buildString {
       append("<?xml version=\"1.0\"?>\n")
       append("<testsuite name=\"$suiteName\" time=\"")

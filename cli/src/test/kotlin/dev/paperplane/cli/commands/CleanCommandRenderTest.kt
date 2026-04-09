@@ -1,54 +1,26 @@
 package dev.paperplane.cli.commands
 
 import com.github.ajalt.clikt.core.parse
-import dev.paperplane.cli.ui.FakeReader
-import dev.paperplane.cli.ui.InteractivePrompts
+import dev.paperplane.cli.testing.RenderTestBase
 import dev.paperplane.cli.ui.RecordingTerminal
-import dev.paperplane.cli.ui.TerminalUI
 import dev.paperplane.cli.ui.assertEmittedInOrder
-import java.io.ByteArrayInputStream
 import java.io.File
-import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.io.TempDir
 
 /**
  * Visual regression tests for [CleanCommand].
  *
- * Drives the command end-to-end via `command.parse(args)` against a temp project directory, with
- * `user.dir` swapped in [BeforeEach] so the command's `File(user.dir)` resolves to the temp dir.
- * `prompts.confirm()` reads from `System.in`, so confirmation tests redirect stdin.
+ * Drives the command end-to-end via `command.parse(args)` against a temp project directory.
+ * [RenderTestBase] handles `user.dir` and `System.in` lifecycle. `prompts.confirm()` reads from
+ * stdin, so confirmation tests use [stubStdin].
  */
-class CleanCommandRenderTest {
-
-  @TempDir lateinit var tempDir: File
-
-  private val originalUserDir = System.getProperty("user.dir")
-  private val originalIn = System.`in`
-
-  @BeforeEach
-  fun setUp() {
-    System.setProperty("user.dir", tempDir.absolutePath)
-  }
-
-  @AfterEach
-  fun tearDown() {
-    System.setProperty("user.dir", originalUserDir)
-    System.setIn(originalIn)
-  }
+class CleanCommandRenderTest : RenderTestBase() {
 
   private fun newCommand(): Pair<CleanCommand, RecordingTerminal> {
-    val terminal = RecordingTerminal(scriptedReader = FakeReader(emptyList()))
-    val ui = TerminalUI(terminal)
-    val prompts = InteractivePrompts(terminal)
-    return CleanCommand(ui, prompts) to terminal
-  }
-
-  private fun stubStdin(input: String) {
-    System.setIn(ByteArrayInputStream(input.toByteArray()))
+    val (ui, terminal) = newUi()
+    return CleanCommand(ui, newPrompts(terminal)) to terminal
   }
 
   // ── No .paperplane/ dir ────────────────────────────────────────────
@@ -67,7 +39,7 @@ class CleanCommandRenderTest {
 
   @Test
   fun `existing paperplane dir with no subdirs prints Nothing to clean`() {
-    File(tempDir, ".paperplane").mkdirs()
+    File(canonicalTempDir, ".paperplane").mkdirs()
     val (cmd, t) = newCommand()
     cmd.parse(emptyList())
     assertTrue(t.writes.any { it.contains("Nothing to clean") })
@@ -77,7 +49,7 @@ class CleanCommandRenderTest {
 
   @Test
   fun `force flag deletes server dir without confirmation prompt`() {
-    val serverDir = File(tempDir, ".paperplane/server").apply { mkdirs() }
+    val serverDir = File(canonicalTempDir, ".paperplane/server").apply { mkdirs() }
     File(serverDir, "marker").writeText("x")
     val (cmd, t) = newCommand()
     cmd.parse(listOf("--force"))
@@ -89,7 +61,7 @@ class CleanCommandRenderTest {
 
   @Test
   fun `confirmation accepted via stdin proceeds with delete`() {
-    val serverDir = File(tempDir, ".paperplane/server").apply { mkdirs() }
+    val serverDir = File(canonicalTempDir, ".paperplane/server").apply { mkdirs() }
     stubStdin("y\n")
     val (cmd, t) = newCommand()
     cmd.parse(emptyList())
@@ -102,7 +74,7 @@ class CleanCommandRenderTest {
 
   @Test
   fun `confirmation declined leaves files intact and prints Cancelled`() {
-    val serverDir = File(tempDir, ".paperplane/server").apply { mkdirs() }
+    val serverDir = File(canonicalTempDir, ".paperplane/server").apply { mkdirs() }
     stubStdin("n\n")
     val (cmd, t) = newCommand()
     cmd.parse(emptyList())
@@ -115,8 +87,8 @@ class CleanCommandRenderTest {
 
   @Test
   fun `all flag includes the cache dir in deletion`() {
-    val cacheDir = File(tempDir, ".paperplane/cache").apply { mkdirs() }
-    val serverDir = File(tempDir, ".paperplane/server").apply { mkdirs() }
+    val cacheDir = File(canonicalTempDir, ".paperplane/cache").apply { mkdirs() }
+    val serverDir = File(canonicalTempDir, ".paperplane/server").apply { mkdirs() }
     val (cmd, t) = newCommand()
     cmd.parse(listOf("--force", "--all"))
     assertFalse(cacheDir.exists())
@@ -128,8 +100,8 @@ class CleanCommandRenderTest {
 
   @Test
   fun `cache is preserved when --all is not set`() {
-    val cacheDir = File(tempDir, ".paperplane/cache").apply { mkdirs() }
-    File(tempDir, ".paperplane/server").mkdirs()
+    val cacheDir = File(canonicalTempDir, ".paperplane/cache").apply { mkdirs() }
+    File(canonicalTempDir, ".paperplane/server").mkdirs()
     val (cmd, t) = newCommand()
     cmd.parse(listOf("--force"))
     assertTrue(cacheDir.exists(), "cache dir should be preserved without --all")
