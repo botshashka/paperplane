@@ -6,7 +6,6 @@ import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
 import java.io.File
-import java.util.concurrent.atomic.AtomicBoolean
 
 internal open class RestartMode(
     private val session: DevSession,
@@ -15,20 +14,17 @@ internal open class RestartMode(
 ) {
 
   fun run() {
-    val shuttingDown = AtomicBoolean(false)
     Runtime.getRuntime()
         .addShutdownHook(
             Thread {
-              if (!shuttingDown.get()) {
-                session.ui.clearPinnedFooter()
-              }
+              session.ui.clearPinnedFooter()
               serverManager.stop()
               session.gradle.close()
             }
         )
 
     val state: RunningState =
-        when (val outcome = runStartup(shuttingDown)) {
+        when (val outcome = runStartup()) {
           is StartupOutcome.Running -> outcome.state
           StartupOutcome.BuildFailed -> enterFixRecovery() ?: return
           StartupOutcome.Aborted -> return
@@ -55,10 +51,10 @@ internal open class RestartMode(
    * initial build failed (caller should enter fix recovery), or [StartupOutcome.Aborted] for
    * unrecoverable failures (metadata missing, server failed to start).
    */
-  internal fun runStartup(shuttingDown: AtomicBoolean): StartupOutcome {
+  internal fun runStartup(): StartupOutcome {
     var outcome: StartupOutcome = StartupOutcome.Aborted
     session.ui.phase {
-      val metadata = session.resolveMetadataOrAbort(shuttingDown) ?: return@phase PhaseEnd.None
+      val metadata = session.resolveMetadataOrAbort() ?: return@phase PhaseEnd.None
       val paperJar =
           when (val result = session.initialBuild(metadata, serverManager)) {
             is DevSession.BuildOutcome.Success -> result.paperJar
@@ -67,13 +63,15 @@ internal open class RestartMode(
               return@phase PhaseEnd.Waiting
             }
           }
-      if (!startServer(metadata, paperJar)) return@phase PhaseEnd.None
+      val state =
+          session.startServerAndReport(serverManager, metadata, paperJar)
+              ?: return@phase PhaseEnd.None
       session.showServerInfo(
           metadata,
           "localhost:${PaperServerManager.DEFAULT_PORT}",
           "restart",
       )
-      outcome = StartupOutcome.Running(RunningState(metadata, paperJar))
+      outcome = StartupOutcome.Running(state)
       PhaseEnd.Watching
     }
     return outcome
@@ -97,31 +95,6 @@ internal open class RestartMode(
               session.startServerAndReport(serverManager, attempt.metadata, attempt.paperJar)
         }
       }
-
-  private fun startServer(metadata: ProjectMetadata, paperJar: File): Boolean {
-    serverManager.cleanupStale()
-    serverManager.configure()
-    val builtJar = File(session.projectDir, metadata.jarPath)
-    serverManager.copyPlugin(builtJar)
-    serverManager.copyCompanion()
-
-    val mcVersion = session.resolveMcVersion(metadata)
-    val serverStart = System.currentTimeMillis()
-    serverManager.start(paperJar, session.config.server.jvmArgs)
-    val ready =
-        session.ui.spin("Starting Paper $mcVersion server...") { serverManager.waitForReady() }
-    val serverDuration = session.formatDuration(System.currentTimeMillis() - serverStart)
-
-    return if (ready) {
-      session.ui.success("Paper $mcVersion server ready", serverDuration)
-      serverManager.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
-      true
-    } else {
-      session.ui.error("Server failed to start", serverDuration)
-      serverManager.writeCompanionStatus("error", mapOf("message" to "Server failed to start"))
-      false
-    }
-  }
 
   internal fun rebuild(metadata: ProjectMetadata, paperJar: File): PhaseEnd {
     val totalStart = System.currentTimeMillis()

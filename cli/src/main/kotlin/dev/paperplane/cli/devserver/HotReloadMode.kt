@@ -8,7 +8,6 @@ import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
 import java.io.File
-import java.util.concurrent.atomic.AtomicBoolean
 
 internal open class HotReloadMode(
     private val session: DevSession,
@@ -26,20 +25,17 @@ internal open class HotReloadMode(
   private val javaRuntime by lazy { session.resolveJava() }
 
   fun run() {
-    val shuttingDown = AtomicBoolean(false)
     Runtime.getRuntime()
         .addShutdownHook(
             Thread {
-              if (!shuttingDown.get()) {
-                session.ui.clearPinnedFooter()
-              }
+              session.ui.clearPinnedFooter()
               serverManager.stop()
               session.gradle.close()
             }
         )
 
     val state: RunningState =
-        when (val outcome = runStartup(shuttingDown)) {
+        when (val outcome = runStartup()) {
           is StartupOutcome.Running -> outcome.state
           StartupOutcome.BuildFailed -> enterFixRecovery() ?: return
           StartupOutcome.Aborted -> return
@@ -60,10 +56,10 @@ internal open class HotReloadMode(
     )
   }
 
-  internal fun runStartup(shuttingDown: AtomicBoolean): StartupOutcome {
+  internal fun runStartup(): StartupOutcome {
     var outcome: StartupOutcome = StartupOutcome.Aborted
     session.ui.phase {
-      val metadata = session.resolveMetadataOrAbort(shuttingDown) ?: return@phase PhaseEnd.None
+      val metadata = session.resolveMetadataOrAbort() ?: return@phase PhaseEnd.None
       val paperJar =
           when (val result = session.initialBuild(metadata, serverManager)) {
             is DevSession.BuildOutcome.Success -> result.paperJar
@@ -72,17 +68,29 @@ internal open class HotReloadMode(
               return@phase PhaseEnd.Waiting
             }
           }
-      if (!startServer(metadata, paperJar)) return@phase PhaseEnd.None
+      val state =
+          session.startServerAndReport(
+              serverManager = serverManager,
+              metadata = metadata,
+              paperJar = paperJar,
+              jvmArgs = hotReloadJvmArgs(),
+              hotReload = true,
+              javaBin = javaRuntime.bin,
+          ) ?: return@phase PhaseEnd.None
       session.showServerInfo(
           metadata,
           "localhost:${PaperServerManager.DEFAULT_PORT}",
           if (javaRuntime.isJbr) "hot-reload (enhanced — JBR)" else "hot-reload",
       )
-      outcome = StartupOutcome.Running(RunningState(metadata, paperJar))
+      outcome = StartupOutcome.Running(state)
       PhaseEnd.Watching
     }
     return outcome
   }
+
+  private fun hotReloadJvmArgs(): List<String> =
+      if (javaRuntime.isJbr) session.config.server.jvmArgs + "-XX:+AllowEnhancedClassRedefinition"
+      else session.config.server.jvmArgs
 
   /**
    * Blocks on the fix-recovery file watcher. Returns the recovered [RunningState] on a successful
@@ -102,35 +110,6 @@ internal open class HotReloadMode(
               session.startServerAndReport(serverManager, attempt.metadata, attempt.paperJar)
         }
       }
-
-  private fun startServer(metadata: ProjectMetadata, paperJar: File): Boolean {
-    serverManager.cleanupStale()
-    serverManager.configure()
-    val builtJar = File(session.projectDir, metadata.jarPath)
-    serverManager.copyPlugin(builtJar)
-    serverManager.copyCompanion()
-
-    val jvmArgs =
-        if (javaRuntime.isJbr) session.config.server.jvmArgs + "-XX:+AllowEnhancedClassRedefinition"
-        else session.config.server.jvmArgs
-
-    val mcVersion = session.resolveMcVersion(metadata)
-    val serverStart = System.currentTimeMillis()
-    serverManager.start(paperJar, jvmArgs, hotReload = true, javaBin = javaRuntime.bin)
-    val ready =
-        session.ui.spin("Starting Paper $mcVersion server...") { serverManager.waitForReady() }
-    val serverDuration = session.formatDuration(System.currentTimeMillis() - serverStart)
-
-    return if (ready) {
-      session.ui.success("Paper $mcVersion server ready", serverDuration)
-      serverManager.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
-      true
-    } else {
-      session.ui.error("Server failed to start", serverDuration)
-      serverManager.writeCompanionStatus("error", mapOf("message" to "Server failed to start"))
-      false
-    }
-  }
 
   // ── Rebuild ──────────────────────────────────────────────────────────
 

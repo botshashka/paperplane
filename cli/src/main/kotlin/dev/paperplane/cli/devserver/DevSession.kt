@@ -14,7 +14,6 @@ import dev.paperplane.cli.util.formatDurationMs
 import dev.paperplane.cli.watcher.FileWatcher
 import java.io.File
 import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.atomic.AtomicBoolean
 
 internal class DevSession(
     val config: PaperPlaneConfig,
@@ -68,14 +67,13 @@ internal class DevSession(
   /**
    * Runs the metadata-resolution step. Emits directly into whatever block/phase the caller has
    * open; never touches block lifecycle. Returns null if the metadata can't be resolved (plugin not
-   * applied, compile error, or any other gradle failure) and signals shutdown via [shuttingDown].
-   * The underlying [GradleBridge] has already emitted the specific cause.
+   * applied, compile error, or any other gradle failure); [GradleBridge] has already emitted the
+   * specific cause. Callers signal abort via their own return type.
    */
-  fun resolveMetadataOrAbort(shuttingDown: AtomicBoolean): ProjectMetadata? {
+  fun resolveMetadataOrAbort(): ProjectMetadata? {
     val metadata = ui.spin("Reading project metadata...") { gradle.metadata() }
     if (metadata == null) {
       metadataResolutionError()
-      shuttingDown.set(true)
       gradle.close()
       return null
     }
@@ -241,27 +239,47 @@ internal class DevSession(
   }
 
   /**
-   * Starts a server after a successful fix-recovery build. Returns a [RunningState] on success (the
-   * caller hands it off to [runMainWatchLoop]) or null on failure (the caller stays in fix
-   * recovery).
+   * Starts a Paper server and emits the standard cleanupStale → configure → copy plugin/companion →
+   * start → waitForReady → success/error ribbon. Used by initial startup in all three modes and by
+   * the fix-recovery callback. Returns a [RunningState] on success or null on failure.
+   *
+   * Optional parameters let each mode tailor the flow:
+   * - [jvmArgs] defaults to [config].server.jvmArgs; HotReloadMode appends
+   *   `-XX:+AllowEnhancedClassRedefinition` when JBR is active.
+   * - [hotReload] and [javaBin] are forwarded to [PaperServerManager.start] — HotReloadMode sets
+   *   them so the agent gets wired up and the JBR java binary is used.
+   * - [extraConfigure] runs immediately after [PaperServerManager.configure] and before
+   *   [PaperServerManager.copyPlugin]. BlueGreenMode uses it to inject
+   *   [PaperServerManager.configureVelocityForwarding], which must overwrite paper-global.yml that
+   *   `configure()` just wrote.
+   * - [spinLabel] is the spinner message while waiting for the server. Defaults to the standard
+   *   "Starting Paper <mcVersion> server..." string.
+   * - [readyMessage] is the success banner. Defaults to "Paper <mcVersion> server ready".
    */
   fun startServerAndReport(
       serverManager: PaperServerManager,
       metadata: ProjectMetadata,
       paperJar: File,
+      jvmArgs: List<String> = config.server.jvmArgs,
+      hotReload: Boolean = false,
+      javaBin: String = "java",
+      spinLabel: String = "Starting Paper ${resolveMcVersion(metadata)} server...",
+      readyMessage: String = "Paper ${resolveMcVersion(metadata)} server ready",
+      extraConfigure: (PaperServerManager) -> Unit = {},
   ): RunningState? {
     serverManager.cleanupStale()
     serverManager.configure()
+    extraConfigure(serverManager)
     val builtJar = File(projectDir, metadata.jarPath)
     serverManager.copyPlugin(builtJar)
     serverManager.copyCompanion()
 
     val serverStart = System.currentTimeMillis()
-    serverManager.start(paperJar, config.server.jvmArgs)
-    val ready = serverManager.waitForReady()
+    serverManager.start(paperJar, jvmArgs, hotReload = hotReload, javaBin = javaBin)
+    val ready = ui.spin(spinLabel) { serverManager.waitForReady() }
     val serverDuration = formatDuration(System.currentTimeMillis() - serverStart)
     return if (ready) {
-      ui.success("Server ready", serverDuration)
+      ui.success(readyMessage, serverDuration)
       serverManager.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
       RunningState(metadata, paperJar)
     } else {

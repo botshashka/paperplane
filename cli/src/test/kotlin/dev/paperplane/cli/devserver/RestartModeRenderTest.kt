@@ -5,7 +5,6 @@ import dev.paperplane.cli.testing.FakePaperServerManager
 import dev.paperplane.cli.ui.assertEmittedInOrder
 import dev.paperplane.cli.ui.assertSeparatorBetween
 import java.io.File
-import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
@@ -51,7 +50,7 @@ class RestartModeRenderTest {
     val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
     val mode = TestableRestartMode(fixture.session, server)
 
-    val outcome = mode.runStartup(AtomicBoolean(false))
+    val outcome = mode.runStartup()
 
     assertInstanceOf(DevSession.StartupOutcome.Running::class.java, outcome)
     fixture.terminal.assertEmittedInOrder(
@@ -76,7 +75,7 @@ class RestartModeRenderTest {
     val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
     val mode = TestableRestartMode(fixture.session, server)
 
-    mode.runStartup(AtomicBoolean(false))
+    mode.runStartup()
 
     assertTrue(fixture.terminal.writes.any { it.contains("Foo v2.3.4") })
     assertTrue(fixture.terminal.writes.any { it.contains("restart") })
@@ -85,20 +84,18 @@ class RestartModeRenderTest {
   // ── runStartup metadata-resolve failure ────────────────────────────
 
   @Test
-  fun `metadata resolve failure aborts with PhaseEnd None and signals shuttingDown`() {
+  fun `metadata resolve failure returns Aborted with no Watching footer`() {
     val fixture = DevSessionFixture(tempDir)
     fixture.gradle.nextMetadata = null // resolveMetadataOrAbort returns null
     val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
     val mode = TestableRestartMode(fixture.session, server)
 
-    val shuttingDown = AtomicBoolean(false)
-    val outcome = mode.runStartup(shuttingDown)
+    val outcome = mode.runStartup()
 
     assertEquals(DevSession.StartupOutcome.Aborted, outcome)
-    assertTrue(shuttingDown.get(), "should set shuttingDown when metadata is missing")
     assertTrue(
         fixture.terminal.writes.any { it.contains("Could not read project metadata") },
-        "expected the plugin-not-found error",
+        "expected the metadata-resolution error",
     )
     // No Watching footer should be opened.
     assertFalse(fixture.terminal.writes.any { it.contains("Watching for changes") })
@@ -113,7 +110,7 @@ class RestartModeRenderTest {
     val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
     val mode = TestableRestartMode(fixture.session, server)
 
-    val outcome = mode.runStartup(AtomicBoolean(false))
+    val outcome = mode.runStartup()
 
     assertEquals(DevSession.StartupOutcome.BuildFailed, outcome)
     assertTrue(fixture.terminal.writes.any { it.contains("Build failed") })
@@ -138,7 +135,7 @@ class RestartModeRenderTest {
         )
     val mode = TestableRestartMode(fixture.session, server)
 
-    val outcome = mode.runStartup(AtomicBoolean(false))
+    val outcome = mode.runStartup()
 
     assertEquals(DevSession.StartupOutcome.Aborted, outcome)
     assertTrue(fixture.terminal.writes.any { it.contains("Server failed to start") })
@@ -249,7 +246,7 @@ class RestartModeRenderTest {
         )
     val mode = TestableRestartMode(fixture.session, server)
 
-    mode.runStartup(AtomicBoolean(false))
+    mode.runStartup()
 
     // Both server log lines should be in the output, interleaved with the build/info groups.
     assertTrue(fixture.terminal.writes.any { it.contains("Starting Paper server") })

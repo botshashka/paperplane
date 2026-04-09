@@ -103,7 +103,7 @@ internal open class BlueGreenMode(
         )
 
     val state: RunningState =
-        when (val outcome = runStartup(shuttingDown)) {
+        when (val outcome = runStartup()) {
           is StartupOutcome.Running -> outcome.state
           StartupOutcome.BuildFailed -> enterFixRecovery() ?: return
           StartupOutcome.Aborted -> return
@@ -130,10 +130,10 @@ internal open class BlueGreenMode(
     )
   }
 
-  internal fun runStartup(shuttingDown: AtomicBoolean): StartupOutcome {
+  internal fun runStartup(): StartupOutcome {
     var outcome: StartupOutcome = StartupOutcome.Aborted
     session.ui.phase {
-      val metadata = session.resolveMetadataOrAbort(shuttingDown) ?: return@phase PhaseEnd.None
+      val metadata = session.resolveMetadataOrAbort() ?: return@phase PhaseEnd.None
       val active = servers[activeSlot]!!
       val paperJar =
           when (val result = session.initialBuild(metadata, active)) {
@@ -144,13 +144,13 @@ internal open class BlueGreenMode(
             }
           }
       if (!startProxy()) return@phase PhaseEnd.None
-      if (!startInitialServer(metadata, paperJar)) return@phase PhaseEnd.None
+      val state = startInitialServer(metadata, paperJar) ?: return@phase PhaseEnd.None
       session.showServerInfo(
           metadata,
           "localhost:${PaperServerManager.DEFAULT_PORT} (via proxy)",
           "blue-green (zero-downtime)",
       )
-      outcome = StartupOutcome.Running(RunningState(metadata, paperJar))
+      outcome = StartupOutcome.Running(state)
       PhaseEnd.Watching
     }
     return outcome
@@ -210,31 +210,20 @@ internal open class BlueGreenMode(
     }
   }
 
-  private fun startInitialServer(metadata: ProjectMetadata, paperJar: File): Boolean {
+  private fun startInitialServer(
+      metadata: ProjectMetadata,
+      paperJar: File,
+  ): DevSession.RunningState? {
     val active = servers[activeSlot]!!
+    // Clean stale lock files on BOTH slots before binding — the standby may have leftover state
+    // from a previous crash, and we don't want it holding its port when pre-warm runs.
     servers.values.forEach { it.cleanupStale() }
-    active.configure()
-    active.configureVelocityForwarding(velocityManager.forwardingSecret)
-
-    val builtJar = File(session.projectDir, metadata.jarPath)
-    active.copyPlugin(builtJar)
-    active.copyCompanion()
-
-    val mcVersion = session.resolveMcVersion(metadata)
-    val serverStart = System.currentTimeMillis()
-    active.start(paperJar, session.config.server.jvmArgs)
-    val ready = session.ui.spin("Starting Paper $mcVersion server...") { active.waitForReady() }
-    val serverDuration = session.formatDuration(System.currentTimeMillis() - serverStart)
-
-    return if (ready) {
-      session.ui.success("Paper $mcVersion server ready", serverDuration)
-      active.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
-      true
-    } else {
-      session.ui.error("Server failed to start", serverDuration)
-      active.writeCompanionStatus("error", mapOf("message" to "Server failed to start"))
-      false
-    }
+    return session.startServerAndReport(
+        serverManager = active,
+        metadata = metadata,
+        paperJar = paperJar,
+        extraConfigure = { it.configureVelocityForwarding(velocityManager.forwardingSecret) },
+    )
   }
 
   // ── Rebuild ──────────────────────────────────────────────────────────

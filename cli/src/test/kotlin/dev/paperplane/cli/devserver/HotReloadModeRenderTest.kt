@@ -4,7 +4,6 @@ import dev.paperplane.cli.testing.DevSessionFixture
 import dev.paperplane.cli.testing.FakePaperServerManager
 import dev.paperplane.cli.ui.assertEmittedInOrder
 import java.io.File
-import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
@@ -48,7 +47,7 @@ class HotReloadModeRenderTest {
     val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
     val mode = TestableHotReloadMode(fixture.session, server)
 
-    val outcome = mode.runStartup(AtomicBoolean(false))
+    val outcome = mode.runStartup()
 
     assertInstanceOf(DevSession.StartupOutcome.Running::class.java, outcome)
     fixture.terminal.assertEmittedInOrder(
@@ -75,11 +74,9 @@ class HotReloadModeRenderTest {
     val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
     val mode = TestableHotReloadMode(fixture.session, server)
 
-    val shuttingDown = AtomicBoolean(false)
-    val outcome = mode.runStartup(shuttingDown)
+    val outcome = mode.runStartup()
 
     assertEquals(DevSession.StartupOutcome.Aborted, outcome)
-    assertTrue(shuttingDown.get())
     assertTrue(fixture.terminal.writes.any { it.contains("Could not read project metadata") })
     assertFalse(fixture.terminal.writes.any { it.contains("Watching for changes") })
   }
@@ -93,7 +90,7 @@ class HotReloadModeRenderTest {
     val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
     val mode = TestableHotReloadMode(fixture.session, server)
 
-    val outcome = mode.runStartup(AtomicBoolean(false))
+    val outcome = mode.runStartup()
 
     assertEquals(DevSession.StartupOutcome.BuildFailed, outcome)
     assertTrue(fixture.terminal.writes.any { it.contains("Build failed") })
@@ -117,7 +114,7 @@ class HotReloadModeRenderTest {
         )
     val mode = TestableHotReloadMode(fixture.session, server)
 
-    val outcome = mode.runStartup(AtomicBoolean(false))
+    val outcome = mode.runStartup()
 
     assertEquals(DevSession.StartupOutcome.Aborted, outcome)
     assertTrue(fixture.terminal.writes.any { it.contains("Server failed to start") })
@@ -142,7 +139,7 @@ class HotReloadModeRenderTest {
         )
     val mode = TestableHotReloadMode(fixture.session, server)
 
-    mode.runStartup(AtomicBoolean(false))
+    mode.runStartup()
 
     assertTrue(fixture.terminal.writes.any { it.contains("Starting Paper server") })
     assertTrue(fixture.terminal.writes.any { it.contains("Done (3.2s)") })
