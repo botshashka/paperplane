@@ -1,6 +1,4 @@
-plugins { alias(libs.plugins.shadow) }
-
-repositories { maven("https://repo.papermc.io/repository/maven-public/") }
+plugins { id("paperplane.minecraft-plugin") }
 
 dependencies {
   compileOnly(libs.paper.api)
@@ -22,20 +20,10 @@ tasks.test {
   setForkEvery(1)
 }
 
-tasks.processResources { expand("version" to project.version) }
-
 tasks.shadowJar {
-  archiveBaseName.set("paperplane-companion")
-  archiveClassifier.set("")
-  archiveVersion.set("")
+  archiveBaseName = "paperplane-companion"
+  archiveClassifier = ""
+  archiveVersion = ""
   // ASM is shaded as-is (no relocation). Paper's internal ASM is already
   // relocated to a different namespace, so no conflict.
 }
-
-// Make 'jar' point to shadowJar so downstream tasks get the fat jar
-tasks.jar {
-  archiveBaseName.set("paperplane-companion")
-  enabled = false
-}
-
-tasks.named("build") { dependsOn(tasks.shadowJar) }

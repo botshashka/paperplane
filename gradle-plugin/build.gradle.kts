@@ -1,4 +1,5 @@
 plugins {
+  id("paperplane.kotlin")
   `java-gradle-plugin`
   `maven-publish`
 }

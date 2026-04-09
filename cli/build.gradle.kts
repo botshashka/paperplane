@@ -1,12 +1,15 @@
 plugins {
+  id("paperplane.kotlin")
   application
-  alias(libs.plugins.shadow)
+  id("com.gradleup.shadow")
   alias(libs.plugins.kotlin.serialization)
 }
 
+repositories { maven("https://repo.gradle.org/gradle/libs-releases") }
+
 application {
   applicationName = "ppl"
-  mainClass.set("dev.paperplane.cli.PaperPlaneKt")
+  mainClass = "dev.paperplane.cli.PaperPlaneKt"
   applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
 }
 
@@ -56,9 +59,9 @@ tasks.processResources {
 }
 
 tasks.shadowJar {
-  archiveBaseName.set("paperplane-cli")
-  archiveClassifier.set("")
-  archiveVersion.set("")
+  archiveBaseName = "paperplane-cli"
+  archiveClassifier = ""
+  archiveVersion = ""
   manifest {
     attributes(
         "Main-Class" to "dev.paperplane.cli.PaperPlaneKt",
@@ -89,7 +92,7 @@ distributions {
 // After Gradle resolves the dist contents, strip out the default per-dependency jars.
 // Only keep the shadow jar + bin scripts.
 tasks.distZip {
-  archiveBaseName.set("ppl")
+  archiveBaseName = "ppl"
   // Exclude all lib/ entries that are NOT the shadow jar
   eachFile {
     if (relativePath.pathString.contains("/lib/") && !name.contains("paperplane-cli")) {
@@ -99,7 +102,7 @@ tasks.distZip {
 }
 
 tasks.distTar {
-  archiveBaseName.set("ppl")
+  archiveBaseName = "ppl"
   eachFile {
     if (relativePath.pathString.contains("/lib/") && !name.contains("paperplane-cli")) {
       exclude()
