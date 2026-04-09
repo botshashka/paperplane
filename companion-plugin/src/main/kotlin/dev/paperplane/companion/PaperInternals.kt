@@ -34,8 +34,10 @@ object PaperInternals {
   private var cachedSpm: SimplePluginManager? = null
 
   private val paperVersion: String by lazy {
+    // Bukkit.getServer() is declared @NotNull but can NPE at very early plugin-load time;
+    // keep the catch for that edge case. The `?.` chain is on the nullable Package result only.
     try {
-      org.bukkit.Bukkit.getServer()?.javaClass?.`package`?.implementationVersion ?: "unknown"
+      org.bukkit.Bukkit.getServer().javaClass.`package`?.implementationVersion ?: "unknown"
     } catch (
         @Suppress("TooGenericExceptionCaught") // Server may not be initialized yet
         _: Exception) {
