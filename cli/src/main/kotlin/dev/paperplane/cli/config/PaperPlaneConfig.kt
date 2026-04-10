@@ -6,6 +6,7 @@ import com.charleskorn.kaml.Yaml
 import com.charleskorn.kaml.YamlConfiguration
 import com.charleskorn.kaml.YamlMap
 import com.github.ajalt.clikt.core.ProgramResult
+import dev.paperplane.cli.plugins.PluginDependency
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import kotlinx.serialization.SerialName
@@ -69,23 +70,23 @@ data class ServerConfig(
      */
     val properties: Map<String, String> = emptyMap(),
     /**
-     * Player names to pre-op on the dev server. Written to `ops.json` on each `ppl dev`.
-     * PaperPlane also auto-ops joining players, and their names are synced back into this list
-     * on shutdown so they persist across `ppl clean` runs.
+     * Player names to pre-op on the dev server. Written to `ops.json` on each `ppl dev`. PaperPlane
+     * also auto-ops joining players, and their names are synced back into this list on shutdown so
+     * they persist across `ppl clean` runs.
      */
     val ops: List<String> = emptyList(),
     /**
-     * Names that must never be auto-opped. Takes precedence over [ops] (a name appearing in
-     * both is never opped) and blocks the auto-op-on-join behavior as well as the reverse-sync
-     * that otherwise grows [ops] organically. Use this to deop a player permanently: add them
-     * here and they stay deopped across sessions.
+     * Names that must never be auto-opped. Takes precedence over [ops] (a name appearing in both is
+     * never opped) and blocks the auto-op-on-join behavior as well as the reverse-sync that
+     * otherwise grows [ops] organically. Use this to deop a player permanently: add them here and
+     * they stay deopped across sessions.
      */
     @SerialName("op-banlist") val opBanlist: List<String> = emptyList(),
     /**
      * Passthrough overrides for `config/paper-global.yml`. Deep-merged on top of PaperPlane's
      * defaults at configure time (user wins on leaf conflicts). Leave empty to use defaults.
-     * Paper's full schema is very large, so we don't enumerate keys here — users only set the
-     * ones they care about.
+     * Paper's full schema is very large, so we don't enumerate keys here — users only set the ones
+     * they care about.
      */
     @SerialName("paper-global") val paperGlobal: YamlMap? = null,
     /**
@@ -93,6 +94,13 @@ data class ServerConfig(
      * [paperGlobal].
      */
     @SerialName("paper-world-defaults") val paperWorldDefaults: YamlMap? = null,
+    /**
+     * Companion plugin dependencies for the dev server. Resolved from Modrinth (by slug) or from
+     * local filesystem paths, downloaded + verified against `paperplane-lock.yml`, and copied into
+     * the server plugins directory on every `ppl dev`. Managed via the `ppl plugin` subcommands
+     * (add / remove / update / install / list); hand-editing this list works too.
+     */
+    val plugins: List<PluginDependency> = emptyList(),
 )
 
 @Serializable

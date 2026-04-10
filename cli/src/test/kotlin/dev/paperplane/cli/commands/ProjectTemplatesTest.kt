@@ -27,8 +27,16 @@ class ProjectTemplatesTest {
     assertEquals("4", config.server.properties["view-distance"])
     assertEquals("flat", config.server.properties["level-type"])
     assertEquals("PaperPlane Dev Server", config.server.properties["motd"])
-    assertEquals("easy", config.server.properties["difficulty"], "vanilla default should pass through")
-    assertEquals("survival", config.server.properties["gamemode"], "vanilla default should pass through")
+    assertEquals(
+        "easy",
+        config.server.properties["difficulty"],
+        "vanilla default should pass through",
+    )
+    assertEquals(
+        "survival",
+        config.server.properties["gamemode"],
+        "vanilla default should pass through",
+    )
     assertTrue(config.server.ops.isEmpty())
   }
 }

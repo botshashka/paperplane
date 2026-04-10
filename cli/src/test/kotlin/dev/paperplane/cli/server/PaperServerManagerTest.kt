@@ -253,9 +253,7 @@ class PaperServerManagerTest {
             """
                 .trimIndent() + "\n"
         )
-    manager.configure(
-        dev.paperplane.cli.config.ServerConfig(paperWorldDefaults = userOverride)
-    )
+    manager.configure(dev.paperplane.cli.config.ServerConfig(paperWorldDefaults = userOverride))
 
     val content = File(manager.serverDir, "config/paper-world-defaults.yml").readText()
     assertTrue(content.contains("entity-tracking-range"))
@@ -520,4 +518,5 @@ class PaperServerManagerTest {
       proc.destroyForcibly()
     }
   }
+
 }

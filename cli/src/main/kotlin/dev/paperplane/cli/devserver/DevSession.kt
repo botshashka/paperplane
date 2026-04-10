@@ -4,6 +4,11 @@ import dev.paperplane.cli.Versions
 import dev.paperplane.cli.config.PaperPlaneConfig
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.gradle.ProjectMetadata
+import dev.paperplane.cli.plugins.ManagedPlugins
+import dev.paperplane.cli.plugins.ModrinthClient
+import dev.paperplane.cli.plugins.PluginCache
+import dev.paperplane.cli.plugins.PluginLockfile
+import dev.paperplane.cli.plugins.PluginResolver
 import dev.paperplane.cli.server.JbrDownloader
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.server.PaperServerManager
@@ -22,15 +27,23 @@ internal class DevSession(
     val downloader: PaperDownloader,
     val projectDir: File,
     val ui: TerminalUI,
+    /**
+     * Factory for the plugin resolver used by [syncDependencyPlugins]. Defaults to a real resolver
+     * that hits Modrinth and writes to `.paperplane/cache/plugins/`. Tests inject a fake
+     * resolver/cache pair so they can verify the wiring without network or filesystem downloads.
+     */
+    private val pluginResolverFactory: () -> PluginResolver = {
+      PluginResolver(ModrinthClient(), PluginCache(File(ppDir, "cache/plugins")))
+    },
 ) {
   /**
    * Holds the current config. This is `var` because the reverse-sync of `server.ops` on shutdown
-   * may update it (and persist it back to `paperplane.yml`) based on the companion plugin's
-   * runtime auto-ops. All other config fields are treated as immutable for the lifetime of the
-   * session.
+   * may update it (and persist it back to `paperplane.yml`) based on the companion plugin's runtime
+   * auto-ops. All other config fields are treated as immutable for the lifetime of the session.
    */
   var config: PaperPlaneConfig = config
     private set
+
   companion object {
     private const val MAIN_LOOP_POLL_INTERVAL_MS = 1000L
   }
@@ -130,6 +143,55 @@ internal class DevSession(
 
   fun downloadPaper(mcVersion: String): File =
       ui.spin("Downloading Paper $mcVersion...") { downloader.download(mcVersion) }
+
+  /**
+   * Reconciles `server.plugins` from config with the on-disk lockfile, downloads any missing JARs,
+   * copies them into the server plugins directory, and prunes removed entries. Writes the (possibly
+   * updated) lockfile back to disk. Emits a "Plugins" summary line when plugins are present; stays
+   * silent when the list is empty. Shows a spinner only when a network call is actually needed —
+   * the "offline resilience" design goal.
+   */
+  internal fun syncDependencyPlugins(serverManager: PaperServerManager) {
+    val deps = config.server.plugins
+    if (deps.isEmpty()) {
+      // Still prune — user may have removed the last plugin entry.
+      ManagedPlugins.prune(serverManager.serverDir, emptySet())
+      PluginLockfile.delete(projectDir)
+      return
+    }
+    val mcVersion = config.server.version
+    val resolver = pluginResolverFactory()
+    val previous = PluginLockfile.load(projectDir)
+
+    // Show a spinner only when the lockfile is incomplete or stale relative to config — that's
+    // the path that may hit Modrinth. When everything is already locked, sync() reduces to a
+    // file-existence + SHA verify per entry, which is microseconds and silent is better than
+    // flash-of-spinner.
+    val mayHitNetwork = deps.any { dep ->
+      val existing = previous.find(dep.slug)
+      existing == null ||
+          (dep.version != null && dep.version != existing.version) ||
+          dep.source.key != existing.source
+    }
+
+    val result =
+        if (mayHitNetwork) {
+          ui.spin("Resolving plugins...") { resolver.sync(deps, previous, mcVersion) }
+        } else {
+          resolver.sync(deps, previous, mcVersion)
+        }
+
+    if (result.lockfile != previous) {
+      PluginLockfile.save(projectDir, result.lockfile)
+    }
+    val pluginsDir = File(serverManager.serverDir, "plugins")
+    ManagedPlugins.copyJars(result.jars, pluginsDir)
+    ManagedPlugins.prune(serverManager.serverDir, result.jars.map { it.name }.toSet())
+
+    if (result.summary.isNotEmpty()) {
+      ui.info("Plugins", result.summary.joinToString(", "))
+    }
+  }
 
   /**
    * Emits the three-line server summary (address / plugin / mode). Caller is inside a phase; this
@@ -281,6 +343,7 @@ internal class DevSession(
     val builtJar = File(projectDir, metadata.jarPath)
     serverManager.copyPlugin(builtJar)
     serverManager.copyCompanion()
+    syncDependencyPlugins(serverManager)
 
     val serverStart = System.currentTimeMillis()
     serverManager.start(paperJar, jvmArgs, hotReload = hotReload, javaBin = javaBin)
@@ -300,10 +363,10 @@ internal class DevSession(
   /**
    * Reverse-sync of auto-opped players from the running server's `ops.json` back into
    * `paperplane.yml`. The companion plugin ops joining players via Bukkit API at runtime; Paper
-   * persists that to `ops.json`. This walks the file, unions the names with
-   * `config.server.ops` (preserving order; existing names keep their position, new names are
-   * appended), and if the set changed, rewrites `paperplane.yml`. Best-effort — any failure is
-   * swallowed silently because this runs during shutdown when there's no meaningful error path.
+   * persists that to `ops.json`. This walks the file, unions the names with `config.server.ops`
+   * (preserving order; existing names keep their position, new names are appended), and if the set
+   * changed, rewrites `paperplane.yml`. Best-effort — any failure is swallowed silently because
+   * this runs during shutdown when there's no meaningful error path.
    *
    * Idempotent: safe to call multiple times from different shutdown paths.
    */

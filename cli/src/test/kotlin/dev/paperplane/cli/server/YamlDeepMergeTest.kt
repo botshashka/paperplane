@@ -23,7 +23,9 @@ class YamlDeepMergeTest {
     // Round-trip the merged result so assertions aren't coupled to kaml's output quoting style.
     val roundTripped = yamlMap(merged)
     val enabled =
-        ((roundTripped.entries.entries.first().value as com.charleskorn.kaml.YamlMap).entries.entries
+        ((roundTripped.entries.entries.first().value as com.charleskorn.kaml.YamlMap)
+                .entries
+                .entries
                 .first()
                 .value as com.charleskorn.kaml.YamlScalar)
             .content

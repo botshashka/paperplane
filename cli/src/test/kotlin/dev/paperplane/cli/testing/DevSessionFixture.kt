@@ -3,6 +3,7 @@ package dev.paperplane.cli.testing
 import dev.paperplane.cli.config.PaperPlaneConfig
 import dev.paperplane.cli.devserver.DevSession
 import dev.paperplane.cli.gradle.ProjectMetadata
+import dev.paperplane.cli.plugins.PluginResolver
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.ui.RecordingTerminal
 import dev.paperplane.cli.ui.TerminalUI
@@ -28,7 +29,11 @@ import java.io.File
  * Constructed against a `@TempDir` so the underlying file paths exist (helpers like
  * [PaperDownloader] are real but never invoke their network paths in tests).
  */
-class DevSessionFixture(tempDir: File, config: PaperPlaneConfig = PaperPlaneConfig()) {
+class DevSessionFixture(
+    tempDir: File,
+    config: PaperPlaneConfig = PaperPlaneConfig(),
+    pluginResolver: PluginResolver? = null,
+) {
   val terminal: RecordingTerminal = RecordingTerminal()
   val ui: TerminalUI = TerminalUI(terminal)
 
@@ -45,6 +50,14 @@ class DevSessionFixture(tempDir: File, config: PaperPlaneConfig = PaperPlaneConf
           downloader = downloader,
           projectDir = projectDir,
           ui = ui,
+          pluginResolverFactory =
+              pluginResolver?.let { { it } }
+                  ?: {
+                    PluginResolver(
+                        dev.paperplane.cli.plugins.ModrinthClient(),
+                        dev.paperplane.cli.plugins.PluginCache(File(ppDir, "cache/plugins")),
+                    )
+                  },
       )
 
   /**

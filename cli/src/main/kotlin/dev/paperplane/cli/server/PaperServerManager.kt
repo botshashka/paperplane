@@ -2,6 +2,7 @@ package dev.paperplane.cli.server
 
 import com.charleskorn.kaml.YamlMap
 import dev.paperplane.cli.config.ServerConfig
+import dev.paperplane.cli.plugins.atomicMoveOrFallback
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import java.io.IOException
@@ -95,8 +96,8 @@ open class PaperServerManager(
   }
 
   /**
-   * Merges [override] on top of [base] and writes the result to `[dir]/[name]`. Returns the
-   * merged YAML so callers can cache it in memory instead of re-reading the file.
+   * Merges [override] on top of [base] and writes the result to `[dir]/[name]`. Returns the merged
+   * YAML so callers can cache it in memory instead of re-reading the file.
    */
   private fun writeMerged(dir: File, name: String, base: String, override: YamlMap?): String {
     val merged = YamlDeepMerge.merge(base, override)
@@ -106,9 +107,8 @@ open class PaperServerManager(
 
   /**
    * Writes `ops.json` if [names] is non-empty. Uses offline-mode UUIDs (deterministic from name)
-   * since the dev server runs with `online-mode=false`. PaperPlane's companion plugin also
-   * auto-ops joining players at runtime — this list seeds known ops across fresh server
-   * directories.
+   * since the dev server runs with `online-mode=false`. PaperPlane's companion plugin also auto-ops
+   * joining players at runtime — this list seeds known ops across fresh server directories.
    */
   private fun writeOpsJson(names: List<String>) {
     val opsFile = File(serverDir, "ops.json")
@@ -116,22 +116,21 @@ open class PaperServerManager(
       opsFile.delete() // idempotent — no exists() pre-check
       return
     }
-    val entries =
-        names.map { name ->
-          mapOf(
-              "uuid" to offlineUuid(name).toString(),
-              "name" to name,
-              "level" to 4,
-              "bypassesPlayerLimit" to false,
-          )
-        }
+    val entries = names.map { name ->
+      mapOf(
+          "uuid" to offlineUuid(name).toString(),
+          "name" to name,
+          "level" to 4,
+          "bypassesPlayerLimit" to false,
+      )
+    }
     opsFile.writeText(gson.toJson(entries))
   }
 
   /**
-   * Writes the op banlist to `.paperplane/op-banlist.json` as a JSON array of names. The
-   * companion plugin reads this file on join events and skips auto-opping any listed name. Also
-   * consulted by the CLI's reverse-sync to keep banned names out of `paperplane.yml`.
+   * Writes the op banlist to `.paperplane/op-banlist.json` as a JSON array of names. The companion
+   * plugin reads this file on join events and skips auto-opping any listed name. Also consulted by
+   * the CLI's reverse-sync to keep banned names out of `paperplane.yml`.
    */
   private fun writeOpBanlist(names: List<String>) {
     val statusDir = File(serverDir, ".paperplane").apply { mkdirs() }
@@ -148,8 +147,8 @@ open class PaperServerManager(
       UUID.nameUUIDFromBytes("OfflinePlayer:$name".toByteArray(Charsets.UTF_8))
 
   /**
-   * Reads current op names from `ops.json` in this server's directory. Returns an empty list if
-   * the file is missing or malformed. Used for reverse-sync of auto-opped players back into
+   * Reads current op names from `ops.json` in this server's directory. Returns an empty list if the
+   * file is missing or malformed. Used for reverse-sync of auto-opped players back into
    * `paperplane.yml`.
    */
   fun readOpNames(): List<String> {
@@ -201,16 +200,7 @@ open class PaperServerManager(
     val target = File(pluginsDir, jarPath.name)
     val temp = File(pluginsDir, ".${jarPath.name}.tmp")
     jarPath.copyTo(temp, overwrite = true)
-    try {
-      Files.move(
-          temp.toPath(),
-          target.toPath(),
-          StandardCopyOption.ATOMIC_MOVE,
-          StandardCopyOption.REPLACE_EXISTING,
-      )
-    } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
-      Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-    }
+    atomicMoveOrFallback(temp.toPath(), target.toPath())
   }
 
   /**
@@ -386,5 +376,4 @@ open class PaperServerManager(
     tmpFile.writeText(json)
     Files.move(tmpFile.toPath(), statusFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
   }
-
 }

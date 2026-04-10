@@ -53,7 +53,7 @@ class CompanionPlugin : JavaPlugin() {
    * `<serverRoot>/plugins/<plugin-name>`, so the root is two levels up. Centralized here so any
    * future layout change only needs one fix.
    */
-  private fun serverRoot(): File = dataFolder.parentFile.parentFile
+  private fun serverRoot(): File = dataFolder.absoluteFile.parentFile.parentFile
 
   override fun onDisable() {
     try {

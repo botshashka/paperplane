@@ -14,6 +14,7 @@ import dev.paperplane.cli.commands.DevCommand
 import dev.paperplane.cli.commands.FormatCommand
 import dev.paperplane.cli.commands.ImplodeCommand
 import dev.paperplane.cli.commands.InitCommand
+import dev.paperplane.cli.commands.PluginCommand
 import dev.paperplane.cli.commands.TestCommand
 import dev.paperplane.cli.commands.UpgradeCommand
 import dev.paperplane.cli.ui.AnsiTerminal
@@ -22,7 +23,12 @@ import dev.paperplane.cli.ui.TerminalUI
 
 class PaperPlane : CliktCommand(name = "ppl") {
   override fun aliases() =
-      mapOf("new" to listOf("create"), "setup" to listOf("init"), "fmt" to listOf("format"))
+      mapOf(
+          "new" to listOf("create"),
+          "setup" to listOf("init"),
+          "fmt" to listOf("format"),
+          "p" to listOf("plugin"),
+      )
 
   init {
     context {
@@ -67,6 +73,7 @@ fun main(args: Array<String>) {
       info("test", "Run tests via Gradle")
       info("format", "Format source code with Spotless")
       info("clean", "Clean .paperplane directory")
+      info("plugin", "Manage dev-server plugin dependencies")
       info("upgrade", "Update ppl to the latest version")
       info("implode", "Uninstall ppl completely")
       blank()
@@ -85,6 +92,7 @@ fun main(args: Array<String>) {
           TestCommand(ui),
           FormatCommand(ui),
           CleanCommand(ui, prompts),
+          PluginCommand(ui),
           UpgradeCommand(ui),
           ImplodeCommand(ui, prompts),
       )

@@ -3,7 +3,6 @@ package dev.paperplane.cli.server
 import com.charleskorn.kaml.Yaml
 import com.charleskorn.kaml.YamlMap
 import com.charleskorn.kaml.YamlNode
-import com.charleskorn.kaml.YamlPath
 import com.charleskorn.kaml.YamlScalar
 import com.charleskorn.kaml.yamlMap
 
@@ -14,8 +13,8 @@ import com.charleskorn.kaml.yamlMap
  * Paper's full schema.
  *
  * Merge rules:
- * - Two maps: recursively merge keys. Keys present only in one side are kept as-is. Keys present
- *   in both are merged by the rules below.
+ * - Two maps: recursively merge keys. Keys present only in one side are kept as-is. Keys present in
+ *   both are merged by the rules below.
  * - Scalars / nulls / tagged nodes: [override] wins.
  * - Lists: [override] wins (no element-wise merge — lists in paper configs are usually replaced
  *   wholesale, e.g. `enabled-packs`, so merging element-by-element would surprise users).

@@ -9,9 +9,9 @@ object ServerSync {
 
   /**
    * Syncs runtime state (world data, player data, plugin data directories, etc) from source to
-   * target. Uses incremental sync (timestamp + size) to skip unchanged files. Skips lock files,
-   * CLI state, the dev plugin jar, the companion jar, and all PaperPlane-managed config files —
-   * those come from `paperplane.yml` directly via configure().
+   * target. Uses incremental sync (timestamp + size) to skip unchanged files. Skips lock files, CLI
+   * state, the dev plugin jar, the companion jar, and all PaperPlane-managed config files — those
+   * come from `paperplane.yml` directly via configure().
    */
   fun syncServerState(sourceDir: File, targetDir: File, devPluginJarName: String) {
     syncChildren(

@@ -228,8 +228,7 @@ class DevSessionTest {
 
   @Test
   fun `syncOpsBackToConfig is a no-op when ops json is missing`() {
-    val (session, manager) =
-        opsBackSetup(initialOps = listOf("alice"), liveOpNames = emptyList())
+    val (session, manager) = opsBackSetup(initialOps = listOf("alice"), liveOpNames = emptyList())
     File(manager.serverDir, "ops.json").delete()
     File(tempDir, "paperplane.yml").delete()
     session.syncOpsBackToConfig(manager)

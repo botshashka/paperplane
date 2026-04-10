@@ -282,9 +282,7 @@ internal open class BlueGreenMode(
 
     val syncThread =
         Thread(
-            {
-              ServerSync.syncServerState(active.serverDir, standby.serverDir, builtJar.name)
-            },
+            { ServerSync.syncServerState(active.serverDir, standby.serverDir, builtJar.name) },
             "sync-to-${standbySlot.serverName}",
         )
     syncThread.start()
