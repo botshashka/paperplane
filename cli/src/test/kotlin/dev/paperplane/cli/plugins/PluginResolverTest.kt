@@ -3,6 +3,7 @@ package dev.paperplane.cli.plugins
 import java.io.File
 import java.security.MessageDigest
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -182,6 +183,62 @@ class PluginResolverTest {
     assertEquals("local", locked.source)
     assertEquals(sha512("payload".toByteArray()), locked.sha512)
     assertNotNull(result.jars.first())
+  }
+
+  @Test
+  fun `update re-hashes local entries even when pinned without force`() {
+    // Local entries are auto-pinned (resolveLocal sets pinned=true). Without this exemption
+    // the user has no way to recover from a tampered local jar: PluginCache.verifyLocal throws
+    // SHA mismatch on install, and the error message tells them to run `ppl plugin update <slug>`
+    // — which would also throw because update would skip the slug as pinned. Circular failure.
+    val localJar = File(tempDir, "my.jar").apply { writeBytes("payload".toByteArray()) }
+    val modrinth = FakeModrinthClient(emptyMap())
+    val resolver = PluginResolver(modrinth, cache())
+    val deps = listOf(PluginDependency.local(localJar.absolutePath))
+
+    // Seed a lockfile with the OLD sha and pinned=true (mirrors the on-disk state after add).
+    val staleLock =
+        PluginLockfile()
+            .upsert(
+                LockedPlugin(
+                    slug = "my",
+                    source = "local",
+                    version = "0",
+                    sha512 = "stale-deadbeef",
+                    url = localJar.canonicalPath,
+                    filename = "my.jar",
+                    pinned = true,
+                )
+            )
+
+    // Modify the jar so its sha changes.
+    localJar.writeBytes("changed-payload".toByteArray())
+
+    // Update without --force should still re-hash, refreshing the lockfile entry.
+    val updated = resolver.update(deps, staleLock, mcVersion = null)
+    val locked = updated.find("my")!!
+    assertEquals(sha512("changed-payload".toByteArray()), locked.sha512)
+    assertTrue(locked.pinned, "pinned flag should remain true on local entries")
+  }
+
+  @Test
+  fun `resolveLocal stores canonical path with no dot segments`() {
+    // Local jars are referenced as `local:./libs/foo.jar` — the relative `./` should be stripped
+    // when persisted to the lockfile so the URL field is a clean absolute path. file.absolutePath
+    // doesn't normalize; file.canonicalPath does.
+    val libs = File(tempDir, "libs").apply { mkdirs() }
+    val jar = File(libs, "foo.jar").apply { writeBytes("x".toByteArray()) }
+    // Construct a path with `./` and `..` segments mid-way.
+    val messyPath = "${tempDir.canonicalPath}/./libs/../libs/foo.jar"
+
+    val modrinth = FakeModrinthClient(emptyMap())
+    val resolver = PluginResolver(modrinth, cache())
+    val result =
+        resolver.sync(listOf(PluginDependency.local(messyPath)), PluginLockfile(), mcVersion = null)
+    val locked = result.lockfile.find("foo")!!
+    assertEquals(jar.canonicalPath, locked.url)
+    assertFalse(locked.url.contains("/./"), "canonical path should have no /./ segments")
+    assertFalse(locked.url.contains("/../"), "canonical path should have no /../ segments")
   }
 
   private fun sha512(bytes: ByteArray): String {

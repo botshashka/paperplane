@@ -117,7 +117,16 @@ class PluginResolver(
       // Respect the pin unless --force. A pinned entry in paperplane.yml (e.g. `vault@1.7.3`)
       // is a statement from the user; `ppl plugin update vault` without --force is a no-op on
       // that slug.
-      if (existing != null && existing.pinned && !force) continue
+      //
+      // Local entries are always re-hashed though: their `pinned: true` reflects "no auto-bump
+      // from Modrinth" rather than "skip on update". The user's only recovery path when a local
+      // jar's bytes change is `ppl plugin update <slug>`, so honoring the lockfile pin here
+      // would create a circular failure with PluginCache.verifyLocal.
+      if (existing != null &&
+          existing.pinned &&
+          !force &&
+          existing.source != PluginDependency.Source.LOCAL.key)
+          continue
       val resolved = resolve(dep, mcVersion)
       working = working.upsert(resolved)
     }
@@ -214,7 +223,7 @@ class PluginResolver(
         source = PluginDependency.Source.LOCAL.key,
         version = file.lastModified().toString(), // no semver for local; use mtime as a version-ish
         sha512 = sha,
-        url = file.absolutePath,
+        url = file.canonicalPath,
         filename = file.name,
         pinned = true,
     )

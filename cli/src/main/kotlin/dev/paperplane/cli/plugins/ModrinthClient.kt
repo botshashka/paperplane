@@ -128,7 +128,8 @@ open class ModrinthClient(
     try {
       return client.send(request, HttpResponse.BodyHandlers.ofString())
     } catch (e: IOException) {
-      throw ModrinthNetworkError("Could not reach Modrinth: ${e.message}", e)
+      throw ModrinthNetworkError(
+          "Could not reach Modrinth: ${e.message ?: e.javaClass.simpleName}", e)
     }
   }
 

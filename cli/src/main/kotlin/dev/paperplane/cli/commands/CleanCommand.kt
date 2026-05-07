@@ -15,7 +15,8 @@ class CleanCommand(
 
   private val force by option("--force", "-f", help = "Skip confirmation").flag()
   private val all by
-      option("--all", "-a", help = "Also delete cache (downloaded Paper/Velocity/JBR)").flag()
+      option("--all", "-a", help = "Also delete cache (Paper/Velocity/JBR + plugin downloads)")
+          .flag()
   private val projectDir = File(System.getProperty("user.dir"))
 
   override fun run() {

@@ -191,6 +191,15 @@ class AddPluginCommand(
 
   private val spec by
       argument("spec", help = "e.g. placeholderapi, vault@1.7.3, local:./libs/x.jar")
+  private val upgrade by
+      option(
+              "--upgrade",
+              "-u",
+              help =
+                  "Replace an existing entry with the freshly resolved version. " +
+                      "Drops any @version pin from paperplane.yml unless the spec sets a new one.",
+          )
+          .flag()
 
   override fun run() {
     val ctx = contextFactory(ui)
@@ -211,10 +220,12 @@ class AddPluginCommand(
               }
             }
           } else rawDep
-      if (config.server.plugins.any { it.slug == dep.slug }) {
+      val existing = config.server.plugins.find { it.slug == dep.slug }
+      if (existing != null && !upgrade) {
         ui.block {
           error("'${dep.slug}' is already in paperplane.yml")
-          status("Use `ppl plugin update ${dep.slug}` to bump the version.")
+          status("Use `ppl plugin update ${dep.slug}` to bump the version,")
+          status("or `ppl plugin add ${dep.slug} --upgrade` to replace it with the latest.")
         }
         throw ProgramResult(1)
       }
@@ -222,24 +233,38 @@ class AddPluginCommand(
           if (dep.source == PluginDependency.Source.MODRINTH) ctx.mcVersion(config) else ""
       val resolver = ctx.resolver
       val lock = ctx.loadLock()
+      val previouslyLocked = lock.find(dep.slug)
 
       handleResolveErrors(ui) {
+        val verb = if (existing != null) "Upgrading" else "Downloading"
         val result =
-            ui.spin("Downloading ${dep.slug}...") {
-              val newConfig =
-                  config.copy(server = config.server.copy(plugins = config.server.plugins + dep))
+            ui.spin("$verb ${dep.slug}...") {
+              // For an upgrade, replace the existing dep in place (preserving order); otherwise
+              // append. The new dep already carries any @version the user supplied — if not, the
+              // YAML pin is dropped, matching `npm install pkg@latest` semantics.
+              val newPlugins =
+                  if (existing != null) config.server.plugins.map { if (it.slug == dep.slug) dep else it }
+                  else config.server.plugins + dep
+              val newConfig = config.copy(server = config.server.copy(plugins = newPlugins))
+              // Drop the slug from the lockfile when upgrading so sync re-resolves from scratch
+              // rather than seeing the old version as up-to-date.
+              val baseLock = if (existing != null) lock.remove(dep.slug) else lock
               val syncResult =
-                  resolver.sync(newConfig.server.plugins, lock, mcVersion.ifEmpty { null })
+                  resolver.sync(newConfig.server.plugins, baseLock, mcVersion.ifEmpty { null })
               ctx.saveConfig(newConfig)
               ctx.saveLock(syncResult.lockfile)
               syncResult
             }
 
-        val added = result.lockfile.find(dep.slug)!!
+        val locked = result.lockfile.find(dep.slug)!!
         ui.block {
-          success("Added ${added.slug} ${added.version}")
-          info("source", added.source)
-          info("file", added.filename)
+          if (existing != null && previouslyLocked != null) {
+            success("Upgraded ${locked.slug}: ${previouslyLocked.version} -> ${locked.version}")
+          } else {
+            success("Added ${locked.slug} ${locked.version}")
+          }
+          info("source", locked.source)
+          info("file", locked.filename)
         }
       }
     } finally {
@@ -305,6 +330,24 @@ class UpdatePluginCommand(
       val lock = ctx.loadLock()
       val targets = slug?.let { setOf(it.lowercase()) }
 
+      // Heads-up when `update --force` targets a slug that's pinned in paperplane.yml itself
+      // (e.g. `vault@1.7.3`). The YAML constraint feeds resolveExact, so --force only bypasses
+      // the lockfile pin guard, not the YAML version. Tell the user how to actually bump it
+      // instead of silently reporting "Already up to date".
+      if (force && targets != null) {
+        for (dep in config.server.plugins) {
+          if (dep.slug !in targets) continue
+          if (dep.version == null) continue
+          ui.block {
+            status(
+                "${dep.slug} is pinned in paperplane.yml at ${dep.version}. " +
+                    "`--force` only ignores the lockfile pin, not the YAML version.")
+            status("Run `ppl plugin add ${dep.slug} --upgrade` to bump to latest,")
+            status("or edit paperplane.yml to drop the @${dep.version} suffix.")
+          }
+        }
+      }
+
       handleResolveErrors(ui) {
         val result =
             ui.spin("Checking for updates...") {
@@ -329,6 +372,10 @@ class UpdatePluginCommand(
                   old == null -> "${newLocked.slug}: added ${newLocked.version}"
                   old.version != newLocked.version ->
                       "${newLocked.slug}: ${old.version} -> ${newLocked.version}"
+                  // Same version, different sha — the bytes changed (local re-hash, or a
+                  // tampered/repaired Modrinth checksum). Surface it; otherwise the user sees
+                  // "Already up to date" even though we silently rewrote the lockfile.
+                  old.sha512 != newLocked.sha512 -> "${newLocked.slug}: refreshed checksum"
                   else -> null
                 }
               }
@@ -362,11 +409,9 @@ class InstallPluginCommand(
     try {
       val config = ctx.loadConfig()
       val lock = ctx.loadLock()
-      if (lock.plugins.isEmpty()) {
-        ui.status("No plugins in paperplane-lock.yml — nothing to install")
-        return
-      }
-      // Sanity check: lockfile in sync with config?
+      // Sanity check: lockfile in sync with config? Runs BEFORE the empty-lock early return so a
+      // hand-edit of paperplane.yml (config has plugins, lock missing entirely) is reported as
+      // out-of-sync rather than silently passing as "nothing to install".
       val configSlugs = config.server.plugins.map { it.slug }.toSet()
       val lockSlugs = lock.plugins.map { it.slug }.toSet()
       if (configSlugs != lockSlugs) {
@@ -384,6 +429,10 @@ class InstallPluginCommand(
           }
         }
         throw ProgramResult(1)
+      }
+      if (lock.plugins.isEmpty()) {
+        ui.status("No plugins in paperplane-lock.yml — nothing to install")
+        return
       }
 
       val resolver = ctx.resolver
@@ -417,7 +466,14 @@ class InstallPluginCommand(
         val summary = lock.plugins.joinToString(", ") { "${it.slug} ${it.version}" }
         ui.block {
           if (shouldForce) {
-            success("Reinstalled $total $pluginWord")
+            // For a single-slug install, the count is 1, not lock.plugins.size — only that slug
+            // was actually re-downloaded. Naming the slug here makes it clear what changed.
+            if (forceSlugs != null) {
+              val word = if (forceSlugs.size == 1) "plugin" else "plugins"
+              success("Reinstalled ${forceSlugs.size} $word (${forceSlugs.joinToString(", ")})")
+            } else {
+              success("Reinstalled $total $pluginWord")
+            }
           } else if (allAdded.isEmpty() && allPruned.isEmpty()) {
             success("All $pluginWord already installed")
           } else {

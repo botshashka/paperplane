@@ -92,7 +92,22 @@ open class PluginCache(private val cacheDir: File) {
     tmp.delete() // clear any leftover partial download from a prior crash
 
     val request = HttpRequest.newBuilder().uri(URI.create(locked.url)).build()
-    val response = client.send(request, HttpResponse.BodyHandlers.ofFile(tmp.toPath()))
+    val response =
+        try {
+          client.send(request, HttpResponse.BodyHandlers.ofFile(tmp.toPath()))
+        } catch (e: IOException) {
+          tmp.delete()
+          // The bare IOException from HttpClient is often unhelpful (sometimes its message is
+          // null, e.g. for proxy CONNECT failures), so wrap it with slug/version/url context
+          // before it reaches handleResolveErrors. Otherwise users see only "I/O error".
+          throw IOException(
+              "Could not download ${locked.slug} ${locked.version} from ${locked.url}: " +
+                  "${e.message ?: e.javaClass.simpleName}. " +
+                  "Check your network connection or run `ppl plugin update ${locked.slug}` " +
+                  "if the URL has changed.",
+              e,
+          )
+        }
     if (response.statusCode() != HttpURLConnection.HTTP_OK) {
       tmp.delete()
       throw IOException(

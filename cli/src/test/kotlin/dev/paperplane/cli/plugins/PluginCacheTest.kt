@@ -103,4 +103,33 @@ class PluginCacheTest {
         )
     assertNotNull(cache.get(locked))
   }
+
+  @Test
+  fun `downloadRemote wraps network IOException with slug version url context`() {
+    // Without this wrap, handleResolveErrors falls back to "I/O error" for any IOException whose
+    // message is null (e.g. proxy CONNECT failures from java.net.http.HttpClient). The wrapped
+    // message names the slug, version, URL, and includes the underlying cause's class name.
+    val cache = PluginCache(tempDir)
+    val locked =
+        LockedPlugin(
+            slug = "ghost",
+            source = "modrinth",
+            version = "1.0.0",
+            sha512 = "x".repeat(128),
+            // 192.0.2.0/24 is reserved for documentation (RFC 5737) and never routed —
+            // connections will fail fast.
+            url = "http://192.0.2.1:1/ghost.jar",
+            filename = "ghost.jar",
+        )
+    val ex = assertThrows(java.io.IOException::class.java) { cache.download(locked) }
+    val msg = ex.message ?: ""
+    assertTrue(msg.contains("ghost"), "message should name the slug: $msg")
+    assertTrue(msg.contains("1.0.0"), "message should include the version: $msg")
+    assertTrue(msg.contains("192.0.2.1"), "message should include the URL: $msg")
+    assertTrue(
+        msg.contains("Check your network connection") ||
+            msg.contains("`ppl plugin update ghost`"),
+        "message should suggest a recovery action: $msg",
+    )
+  }
 }

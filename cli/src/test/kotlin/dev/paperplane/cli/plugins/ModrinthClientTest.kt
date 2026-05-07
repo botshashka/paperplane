@@ -6,6 +6,7 @@ import java.net.InetSocketAddress
 import java.net.http.HttpClient
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -269,5 +270,21 @@ class ModrinthClientTest {
     assertThrows(ModrinthNetworkError::class.java) {
       deadClient.resolveLatest("anything", "1.21.4")
     }
+  }
+
+  @Test
+  fun `network error message never contains literal 'null'`() {
+    // Some IOExceptions thrown by java.net.http.HttpClient (proxy CONNECT failures, certain
+    // socket-level errors) carry getMessage() == null. The error formatter must fall back to
+    // the exception class name so the user never sees "Could not reach Modrinth: null".
+    val deadClient = ModrinthClient(HttpClient.newHttpClient(), "http://127.0.0.1:1")
+    val ex =
+        assertThrows(ModrinthNetworkError::class.java) {
+          deadClient.resolveLatest("anything", "1.21.4")
+        }
+    val msg = ex.message ?: ""
+    assertTrue(msg.startsWith("Could not reach Modrinth: "), msg)
+    assertFalse(msg.endsWith(": null"), "message must not end with bare 'null': $msg")
+    assertFalse(msg.contains("Modrinth: null"), "message must not contain ': null': $msg")
   }
 }

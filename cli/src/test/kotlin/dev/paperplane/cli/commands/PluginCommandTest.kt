@@ -13,6 +13,7 @@ import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -291,6 +292,281 @@ class PluginCommandTest : RenderTestBase() {
     assertTrue(t.writes.any { it.contains("Added myplug") })
   }
 
+  @Test
+  fun `add upgrade replaces existing YAML version pin with latest`() {
+    // The ergonomic counterpart to "YAML @version is authoritative". Without --upgrade the duplicate
+    // check fires; with --upgrade the entry is re-resolved and the @version is dropped from the
+    // YAML so the user can keep getting fresh latests on subsequent updates.
+    writeBaseConfig()
+    val (ui, _) = newUi()
+    AddPluginCommand(ui, stubContextFactory(StubModrinth(mapOf("luckperms" to "5.5.0"))))
+        .parse(listOf("luckperms@5.5.0"))
+    val configBefore = File(canonicalTempDir, "paperplane.yml").readText()
+    assertTrue(configBefore.contains("version: \"5.5.0\""), "expected pin to be in YAML")
+
+    val (ui2, t) = newUi()
+    AddPluginCommand(ui2, stubContextFactory(StubModrinth(mapOf("luckperms" to "5.5.17"))))
+        .parse(listOf("luckperms", "--upgrade"))
+
+    val configAfter = File(canonicalTempDir, "paperplane.yml").readText()
+    assertFalse(
+        configAfter.contains("version: \"5.5.0\""), "the @version pin should be dropped: $configAfter")
+    val locked = PluginLockfile.load(canonicalTempDir).find("luckperms")!!
+    assertEquals("5.5.17", locked.version)
+    assertFalse(locked.pinned, "after upgrade without explicit @version, pinned should be false")
+    assertTrue(t.writes.any { it.contains("Upgraded luckperms: 5.5.0 -> 5.5.17") })
+  }
+
+  @Test
+  fun `add upgrade on slug not in config behaves like a plain add`() {
+    writeBaseConfig()
+    val (ui, t) = newUi()
+    AddPluginCommand(ui, stubContextFactory(StubModrinth(mapOf("placeholderapi" to "2.11.6"))))
+        .parse(listOf("placeholderapi", "--upgrade"))
+
+    val locked = PluginLockfile.load(canonicalTempDir).find("placeholderapi")!!
+    assertEquals("2.11.6", locked.version)
+    // The output is still "Added X Y" (not "Upgraded X: ... -> Y") since there was nothing to
+    // upgrade from — important so users running `--upgrade` defensively aren't misled.
+    assertTrue(t.writes.any { it.contains("Added placeholderapi 2.11.6") })
+  }
+
+  @Test
+  fun `add upgrade with explicit version pins to that version`() {
+    // `add slug@x.y.z --upgrade` is the "I want to switch to a specific version" path: replace
+    // the existing entry, but honor the new @version (not strip it). The lockfile should record
+    // pinned=true on the new entry.
+    writeBaseConfig()
+    val (ui, _) = newUi()
+    AddPluginCommand(
+            ui,
+            stubContextFactory(StubModrinth(mapOf("luckperms" to "5.5.0"))),
+        )
+        .parse(listOf("luckperms@5.5.0"))
+
+    val (ui2, t) = newUi()
+    AddPluginCommand(
+            ui2,
+            stubContextFactory(StubModrinth(mapOf("luckperms" to "5.4.0"))),
+        )
+        .parse(listOf("luckperms@5.4.0", "--upgrade"))
+
+    val configAfter = File(canonicalTempDir, "paperplane.yml").readText()
+    assertTrue(
+        configAfter.contains("version: \"5.4.0\""),
+        "explicit @version on upgrade should be persisted: $configAfter",
+    )
+    val locked = PluginLockfile.load(canonicalTempDir).find("luckperms")!!
+    assertEquals("5.4.0", locked.version)
+    assertTrue(locked.pinned, "explicit @version means pinned=true")
+    assertTrue(t.writes.any { it.contains("Upgraded luckperms: 5.5.0 -> 5.4.0") })
+  }
+
+  @Test
+  fun `update local entry recovers from sha mismatch and refreshes the lockfile`() {
+    // Local entries are auto-pinned, so without an exemption in the resolver the user has no
+    // recovery path: install fails on sha mismatch and update would skip the slug as pinned.
+    // `update <slug>` must re-hash in place without --force.
+    writeBaseConfig()
+    val jar = File(canonicalTempDir, "my.jar").apply { writeBytes("v1".toByteArray()) }
+    val (ui, _) = newUi()
+    AddPluginCommand(ui, stubContextFactory(StubModrinth(emptyMap())))
+        .parse(listOf("local:${jar.absolutePath}"))
+
+    // Tamper with the on-disk bytes.
+    jar.writeBytes("v2-tampered".toByteArray())
+
+    val (ui2, t) = newUi()
+    UpdatePluginCommand(ui2, stubContextFactory(StubModrinth(emptyMap()))).parse(listOf("my"))
+
+    // The lockfile entry should now reflect the new bytes.
+    val locked = PluginLockfile.load(canonicalTempDir).find("my")!!
+    val expected = java.security.MessageDigest.getInstance("SHA-512")
+        .digest("v2-tampered".toByteArray())
+        .joinToString("") { "%02x".format(it) }
+    assertEquals(expected, locked.sha512)
+    assertTrue(
+        t.writes.any { it.contains("my:") && it.contains("refreshed checksum") } ||
+            t.writes.any { it.contains("my:") && it.contains("->") },
+        "expected the change to be reported (refreshed checksum or version bump)",
+    )
+  }
+
+  @Test
+  fun `update force on YAML-pinned slug prints upgrade-path message`() {
+    // YAML @version is authoritative; --force only bypasses the lockfile pin guard, not the YAML
+    // version. Without this message the user sees "Already up to date" and assumes --force is
+    // broken. The message should name the upgrade command so they can recover in one step.
+    writeBaseConfig()
+    val (ui, _) = newUi()
+    AddPluginCommand(ui, stubContextFactory(StubModrinth(mapOf("vault" to "1.7.3"))))
+        .parse(listOf("vault@1.7.3"))
+
+    // The stub only resolves 1.7.3 (resolveExact matches dep.version) — that's the whole point:
+    // even though we're "forcing" an update, the YAML version constraint feeds resolveExact and
+    // we never actually look at later versions.
+    val (ui2, t) = newUi()
+    UpdatePluginCommand(ui2, stubContextFactory(StubModrinth(mapOf("vault" to "1.7.3"))))
+        .parse(listOf("vault", "--force"))
+
+    assertEquals("1.7.3", PluginLockfile.load(canonicalTempDir).find("vault")!!.version)
+    assertTrue(
+        t.writes.any { it.contains("vault is pinned in paperplane.yml at 1.7.3") },
+        "expected explanation of pin semantics",
+    )
+    assertTrue(
+        t.writes.any { it.contains("ppl plugin add vault --upgrade") },
+        "expected pointer to the upgrade command",
+    )
+  }
+
+  @Test
+  fun `update reports refreshed checksum when only sha changed`() {
+    // Hand-tamper a lockfile SHA, then `update <slug>`. The version is unchanged, so a
+    // version-only diff would silently rewrite the lockfile and report "Already up to date".
+    // The sha change must be surfaced.
+    writeBaseConfig()
+    val (ui, _) = newUi()
+    AddPluginCommand(ui, stubContextFactory(StubModrinth(mapOf("vault" to "1.7.3"))))
+        .parse(listOf("vault"))
+    // Hand-edit the lockfile to corrupt the SHA.
+    val lockFile = File(canonicalTempDir, "paperplane-lock.yml")
+    lockFile.writeText(lockFile.readText().replace("sha-vault-1.7.3", "tampered"))
+
+    val (ui2, t) = newUi()
+    UpdatePluginCommand(ui2, stubContextFactory(StubModrinth(mapOf("vault" to "1.7.3"))))
+        .parse(emptyList())
+
+    // SHA was rewritten back to the resolver's value.
+    assertEquals(
+        "sha-vault-1.7.3", PluginLockfile.load(canonicalTempDir).find("vault")!!.sha512)
+    assertTrue(
+        t.writes.any { it.contains("vault: refreshed checksum") },
+        "expected refreshed-checksum line",
+    )
+  }
+
+  @Test
+  fun `install single slug message names that slug with count of 1`() {
+    // A single-slug install re-downloads only that slug, so the count must be 1 and name the
+    // slug — not the lockfile total.
+    writeBaseConfig()
+    val modrinth = StubModrinth(mapOf("vault" to "1.7.3", "luckperms" to "5.4.0"))
+    val (ui, _) = newUi()
+    AddPluginCommand(ui, stubContextFactory(modrinth)).parse(listOf("vault"))
+    val (ui2, _) = newUi()
+    AddPluginCommand(ui2, stubContextFactory(modrinth)).parse(listOf("luckperms"))
+
+    val (ui3, t) = newUi()
+    InstallPluginCommand(ui3, stubContextFactory(modrinth)).parse(listOf("vault"))
+
+    assertTrue(
+        t.writes.any { it.contains("Reinstalled 1 plugin") && it.contains("vault") },
+        "expected single-slug count and name: ${t.writes}",
+    )
+    assertFalse(
+        t.writes.any { it.contains("Reinstalled 2 plugins") },
+        "should not report lockfile total for a single-slug install",
+    )
+  }
+
+  @Test
+  fun `install force without slug reinstalls all entries with lockfile total`() {
+    // `--force` without a slug arg re-downloads every entry, so the message should report the
+    // lockfile total (counterpart to the single-slug case, which reports 1).
+    writeBaseConfig()
+    val modrinth = StubModrinth(mapOf("vault" to "1.7.3", "luckperms" to "5.4.0"))
+    val (ui, _) = newUi()
+    AddPluginCommand(ui, stubContextFactory(modrinth)).parse(listOf("vault"))
+    val (ui2, _) = newUi()
+    AddPluginCommand(ui2, stubContextFactory(modrinth)).parse(listOf("luckperms"))
+
+    val (ui3, t) = newUi()
+    InstallPluginCommand(ui3, stubContextFactory(modrinth)).parse(listOf("--force"))
+
+    assertTrue(
+        t.writes.any { it.contains("Reinstalled 2 plugins") },
+        "global --force should report the lockfile total: ${t.writes}",
+    )
+    // Should NOT use the single-slug "(name)" form when no slug arg was given.
+    assertFalse(
+        t.writes.any { it.contains("Reinstalled 2 plugins (") },
+        "global --force should not include the parenthesized name list",
+    )
+  }
+
+  @Test
+  fun `install on warm cache prints already-installed message`() {
+    // Covers the third install message branch (no force, nothing added/pruned). Pre-existing
+    // logic but had no explicit coverage; touching the surrounding block makes this worth filling.
+    writeBaseConfig()
+    val modrinth = StubModrinth(mapOf("vault" to "1.7.3"))
+    val (ui, _) = newUi()
+    AddPluginCommand(ui, stubContextFactory(modrinth)).parse(listOf("vault"))
+    // First install populates server/plugins/.
+    val (ui2, _) = newUi()
+    InstallPluginCommand(ui2, stubContextFactory(modrinth)).parse(emptyList())
+
+    // Second install, same lockfile + cache + server dir → no-op.
+    val (ui3, t) = newUi()
+    InstallPluginCommand(ui3, stubContextFactory(modrinth)).parse(emptyList())
+    assertTrue(
+        t.writes.any { it.contains("All") && it.contains("already installed") },
+        "expected already-installed message: ${t.writes}",
+    )
+  }
+
+  @Test
+  fun `add upgrade on existing local plugin re-resolves and re-hashes`() {
+    // Local entries have no Modrinth getProject canonicalization step, so they take a different
+    // branch through AddPluginCommand. Verify --upgrade works for them too: the slug stays in
+    // place, the file is re-hashed (mtime + sha refresh), and the message is "Upgraded".
+    writeBaseConfig()
+    val jar = File(canonicalTempDir, "plug.jar").apply { writeBytes("v1".toByteArray()) }
+    val (ui, _) = newUi()
+    AddPluginCommand(ui, stubContextFactory(StubModrinth(emptyMap())))
+        .parse(listOf("local:${jar.absolutePath}"))
+    val firstSha = PluginLockfile.load(canonicalTempDir).find("plug")!!.sha512
+
+    // Modify the file, then add --upgrade.
+    jar.writeBytes("v2-different-bytes".toByteArray())
+    val (ui2, t) = newUi()
+    AddPluginCommand(ui2, stubContextFactory(StubModrinth(emptyMap())))
+        .parse(listOf("local:${jar.absolutePath}", "--upgrade"))
+
+    val locked = PluginLockfile.load(canonicalTempDir).find("plug")!!
+    assertNotEquals(firstSha, locked.sha512, "sha should reflect new bytes")
+    assertEquals(
+        java.security.MessageDigest.getInstance("SHA-512")
+            .digest("v2-different-bytes".toByteArray())
+            .joinToString("") { "%02x".format(it) },
+        locked.sha512,
+    )
+    assertTrue(locked.pinned, "local entries remain pinned after upgrade (auto-pin semantic)")
+    assertTrue(t.writes.any { it.contains("Upgraded plug") }, "expected Upgraded message: ${t.writes}")
+  }
+
+  @Test
+  fun `update force on unpinned slug does not print YAML-pin message`() {
+    // The YAML-pin heads-up should only fire when the slug really is pinned in paperplane.yml
+    // (dep.version != null). For an unpinned slug, --force is a normal force-bump and should
+    // proceed silently — no false-positive guidance.
+    writeBaseConfig()
+    val (ui, _) = newUi()
+    AddPluginCommand(ui, stubContextFactory(StubModrinth(mapOf("vault" to "1.0.0"))))
+        .parse(listOf("vault")) // unpinned in YAML
+
+    val (ui2, t) = newUi()
+    UpdatePluginCommand(ui2, stubContextFactory(StubModrinth(mapOf("vault" to "2.0.0"))))
+        .parse(listOf("vault", "--force"))
+
+    assertEquals("2.0.0", PluginLockfile.load(canonicalTempDir).find("vault")!!.version)
+    assertFalse(
+        t.writes.any { it.contains("pinned in paperplane.yml") },
+        "no pin message should fire for an unpinned slug: ${t.writes}",
+    )
+  }
+
   // ── remove ────────────────────────────────────────────────────────────
 
   @Test
@@ -465,7 +741,23 @@ class PluginCommandTest : RenderTestBase() {
   }
 
   @Test
-  fun `install with missing lockfile prints nothing-to-install message`() {
+  fun `install with empty config and missing lockfile prints nothing-to-install message`() {
+    // Both sides empty — this is the "fresh project, nothing added yet" path. Sync check passes
+    // (both sets empty), then the empty-lockfile branch returns with a friendly status.
+    writeBaseConfig()
+    val (ui, t) = newUi()
+    InstallPluginCommand(ui, stubContextFactory(StubModrinth(emptyMap()))).parse(emptyList())
+    assertTrue(
+        t.writes.any { it.contains("No plugins in paperplane-lock.yml") },
+        "expected nothing-to-install message",
+    )
+  }
+
+  @Test
+  fun `install fails out-of-sync when lockfile empty and config has plugins`() {
+    // User hand-edited paperplane.yml to add a plugin without running `ppl plugin add`. The
+    // sync check must run before the empty-lockfile early return, otherwise this masquerades
+    // as "nothing to install" with exit 0.
     writeBaseConfig(
         extraServerLines =
             """
@@ -474,13 +766,14 @@ class PluginCommandTest : RenderTestBase() {
             """
                 .trimMargin()
     )
-    // No lockfile written. Empty-lockfile branch returns early with a status message rather
-    // than throwing — out-of-sync detection only fires when the lockfile has entries to compare.
     val (ui, t) = newUi()
-    InstallPluginCommand(ui, stubContextFactory(StubModrinth(emptyMap()))).parse(emptyList())
+    assertThrows(com.github.ajalt.clikt.core.ProgramResult::class.java) {
+      InstallPluginCommand(ui, stubContextFactory(StubModrinth(emptyMap()))).parse(emptyList())
+    }
+    assertTrue(t.writes.any { it.contains("out of sync") }, "expected out-of-sync error")
     assertTrue(
-        t.writes.any { it.contains("No plugins in paperplane-lock.yml") },
-        "expected nothing-to-install message",
+        t.writes.any { it.contains("In config, not in lock: ghost") },
+        "expected the missing slug to be named",
     )
   }
 
