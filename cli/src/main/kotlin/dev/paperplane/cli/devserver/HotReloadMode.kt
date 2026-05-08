@@ -4,6 +4,7 @@ import dev.paperplane.cli.devserver.DevSession.RunningState
 import dev.paperplane.cli.devserver.DevSession.StartupOutcome
 import dev.paperplane.cli.gradle.BuildSnapshot
 import dev.paperplane.cli.gradle.ClassChanges
+import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
@@ -61,7 +62,15 @@ internal open class HotReloadMode(
   internal fun runStartup(): StartupOutcome {
     var outcome: StartupOutcome = StartupOutcome.Aborted
     session.ui.phase {
-      val metadata = session.resolveMetadataOrAbort() ?: return@phase PhaseEnd.None
+      val metadata =
+          when (val res = session.resolveMetadata()) {
+            is MetadataResult.Success -> res.metadata
+            MetadataResult.PluginNotApplied -> return@phase PhaseEnd.None
+            MetadataResult.TaskFailed -> {
+              outcome = StartupOutcome.BuildFailed
+              return@phase PhaseEnd.Waiting
+            }
+          }
       val paperJar =
           when (val result = session.initialBuild(metadata, serverManager)) {
             is DevSession.BuildOutcome.Success -> result.paperJar
@@ -119,7 +128,7 @@ internal open class HotReloadMode(
     val totalStart = System.currentTimeMillis()
     val preBuildSnapshot = snapshotBeforeBuild(metadata)
 
-    if (cachedFastMeta == null) cachedFastMeta = session.gradle.metadataFast()
+    if (cachedFastMeta == null) cachedFastMeta = session.gradle.metadataFast().metadataOrNull
 
     serverManager.writeCompanionStatus("building")
     val buildStart = System.currentTimeMillis()

@@ -1,6 +1,7 @@
 package dev.paperplane.cli.testing
 
 import dev.paperplane.cli.gradle.GradleBridge
+import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
@@ -38,6 +39,15 @@ class FakeGradleBridge(
     var onTest: () -> Unit = {},
 ) : GradleBridge(projectDir, ui) {
 
+  /**
+   * Explicit override for [metadata]. When null, falls back to [nextMetadata] (non-null →
+   * Success, null → PluginNotApplied). Set this directly to script [MetadataResult.TaskFailed].
+   */
+  var nextMetadataResult: MetadataResult? = null
+
+  /** See [nextMetadataResult]. */
+  var nextMetadataFastResult: MetadataResult? = null
+
   /** Ordered log of every method call, e.g. `["build", "metadata", "test(quiet=true)"]`. */
   val calls: MutableList<String> = mutableListOf()
 
@@ -62,15 +72,18 @@ class FakeGradleBridge(
     return nextTestResult
   }
 
-  override fun metadata(): ProjectMetadata? {
+  override fun metadata(): MetadataResult {
     calls += "metadata"
-    return nextMetadata
+    return nextMetadataResult ?: deriveResult(nextMetadata)
   }
 
-  override fun metadataFast(): ProjectMetadata? {
+  override fun metadataFast(): MetadataResult {
     calls += "metadataFast"
-    return nextMetadataFast
+    return nextMetadataFastResult ?: deriveResult(nextMetadataFast)
   }
+
+  private fun deriveResult(meta: ProjectMetadata?): MetadataResult =
+      meta?.let { MetadataResult.Success(it) } ?: MetadataResult.PluginNotApplied
 
   override fun doClose() {
     calls += "close"

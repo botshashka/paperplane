@@ -27,6 +27,22 @@ data class ProjectMetadata(
             ?: listOfNotNull(classesDir.takeIf { it.isNotEmpty() })
 }
 
+sealed class MetadataResult {
+  data class Success(val metadata: ProjectMetadata) : MetadataResult()
+
+  /** `ppMetadata` task does not exist — the PaperPlane gradle plugin is not applied. */
+  object PluginNotApplied : MetadataResult()
+
+  /**
+   * `ppMetadata` exists but its task chain failed (e.g., a compile error in user source).
+   * Per-error detail has already been surfaced via [GradleBridge.parseBuildErrors].
+   */
+  object TaskFailed : MetadataResult()
+
+  val metadataOrNull: ProjectMetadata?
+    get() = (this as? Success)?.metadata
+}
+
 open class GradleBridge(private val projectDir: File, private val ui: TerminalUI) : AutoCloseable {
   companion object {
     private const val MAX_DISPLAYED_ERRORS = 5
@@ -158,11 +174,11 @@ open class GradleBridge(private val projectDir: File, private val ui: TerminalUI
     }
   }
 
-  open fun metadata(): ProjectMetadata? = runMetadataTask("ppMetadata")
+  open fun metadata(): MetadataResult = runMetadataTask("ppMetadata")
 
-  open fun metadataFast(): ProjectMetadata? = runMetadataTask("ppMetadataFast")
+  open fun metadataFast(): MetadataResult = runMetadataTask("ppMetadataFast")
 
-  private fun runMetadataTask(taskName: String): ProjectMetadata? {
+  private fun runMetadataTask(taskName: String): MetadataResult {
     val stdout = ByteArrayOutputStream()
     val stderr = ByteArrayOutputStream()
     return try {
@@ -176,18 +192,24 @@ open class GradleBridge(private val projectDir: File, private val ui: TerminalUI
       val metadataFile = File(projectDir, "build/paperplane/metadata.json")
       if (!metadataFile.exists()) {
         ui.status("Metadata file not produced at build/paperplane/metadata.json")
-        return null
+        return MetadataResult.TaskFailed
       }
 
-      parseMetadataFile(metadataFile)
+      parseMetadataFile(metadataFile)?.let { MetadataResult.Success(it) }
+          ?: MetadataResult.TaskFailed
     } catch (e: GradleConnectionException) {
-      // Show the *real* cause, not the Tooling API's misleading wrapper message which always
-      // blames the distribution URL. Also render any compile errors from the captured output so
-      // the user sees "MyPlugin.java:9: error: ';' expected" instead of just "Build failed".
-      ui.status("Metadata task failed: ${rootCauseMessage(e)}")
+      val rootMsg = rootCauseMessage(e)
+      // "no ppMetadata task" means the gradle plugin isn't applied (caller hint: ppl init);
+      // any other gradle failure here is typically a compile error — recoverable by editing source.
+      if (isTaskNotFoundMessage(rootMsg, taskName) || isTaskNotFoundMessage(e.message, taskName)) {
+        return MetadataResult.PluginNotApplied
+      }
+
+      // Render compile errors so the user sees "MyPlugin.java:9: error: ';' expected"; the caller
+      // frames the headline ("Build failed" with duration).
       val output = stderr.toString() + stdout.toString()
       parseBuildErrors(output)
-      null
+      MetadataResult.TaskFailed
     }
   }
 

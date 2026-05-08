@@ -3,6 +3,7 @@ package dev.paperplane.cli.devserver
 import dev.paperplane.cli.Versions
 import dev.paperplane.cli.config.PaperPlaneConfig
 import dev.paperplane.cli.gradle.GradleBridge
+import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.plugins.ManagedPlugins
 import dev.paperplane.cli.plugins.ModrinthClient
@@ -86,20 +87,29 @@ internal class DevSession(
   }
 
   /**
-   * Runs the metadata-resolution step. Emits directly into whatever block/phase the caller has
-   * open; never touches block lifecycle. Returns null if the metadata can't be resolved (plugin not
-   * applied, compile error, or any other gradle failure); [GradleBridge] has already emitted the
-   * specific cause. Callers signal abort via their own return type.
+   * Runs the metadata-resolution step inside a spinner and emits the appropriate framing for each
+   * outcome:
+   * - [MetadataResult.Success]: silently creates `.paperplane/`.
+   * - [MetadataResult.PluginNotApplied]: prints the "ppl init / ppl create" hint and closes the
+   *   gradle connection (caller will return without entering fix-recovery).
+   * - [MetadataResult.TaskFailed]: prints "Build failed" with timing so the user sees the same UI
+   *   they would for a build failure proper. Caller routes to fix-recovery.
    */
-  fun resolveMetadataOrAbort(): ProjectMetadata? {
-    val metadata = ui.spin("Reading project metadata...") { gradle.metadata() }
-    if (metadata == null) {
-      metadataResolutionError()
-      gradle.close()
-      return null
+  fun resolveMetadata(): MetadataResult {
+    val started = System.currentTimeMillis()
+    val result = ui.spin("Reading project metadata...") { gradle.metadata() }
+    when (result) {
+      is MetadataResult.Success -> ppDir.mkdirs()
+      MetadataResult.PluginNotApplied -> {
+        metadataResolutionError()
+        gradle.close()
+      }
+      MetadataResult.TaskFailed -> {
+        val duration = formatDuration(System.currentTimeMillis() - started)
+        ui.error("Build failed", duration)
+      }
     }
-    ppDir.mkdirs()
-    return metadata
+    return result
   }
 
   fun resolveMcVersion(metadata: ProjectMetadata): String {
@@ -266,7 +276,7 @@ internal class DevSession(
     }
     ui.success("Build succeeded", buildDuration)
 
-    val metadata = gradle.metadata() ?: return FixAttempt.BuildFailed
+    val metadata = gradle.metadata().metadataOrNull ?: return FixAttempt.BuildFailed
     val mcVersion = resolveMcVersion(metadata)
     val paperJar = downloader.download(mcVersion)
     return FixAttempt.Success(metadata, paperJar)

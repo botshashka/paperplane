@@ -1,5 +1,6 @@
 package dev.paperplane.cli.devserver
 
+import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.testing.DevSessionFixture
 import dev.paperplane.cli.testing.FakePaperServerManager
 import dev.paperplane.cli.testing.FakeVelocityDownloader
@@ -155,6 +156,29 @@ class BlueGreenModeRenderTest {
     assertEquals(DevSession.StartupOutcome.Aborted, outcome)
     assertTrue(f.terminal.writes.any { it.contains("Could not read project metadata") })
     assertFalse(p.calls.any { it.startsWith("configure") })
+  }
+
+  // ── Metadata task compile failure → fix recovery ──────────────────
+
+  @Test
+  fun `metadata task failure routes to BuildFailed without touching the proxy`() {
+    val (mode, fixture, proxy) =
+        newMode().also {
+          it.second.gradle.nextMetadataResult = MetadataResult.TaskFailed
+        }
+    val outcome = mode.runStartup()
+
+    assertEquals(DevSession.StartupOutcome.BuildFailed, outcome)
+    assertTrue(fixture.terminal.writes.any { it.contains("Build failed") })
+    assertFalse(fixture.terminal.writes.any { it.contains("Could not read project metadata") })
+    assertFalse(
+        proxy.calls.any { it.startsWith("configure") },
+        "metadata-task failure must short-circuit before proxy configure",
+    )
+    assertFalse(
+        mode.fixRecoveryEntered,
+        "runStartup must not call enterFixRecovery internally; control returns to run()",
+    )
   }
 
   // ── Build failure → fix recovery ───────────────────────────────────

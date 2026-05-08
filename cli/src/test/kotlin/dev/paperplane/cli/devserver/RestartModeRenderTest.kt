@@ -1,5 +1,6 @@
 package dev.paperplane.cli.devserver
 
+import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.testing.DevSessionFixture
 import dev.paperplane.cli.testing.FakePaperServerManager
 import dev.paperplane.cli.ui.assertEmittedInOrder
@@ -86,7 +87,7 @@ class RestartModeRenderTest {
   @Test
   fun `metadata resolve failure returns Aborted with no Watching footer`() {
     val fixture = DevSessionFixture(tempDir)
-    fixture.gradle.nextMetadata = null // resolveMetadataOrAbort returns null
+    fixture.gradle.nextMetadata = null // resolveMetadata returns PluginNotApplied
     val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
     val mode = TestableRestartMode(fixture.session, server)
 
@@ -99,6 +100,40 @@ class RestartModeRenderTest {
     )
     // No Watching footer should be opened.
     assertFalse(fixture.terminal.writes.any { it.contains("Watching for changes") })
+  }
+
+  // ── runStartup metadata-task compile failure → fix recovery ────────
+  // `ppMetadata` transitively depends on `compileJava`, so a typo in user source breaks
+  // metadata resolution before any build/server logic runs. Route to BuildFailed (→ fix-recovery)
+  // instead of the Aborted "ppl init" hint.
+
+  @Test
+  fun `metadata task failure routes to BuildFailed and shows no plugin-not-applied hint`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    fixture.gradle.nextMetadataResult = MetadataResult.TaskFailed
+    val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
+    val mode = TestableRestartMode(fixture.session, server)
+
+    val outcome = mode.runStartup()
+
+    assertEquals(DevSession.StartupOutcome.BuildFailed, outcome)
+    assertTrue(
+        fixture.terminal.writes.any { it.contains("Build failed") },
+        "expected 'Build failed' framing, got: ${fixture.terminal.writes}",
+    )
+    assertFalse(
+        fixture.terminal.writes.any { it.contains("Could not read project metadata") },
+        "TaskFailed must not show the plugin-not-applied hint",
+    )
+    assertFalse(
+        fixture.terminal.writes.any { it.contains("ppl init") },
+        "TaskFailed must not show the ppl init hint",
+    )
+    assertTrue(fixture.terminal.writes.any { it.contains("Waiting for changes") })
+    assertFalse(
+        mode.fixRecoveryEntered,
+        "runStartup must not call enterFixRecovery internally; control returns to run()",
+    )
   }
 
   // ── runStartup build failure → fix recovery ────────────────────────

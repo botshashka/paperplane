@@ -1,5 +1,6 @@
 package dev.paperplane.cli.devserver
 
+import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.testing.DevSessionFixture
 import dev.paperplane.cli.testing.FakePaperServerManager
 import dev.paperplane.cli.ui.assertEmittedInOrder
@@ -79,6 +80,26 @@ class HotReloadModeRenderTest {
     assertEquals(DevSession.StartupOutcome.Aborted, outcome)
     assertTrue(fixture.terminal.writes.any { it.contains("Could not read project metadata") })
     assertFalse(fixture.terminal.writes.any { it.contains("Watching for changes") })
+  }
+
+  // ── Metadata task compile failure → fix recovery ──────────────────
+
+  @Test
+  fun `metadata task failure routes to BuildFailed in hot-reload mode`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    fixture.gradle.nextMetadataResult = MetadataResult.TaskFailed
+    val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
+    val mode = TestableHotReloadMode(fixture.session, server)
+
+    val outcome = mode.runStartup()
+
+    assertEquals(DevSession.StartupOutcome.BuildFailed, outcome)
+    assertTrue(fixture.terminal.writes.any { it.contains("Build failed") })
+    assertFalse(fixture.terminal.writes.any { it.contains("Could not read project metadata") })
+    assertFalse(
+        mode.fixRecoveryEntered,
+        "runStartup must not call enterFixRecovery internally; control returns to run()",
+    )
   }
 
   // ── Build failure → fix recovery ───────────────────────────────────

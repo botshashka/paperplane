@@ -2,6 +2,7 @@ package dev.paperplane.cli.devserver
 
 import dev.paperplane.cli.devserver.DevSession.RunningState
 import dev.paperplane.cli.devserver.DevSession.StartupOutcome
+import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
@@ -56,7 +57,15 @@ internal open class RestartMode(
   internal fun runStartup(): StartupOutcome {
     var outcome: StartupOutcome = StartupOutcome.Aborted
     session.ui.phase {
-      val metadata = session.resolveMetadataOrAbort() ?: return@phase PhaseEnd.None
+      val metadata =
+          when (val res = session.resolveMetadata()) {
+            is MetadataResult.Success -> res.metadata
+            MetadataResult.PluginNotApplied -> return@phase PhaseEnd.None
+            MetadataResult.TaskFailed -> {
+              outcome = StartupOutcome.BuildFailed
+              return@phase PhaseEnd.Waiting
+            }
+          }
       val paperJar =
           when (val result = session.initialBuild(metadata, serverManager)) {
             is DevSession.BuildOutcome.Success -> result.paperJar

@@ -54,7 +54,7 @@ open class BuildCommand(private val ui: TerminalUI) :
 
     // ppMetadata transitively depends on shadowJar (or jar) via the gradle plugin, so this single
     // call both produces the deployable jar and tells us where it landed.
-    val metadata = ui.spin("Building…") { gradle.metadata() }
+    val metadata = ui.spin("Building…") { gradle.metadata().metadataOrNull }
     val duration = formatDurationMs(System.currentTimeMillis() - started)
 
     if (metadata == null) {

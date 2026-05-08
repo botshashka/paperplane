@@ -132,4 +132,30 @@ class GradleBridgeTest {
     // Looking for a different task — should not match
     assertEquals(false, GradleBridge.isTaskNotFoundMessage(msg, "otherTask"))
   }
+
+  // ── MetadataResult ────────────────────────────────────────────────
+
+  @Test
+  fun `MetadataResult Success exposes metadata via metadataOrNull`() {
+    val meta =
+        ProjectMetadata(
+            jarPath = "build/libs/x.jar",
+            paperApiVersion = "1.21",
+            mainClass = "x.X",
+            pluginName = "X",
+            projectDir = "/p",
+            version = "1.0",
+        )
+    assertEquals(meta, MetadataResult.Success(meta).metadataOrNull)
+  }
+
+  @Test
+  fun `MetadataResult PluginNotApplied exposes null via metadataOrNull`() {
+    assertNull(MetadataResult.PluginNotApplied.metadataOrNull)
+  }
+
+  @Test
+  fun `MetadataResult TaskFailed exposes null via metadataOrNull`() {
+    assertNull(MetadataResult.TaskFailed.metadataOrNull)
+  }
 }
