@@ -20,6 +20,11 @@ data class ProjectMetadata(
     val classesDirs: List<String> = emptyList(),
     val resourcesDir: String = "",
     val runtimeClasspath: List<String> = emptyList(),
+    val depend: List<String> = emptyList(),
+    val softdepend: List<String> = emptyList(),
+    val loadbefore: List<String> = emptyList(),
+    val load: String = "POSTWORLD",
+    val apiVersion: String = "",
 ) {
   val effectiveClassesDirs: List<String>
     get() =
@@ -228,6 +233,11 @@ open class GradleBridge(private val projectDir: File, private val ui: TerminalUI
         resourcesDir = map["resourcesDir"] as? String ?: "",
         runtimeClasspath =
             (map["runtimeClasspath"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+        depend = (map["depend"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+        softdepend = (map["softdepend"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+        loadbefore = (map["loadbefore"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+        load = map["load"] as? String ?: "POSTWORLD",
+        apiVersion = map["apiVersion"] as? String ?: "",
     )
   }
 

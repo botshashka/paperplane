@@ -53,6 +53,9 @@ abstract class MetadataTask : DefaultTask() {
           emptyList<String>()
         }
 
+    // depend/softdepend feed CompanionJarRewriter so the companion's plugin.yml inherits them —
+    // Paper resolves load order at boot time from plugins/, but the user plugin lives in
+    // .paperplane/staged/ now, so the companion has to claim those depends on its behalf.
     val metadata =
         mapOf(
             "jarPath" to jarPath,
@@ -65,6 +68,11 @@ abstract class MetadataTask : DefaultTask() {
             "classesDirs" to classesDirs,
             "resourcesDir" to resourcesDir,
             "runtimeClasspath" to runtimeJars,
+            "depend" to (extension.depend.orNull ?: emptyList<String>()),
+            "softdepend" to (extension.softDepend.orNull ?: emptyList<String>()),
+            "loadbefore" to emptyList<String>(),
+            "load" to "POSTWORLD",
+            "apiVersion" to (extension.apiVersion.orNull ?: ""),
         )
 
     val outFile = File(outputDir.get().asFile, "metadata.json")

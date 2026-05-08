@@ -100,6 +100,54 @@ class MetadataTaskTest {
   }
 
   @Test
+  fun `metadata includes depend softdepend load and apiVersion fields`() {
+    setupProject(
+        """
+        plugins {
+            java
+            id("dev.paperplane")
+        }
+        group = "com.example"
+        version = "1.0.0"
+        repositories {
+            mavenCentral()
+            maven("https://repo.papermc.io/repository/maven-public/")
+        }
+        dependencies {
+            compileOnly("io.papermc.paper:paper-api:1.21.4-R0.1-SNAPSHOT")
+        }
+        paperplane {
+            mainClass.set("com.example.TestPlugin")
+            pluginName.set("MyPlugin")
+            depend.set(listOf("WorldGuard", "Vault"))
+            softDepend.set(listOf("PlaceholderAPI"))
+        }
+        """
+            .trimIndent()
+    )
+    runTask("ppMetadata")
+    val metadata = readMetadata()
+
+    val depend = metadata.getAsJsonArray("depend").map { it.asString }
+    assertEquals(listOf("WorldGuard", "Vault"), depend)
+    val softdepend = metadata.getAsJsonArray("softdepend").map { it.asString }
+    assertEquals(listOf("PlaceholderAPI"), softdepend)
+    assertTrue(metadata.has("loadbefore"), "metadata should contain loadbefore")
+    assertEquals("POSTWORLD", metadata.get("load").asString)
+    assertEquals("1.21", metadata.get("apiVersion").asString)
+  }
+
+  @Test
+  fun `metadata depend defaults to empty list when not set`() {
+    setupProject(baseBuildScript)
+    runTask("ppMetadata")
+    val metadata = readMetadata()
+
+    assertEquals(0, metadata.getAsJsonArray("depend").size())
+    assertEquals(0, metadata.getAsJsonArray("softdepend").size())
+  }
+
+  @Test
   fun `pluginName defaults to project name when not explicitly set`() {
     setupProject(
         """
