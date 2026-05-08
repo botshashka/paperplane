@@ -351,8 +351,8 @@ internal class DevSession(
     serverManager.configure(config.server)
     extraConfigure(serverManager)
     val builtJar = File(projectDir, metadata.jarPath)
-    serverManager.copyPlugin(builtJar)
-    serverManager.copyCompanion()
+    val stagedJarPath = serverManager.copyPlugin(builtJar)
+    serverManager.copyCompanion(depend = metadata.depend, softdepend = metadata.softdepend)
     syncDependencyPlugins(serverManager)
 
     val serverStart = System.currentTimeMillis()
@@ -360,6 +360,18 @@ internal class DevSession(
     val ready = ui.spin(spinLabel) { serverManager.waitForReady() }
     val serverDuration = formatDuration(System.currentTimeMillis() - serverStart)
     return if (ready) {
+      // Companion is up and probed. Hand it the staged plugin to load.
+      LoadRequest.write(
+          serverManager.serverDir,
+          LoadRequest(
+              requestId = LoadRequest.newId(),
+              jarPath = stagedJarPath,
+              pluginName = metadata.pluginName,
+              classesDirs = metadata.effectiveClassesDirs,
+              resourcesDir = metadata.resourcesDir,
+              runtimeClasspath = metadata.runtimeClasspath,
+          ),
+      )
       ui.success(readyMessage, serverDuration)
       serverManager.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
       RunningState(metadata, paperJar)

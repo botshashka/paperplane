@@ -196,28 +196,33 @@ open class PaperServerManager(
     return downloader.download(mcVersion)
   }
 
-  open fun copyPlugin(jarPath: File) {
-    val target = File(pluginsDir, jarPath.name)
-    val temp = File(pluginsDir, ".${jarPath.name}.tmp")
-    jarPath.copyTo(temp, overwrite = true)
-    atomicMoveOrFallback(temp.toPath(), target.toPath())
-  }
-
   /**
-   * Stages a plugin jar in .paperplane/ (not plugins/) so Paper doesn't delete it. Used in
-   * hot-reload mode so the companion can roll back to the original on failure. Returns the absolute
-   * path to the staged file.
+   * Stages the user's plugin JAR in `.paperplane/staged/`. Paper never sees this directory —
+   * the companion (acting as host) loads the JAR via `InnerPluginHost`. Returns the absolute path.
    */
-  open fun stagePlugin(jarPath: File): String {
-    val stageDir = File(serverDir, ".paperplane")
-    stageDir.mkdirs()
-    val staged = File(stageDir, "${jarPath.name}.new")
-    jarPath.copyTo(staged, overwrite = true)
+  open fun copyPlugin(jarPath: File): String {
+    val stageDir = File(serverDir, ".paperplane/staged").apply { mkdirs() }
+    val staged = File(stageDir, jarPath.name)
+    val temp = File(stageDir, ".${jarPath.name}.tmp")
+    jarPath.copyTo(temp, overwrite = true)
+    atomicMoveOrFallback(temp.toPath(), staged.toPath())
     return staged.absolutePath
   }
 
-  open fun copyCompanion() {
-    extractResource("paperplane-companion.bin", File(pluginsDir, "paperplane-companion.jar"))
+  /**
+   * Extracts the embedded companion JAR, rewriting its `plugin.yml` to inherit the user's
+   * [depend] / [softdepend] declarations. Paper resolves load order at boot from `plugins/` —
+   * since the user's plugin is no longer in there, we need the companion to claim those depends
+   * on the user's behalf.
+   */
+  open fun copyCompanion(depend: List<String> = emptyList(), softdepend: List<String> = emptyList()) {
+    val target = File(pluginsDir, "paperplane-companion.jar")
+    val source =
+        javaClass.classLoader.getResourceAsStream("paperplane-companion.bin")
+            ?: throw IOException(
+                "Resource 'paperplane-companion.bin' not found in CLI jar — corrupted build?")
+    val sourceBytes = source.use { it.readAllBytes() }
+    CompanionJarRewriter.rewriteFromBytes(sourceBytes, target, depend, softdepend)
   }
 
   /**

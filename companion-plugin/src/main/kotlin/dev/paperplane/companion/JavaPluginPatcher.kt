@@ -25,7 +25,7 @@ import org.objectweb.asm.Opcodes
  * **What the patch does**: Replaces the throw path with an early return. When the classloader IS a
  * PluginClassLoader (normal server loading), the original `initialize(this)` call is preserved.
  * When it's NOT (dev-mode loading), the constructor simply returns —
- * [PaperInternals.initializePlugin] handles the JavaPlugin field setup separately.
+ * `InnerPluginHost` handles the JavaPlugin field setup separately via `ReflectionProbe`.
  */
 object JavaPluginPatcher {
 
@@ -110,7 +110,7 @@ object JavaPluginPatcher {
  * if (cl instanceof PluginClassLoader) {
  *     ((PluginClassLoader) cl).initialize(this);
  * }
- * // else: just return — PaperInternals handles setup
+ * // else: just return — InnerPluginHost handles setup via ReflectionProbe
  * ```
  */
 internal class JavaPluginTransformer : ClassFileTransformer {

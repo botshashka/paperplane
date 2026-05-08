@@ -38,16 +38,12 @@ class FakePaperServerManager(
     calls += "configureVelocityForwarding"
   }
 
-  override fun copyPlugin(jarPath: File) {
+  override fun copyPlugin(jarPath: File): String {
     calls += "copyPlugin(${jarPath.name})"
+    return "/fake/staged/${jarPath.name}"
   }
 
-  override fun stagePlugin(jarPath: File): String {
-    calls += "stagePlugin(${jarPath.name})"
-    return "/fake/staged/${jarPath.name}.new"
-  }
-
-  override fun copyCompanion() {
+  override fun copyCompanion(depend: List<String>, softdepend: List<String>) {
     calls += "copyCompanion"
   }
 

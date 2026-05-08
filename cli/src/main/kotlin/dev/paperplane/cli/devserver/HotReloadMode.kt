@@ -169,68 +169,59 @@ internal open class HotReloadMode(
   private fun triggerReload(metadata: ProjectMetadata, changes: ClassChanges) {
     val ppDir = File(serverManager.serverDir, ".paperplane")
     ppDir.mkdirs()
-    File(ppDir, "reload-complete").delete()
-    File(ppDir, "reload-failed").delete()
+    LoadRequest.completeFlag(serverManager.serverDir).delete()
+    LoadRequest.failedFlag(serverManager.serverDir).delete()
 
-    val fastMeta = cachedFastMeta
-    if (fastMeta != null && fastMeta.classesDir.isNotEmpty()) {
-      triggerDirectoryReload(metadata, fastMeta, changes)
-    } else {
-      triggerJarReload(metadata)
-    }
-  }
-
-  private fun triggerDirectoryReload(
-      metadata: ProjectMetadata,
-      fastMeta: ProjectMetadata,
-      changes: ClassChanges,
-  ) {
-    val allDirs: List<String> =
-        fastMeta.effectiveClassesDirs + listOf(fastMeta.resourcesDir) + fastMeta.runtimeClasspath
-
-    val strategy =
-        if (changes.noNewOrRemovedClasses && changes.modified.isNotEmpty()) ReloadStrategy.HOTSWAP
-        else ReloadStrategy.DIRECTORY
-    session.ui.info(
-        "Strategy:",
-        if (strategy == ReloadStrategy.HOTSWAP) "hotswap (${changes.modified.size} modified)"
-        else "directory reload",
-    )
-
-    val statusExtra =
-        mutableMapOf<String, Any>(
-            "pluginName" to metadata.pluginName,
-            "jarFileName" to File(metadata.jarPath).name,
-            "reloadStrategy" to strategy.key,
-            "buildOutputDirs" to allDirs,
-        )
-    if (strategy == ReloadStrategy.HOTSWAP) {
-      statusExtra["changedClasses"] = changes.modified
-    }
-    serverManager.writeCompanionStatus("reloading", statusExtra)
-  }
-
-  private fun triggerJarReload(metadata: ProjectMetadata) {
-    session.ui.info("Strategy:", "jar (fallback)")
+    // Always restage the user JAR so the host can fall back to a JAR load if directory load fails.
     val builtJar = File(session.projectDir, metadata.jarPath)
     if (!builtJar.exists()) session.gradle.build()
-    val stagedName = serverManager.stagePlugin(builtJar)
-    serverManager.writeCompanionStatus(
-        "reloading",
-        mapOf(
-            "pluginName" to metadata.pluginName,
-            "jarFileName" to builtJar.name,
-            "pendingJar" to stagedName,
+    val stagedJarPath = serverManager.copyPlugin(builtJar)
+
+    val fastMeta = cachedFastMeta
+    val classesDirs: List<String>
+    val resourcesDir: String
+    val runtimeClasspath: List<String>
+    val changedClasses: List<String>
+
+    if (fastMeta != null && fastMeta.classesDir.isNotEmpty()) {
+      classesDirs = fastMeta.effectiveClassesDirs
+      resourcesDir = fastMeta.resourcesDir
+      runtimeClasspath = fastMeta.runtimeClasspath
+      changedClasses =
+          if (changes.noNewOrRemovedClasses && changes.modified.isNotEmpty()) changes.modified
+          else emptyList()
+      session.ui.info(
+          "Strategy:",
+          if (changedClasses.isNotEmpty()) "hotswap (${changes.modified.size} modified)"
+          else "directory reload",
+      )
+    } else {
+      classesDirs = emptyList()
+      resourcesDir = ""
+      runtimeClasspath = emptyList()
+      changedClasses = emptyList()
+      session.ui.info("Strategy:", "jar (fallback)")
+    }
+
+    LoadRequest.write(
+        serverManager.serverDir,
+        LoadRequest(
+            requestId = LoadRequest.newId(),
+            jarPath = stagedJarPath,
+            pluginName = metadata.pluginName,
+            classesDirs = classesDirs,
+            resourcesDir = resourcesDir,
+            runtimeClasspath = runtimeClasspath,
+            changedClasses = changedClasses,
         ),
     )
   }
 
   private fun waitAndReport(metadata: ProjectMetadata, totalStart: Long): PhaseEnd {
-    val ppDir = File(serverManager.serverDir, ".paperplane")
     val reloadStart = System.currentTimeMillis()
     val success =
         session.ui.spin("Reloading ${metadata.pluginName}...") {
-          waitForReloadResult(ppDir, timeoutMs = RELOAD_TIMEOUT_MS)
+          waitForReloadResult(serverManager.serverDir, timeoutMs = RELOAD_TIMEOUT_MS)
         }
     val reloadDuration = session.formatDuration(System.currentTimeMillis() - reloadStart)
 
@@ -247,9 +238,9 @@ internal open class HotReloadMode(
     }
   }
 
-  private fun waitForReloadResult(ppDir: File, timeoutMs: Long): Boolean {
-    val completeFlag = File(ppDir, "reload-complete")
-    val failedFlag = File(ppDir, "reload-failed")
+  private fun waitForReloadResult(serverDir: File, timeoutMs: Long): Boolean {
+    val completeFlag = LoadRequest.completeFlag(serverDir)
+    val failedFlag = LoadRequest.failedFlag(serverDir)
     val start = System.currentTimeMillis()
     while (System.currentTimeMillis() - start < timeoutMs) {
       if (completeFlag.exists()) {
