@@ -203,5 +203,5 @@ class BuildStatusBar(private val plugin: JavaPlugin, private val host: InnerPlug
     }
   }
 
-  private fun serverRoot(): File = plugin.dataFolder.parentFile.parentFile
+  private fun serverRoot(): File = plugin.dataFolder.absoluteFile.parentFile.parentFile
 }
