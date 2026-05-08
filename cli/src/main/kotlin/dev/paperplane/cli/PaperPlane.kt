@@ -8,6 +8,7 @@ import com.github.ajalt.clikt.core.subcommands
 import com.github.ajalt.clikt.output.MordantHelpFormatter
 import com.github.ajalt.mordant.rendering.TextColors
 import com.github.ajalt.mordant.rendering.TextStyles
+import dev.paperplane.cli.commands.BuildCommand
 import dev.paperplane.cli.commands.CleanCommand
 import dev.paperplane.cli.commands.CreateCommand
 import dev.paperplane.cli.commands.DevCommand
@@ -70,6 +71,7 @@ fun main(args: Array<String>) {
       info("dev", "Start dev server with file watching")
       info("create", "Scaffold a new Paper plugin project")
       info("init", "Add PaperPlane to an existing project")
+      info("build", "Build the deployable plugin jar")
       info("test", "Run tests via Gradle")
       info("format", "Format source code with Spotless")
       info("clean", "Clean .paperplane directory")
@@ -89,6 +91,7 @@ fun main(args: Array<String>) {
           CreateCommand(ui, prompts),
           InitCommand(ui),
           DevCommand(ui, prompts),
+          BuildCommand(ui),
           TestCommand(ui),
           FormatCommand(ui),
           CleanCommand(ui, prompts),

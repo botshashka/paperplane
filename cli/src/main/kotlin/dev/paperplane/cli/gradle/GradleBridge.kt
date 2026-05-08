@@ -60,6 +60,8 @@ open class GradleBridge(private val projectDir: File, private val ui: TerminalUI
 
   open fun build(): Boolean = runTask("jar")
 
+  open fun clean(): Boolean = runTask("clean")
+
   fun compileOnly(): Boolean = runTask("classes")
 
   private fun runTask(taskName: String): Boolean {

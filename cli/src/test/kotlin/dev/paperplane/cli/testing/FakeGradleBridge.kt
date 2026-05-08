@@ -17,6 +17,7 @@ class FakeGradleBridge(
     projectDir: File,
     ui: TerminalUI,
     var nextBuildResult: Boolean = true,
+    var nextCleanResult: Boolean = true,
     var nextFormatResult: GradleBridge.FormatResult = GradleBridge.FormatResult(success = true),
     var nextTestResult: Boolean = true,
     var nextMetadata: ProjectMetadata? =
@@ -43,6 +44,11 @@ class FakeGradleBridge(
   override fun build(): Boolean {
     calls += "build"
     return nextBuildResult
+  }
+
+  override fun clean(): Boolean {
+    calls += "clean"
+    return nextCleanResult
   }
 
   override fun format(check: Boolean): GradleBridge.FormatResult {
