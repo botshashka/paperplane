@@ -15,9 +15,55 @@ internal open class HotReloadMode(
     private val serverManager: PaperServerManager =
         PaperServerManager(File(session.ppDir, "server"), session.downloader, session.ui),
 ) {
-  companion object {
+  internal companion object {
     private const val RELOAD_TIMEOUT_MS = 10_000L
     private const val RELOAD_POLL_INTERVAL_MS = 100L
+
+    /**
+     * Pure helper: build a [LoadRequest] from a rebuild's inputs. Extracted so the strategy
+     * selection (HOTSWAP vs DIRECTORY vs JAR) can be tested without standing up a full
+     * HotReloadMode.
+     *
+     * Strategy selection rules:
+     * - No fastMeta or no classesDir → JAR fallback (empty classesDirs, empty changedClasses).
+     * - Have fastMeta + only modified classes (no add/remove) → HOTSWAP (changedClasses populated).
+     * - Have fastMeta + structural change → DIRECTORY (classesDirs populated, changedClasses empty).
+     */
+    internal fun buildLoadRequest(
+        metadata: ProjectMetadata,
+        fastMeta: ProjectMetadata?,
+        changes: ClassChanges,
+        stagedJarPath: String,
+    ): LoadRequest {
+      val classesDirs: List<String>
+      val resourcesDir: String
+      val runtimeClasspath: List<String>
+      val changedClasses: List<String>
+
+      if (fastMeta != null && fastMeta.classesDir.isNotEmpty()) {
+        classesDirs = fastMeta.effectiveClassesDirs
+        resourcesDir = fastMeta.resourcesDir
+        runtimeClasspath = fastMeta.runtimeClasspath
+        changedClasses =
+            if (changes.noNewOrRemovedClasses && changes.modified.isNotEmpty()) changes.modified
+            else emptyList()
+      } else {
+        classesDirs = emptyList()
+        resourcesDir = ""
+        runtimeClasspath = emptyList()
+        changedClasses = emptyList()
+      }
+
+      return LoadRequest(
+          requestId = LoadRequest.newId(),
+          jarPath = stagedJarPath,
+          pluginName = metadata.pluginName,
+          classesDirs = classesDirs,
+          resourcesDir = resourcesDir,
+          runtimeClasspath = runtimeClasspath,
+          changedClasses = changedClasses,
+      )
+    }
   }
 
   private var buildSnapshot: BuildSnapshot? = null
@@ -177,44 +223,15 @@ internal open class HotReloadMode(
     if (!builtJar.exists()) session.gradle.build()
     val stagedJarPath = serverManager.copyPlugin(builtJar)
 
-    val fastMeta = cachedFastMeta
-    val classesDirs: List<String>
-    val resourcesDir: String
-    val runtimeClasspath: List<String>
-    val changedClasses: List<String>
-
-    if (fastMeta != null && fastMeta.classesDir.isNotEmpty()) {
-      classesDirs = fastMeta.effectiveClassesDirs
-      resourcesDir = fastMeta.resourcesDir
-      runtimeClasspath = fastMeta.runtimeClasspath
-      changedClasses =
-          if (changes.noNewOrRemovedClasses && changes.modified.isNotEmpty()) changes.modified
-          else emptyList()
-      session.ui.info(
-          "Strategy:",
-          if (changedClasses.isNotEmpty()) "hotswap (${changes.modified.size} modified)"
-          else "directory reload",
-      )
-    } else {
-      classesDirs = emptyList()
-      resourcesDir = ""
-      runtimeClasspath = emptyList()
-      changedClasses = emptyList()
-      session.ui.info("Strategy:", "jar (fallback)")
+    val request = buildLoadRequest(metadata, cachedFastMeta, changes, stagedJarPath)
+    when {
+      request.classesDirs.isEmpty() ->
+          session.ui.info("Strategy:", "jar (fallback)")
+      request.changedClasses.isNotEmpty() ->
+          session.ui.info("Strategy:", "hotswap (${changes.modified.size} modified)")
+      else -> session.ui.info("Strategy:", "directory reload")
     }
-
-    LoadRequest.write(
-        serverManager.serverDir,
-        LoadRequest(
-            requestId = LoadRequest.newId(),
-            jarPath = stagedJarPath,
-            pluginName = metadata.pluginName,
-            classesDirs = classesDirs,
-            resourcesDir = resourcesDir,
-            runtimeClasspath = runtimeClasspath,
-            changedClasses = changedClasses,
-        ),
-    )
+    LoadRequest.write(serverManager.serverDir, request)
   }
 
   private fun waitAndReport(metadata: ProjectMetadata, totalStart: Long): PhaseEnd {

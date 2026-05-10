@@ -1,11 +1,15 @@
 package dev.paperplane.companion.host
 
 import java.util.logging.Logger
+import org.bukkit.command.PluginCommand
 import org.bukkit.plugin.PluginDescriptionFile
 import org.bukkit.plugin.java.JavaPlugin
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -130,6 +134,50 @@ class CommandRegistrarTest {
     registrar.apply(plugin, description("Fly" to mapOf<String, Any>()))
     assertTrue(registrar.registered().contains("fly"))
     assertFalse(registrar.registered().contains("Fly"))
+  }
+
+  // ── reload across plugin instance change ────────────────────────────
+
+  @Test
+  fun `clear then apply on new plugin instance fully re-registers commands`() {
+    // Reload semantics: same plugin name but a new JavaPlugin instance (fresh classloader).
+    val v1 = MockBukkit.createMockPlugin("MyPlugin")
+    val v1Registrar = CommandRegistrar(server, Logger.getLogger("v1"))
+    v1Registrar.apply(v1, description("fly" to mapOf<String, Any>()))
+    val v1Cmd = server.commandMap.getCommand("fly") as PluginCommand
+    assertSame(v1, v1Cmd.plugin)
+
+    v1Registrar.clear()
+
+    val v2 = MockBukkit.createMockPlugin("MyPluginV2")
+    val v2Registrar = CommandRegistrar(server, Logger.getLogger("v2"))
+    v2Registrar.apply(v2, description("fly" to mapOf<String, Any>()))
+    val v2Cmd = server.commandMap.getCommand("fly") as PluginCommand
+    assertSame(
+        v2,
+        v2Cmd.plugin,
+        "After clear+apply, the command must be owned by the new plugin instance",
+    )
+    assert(v1Cmd !== v2Cmd) { "Different registrar instances must produce different commands" }
+  }
+
+  @Test
+  fun `aliases are unregistered fully on removal`() {
+    registrar.apply(
+        plugin,
+        description("fly" to mapOf("aliases" to listOf("flight", "f"))),
+    )
+    // Aliases should be discoverable.
+    assertNotNull(server.commandMap.getCommand("flight"))
+    assertNotNull(server.commandMap.getCommand("f"))
+
+    registrar.apply(plugin, description())
+    assertNull(server.commandMap.getCommand("fly"))
+    assertNull(
+        server.commandMap.getCommand("flight"),
+        "alias must be removed alongside primary name",
+    )
+    assertNull(server.commandMap.getCommand("f"), "alias must be removed alongside primary name")
   }
 
   // ── helpers ─────────────────────────────────────────────────────────

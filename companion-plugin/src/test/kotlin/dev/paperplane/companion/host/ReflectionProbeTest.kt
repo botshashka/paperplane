@@ -89,6 +89,61 @@ class ReflectionProbeTest {
     assertEquals("classLoader", fields.classLoader.name)
   }
 
+  // ── Field/method shape pinning ──────────────────────────────────────
+
+  @Test
+  fun `init method has the expected six-parameter signature`() {
+    // This test pins the contract: if Paper ever changes JavaPlugin.init's parameters, our
+    // resolution path silently returns null and we fall back to fields. This test fails when
+    // probe.javaPluginInit is unexpectedly null.
+    val spm = SimplePluginManager(server, SimpleCommandMap(server, mutableMapOf()))
+    val probe = ReflectionProbe.probe(FakeServerWithSpm(server, spm))
+
+    val init = probe.javaPluginInit!!
+    val params = init.parameterTypes
+    assertEquals(6, params.size, "init() must have 6 params; signature changed otherwise")
+    assertEquals("PluginLoader", params[0].simpleName)
+    assertEquals("Server", params[1].simpleName)
+    assertEquals("PluginDescriptionFile", params[2].simpleName)
+    assertEquals("File", params[3].simpleName)
+    assertEquals("File", params[4].simpleName)
+    assertEquals("ClassLoader", params[5].simpleName)
+    assertTrue(init.isAccessible, "init must be made accessible at probe time")
+  }
+
+  @Test
+  fun `lookupNames field is a Map`() {
+    val spm = SimplePluginManager(server, SimpleCommandMap(server, mutableMapOf()))
+    val probe = ReflectionProbe.probe(FakeServerWithSpm(server, spm))
+
+    val f = probe.spmLookupNamesField
+    assertTrue(
+        java.util.Map::class.java.isAssignableFrom(f.type),
+        "lookupNames must be a Map; SPM signature changed otherwise. Got: ${f.type}",
+    )
+    assertTrue(f.isAccessible, "lookupNames must be made accessible at probe time")
+  }
+
+  @Test
+  fun `JavaPlugin private fields are not final-immutable - we must be able to set them`() {
+    // The fallback path mutates these fields. Verify they aren't `final` in a way that would block
+    // reflective set. `Field.set` works even for `private final` since JDK 9 if accessible, but if
+    // a future JavaPlugin moves to records or makes them deeply final-on-non-class, this catches
+    // it.
+    val spm = SimplePluginManager(server, SimpleCommandMap(server, mutableMapOf()))
+    val probe = ReflectionProbe.probe(FakeServerWithSpm(server, spm))
+    val fields = probe.javaPluginFields!!
+
+    // None should be static (they're per-instance).
+    for (f in
+        listOf(fields.server, fields.description, fields.dataFolder, fields.file, fields.classLoader)) {
+      assertTrue(
+          !java.lang.reflect.Modifier.isStatic(f.modifiers),
+          "${f.name} must be instance field; got static",
+      )
+    }
+  }
+
   // ── helpers ──────────────────────────────────────────────────────────
 
   /** A wrapper PluginManager that holds an SPM in a private field. */

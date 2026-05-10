@@ -443,6 +443,52 @@ class PaperServerManagerTest {
   }
 
   @Test
+  fun `copyCompanion writes companion jar with depends inherited into plugin yml`() {
+    val manager = createManager()
+    manager.configure()
+
+    manager.copyCompanion(
+        depend = listOf("WorldGuard", "Vault"),
+        softdepend = listOf("PlaceholderAPI"),
+    )
+
+    val companionJar = File(manager.serverDir, "plugins/paperplane-companion.jar")
+    assertTrue(companionJar.exists(), "companion jar must land in plugins/")
+
+    val yml =
+        java.util.jar.JarFile(companionJar).use { jar ->
+          val entry =
+              jar.getJarEntry("plugin.yml")
+                  ?: error("plugin.yml missing inside companion jar")
+          jar.getInputStream(entry).bufferedReader().readText()
+        }
+    assertTrue(
+        yml.contains("depend: [WorldGuard, Vault]"),
+        "companion plugin.yml must inherit user's depend; got: $yml",
+    )
+    assertTrue(
+        yml.contains("softdepend: [PlaceholderAPI]"),
+        "companion plugin.yml must inherit user's softdepend; got: $yml",
+    )
+    assertTrue(yml.contains("name: PaperPlane"), "original companion fields must be preserved")
+  }
+
+  @Test
+  fun `copyCompanion with no depends leaves plugin yml without depend lines`() {
+    val manager = createManager()
+    manager.configure()
+
+    manager.copyCompanion(depend = emptyList(), softdepend = emptyList())
+
+    val companionJar = File(manager.serverDir, "plugins/paperplane-companion.jar")
+    val yml =
+        java.util.jar.JarFile(companionJar).use { jar ->
+          jar.getInputStream(jar.getJarEntry("plugin.yml")).bufferedReader().readText()
+        }
+    assertFalse(yml.contains("depend:"), "no depends → no depend line; got: $yml")
+  }
+
+  @Test
   fun `copyPlugin leaves no temp file`() {
     val manager = createManager()
     manager.configure()

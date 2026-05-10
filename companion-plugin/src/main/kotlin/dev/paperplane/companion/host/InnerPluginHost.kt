@@ -33,7 +33,7 @@ import org.bukkit.plugin.java.JavaPlugin
  * Reload is teardown + load. Teardown is entirely public API except for the symmetric
  * `lookupNames` removal.
  */
-class InnerPluginHost(
+open class InnerPluginHost(
     private val server: Server,
     private val parentClassLoader: ClassLoader,
     private val probe: ReflectionProbe,
@@ -54,21 +54,21 @@ class InnerPluginHost(
   private var active: Active? = null
 
   /** True when too many classloader leaks accumulated; CLI should fall back to blue/green. */
-  val shouldForceBlueGreen: Boolean
+  open val shouldForceBlueGreen: Boolean
     get() = consecutiveLeaks >= MAX_CONSECUTIVE_LEAKS
 
   /** The currently-loaded inner plugin, or `null` before first load / after shutdown. */
-  fun current(): JavaPlugin? = active?.plugin
+  open fun current(): JavaPlugin? = active?.plugin
 
   /** True when an inner plugin is currently loaded. */
-  fun isLoaded(): Boolean = active != null
+  open fun isLoaded(): Boolean = active != null
 
   /**
    * Top-level entry point: handle a [LoadRequest]. First request loads; subsequent requests
    * reload. Tear-down on failure does NOT happen automatically — the previous plugin remains
    * loaded if reload fails (matches the existing rollback semantics).
    */
-  fun handleRequest(request: HostLoadRequest): HostLoadResult {
+  open fun handleRequest(request: HostLoadRequest): HostLoadResult {
     val start = System.currentTimeMillis()
     return try {
       if (active == null) {
@@ -92,7 +92,7 @@ class InnerPluginHost(
   }
 
   /** Tear down any currently-loaded inner. Idempotent. Called by companion `onDisable`. */
-  fun shutdown() {
+  open fun shutdown() {
     val a = active ?: return
     teardown(a)
     active = null

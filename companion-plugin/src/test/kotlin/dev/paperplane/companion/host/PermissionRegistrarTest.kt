@@ -120,6 +120,42 @@ class PermissionRegistrarTest {
     assertEquals(PermissionDefault.OP, opOnly.default)
   }
 
+  // ── re-register on spec change ──────────────────────────────────────
+
+  @Test
+  fun `apply with same name but different description re-registers`() {
+    val first =
+        PluginDescriptionFile(
+            ("name: MyPlugin\nmain: x\nversion: 1.0\npermissions:\n" +
+                "  my.fly:\n    description: Old description")
+                .byteInputStream(),
+        )
+    val second =
+        PluginDescriptionFile(
+            ("name: MyPlugin\nmain: x\nversion: 1.0\npermissions:\n" +
+                "  my.fly:\n    description: New description")
+                .byteInputStream(),
+        )
+    registrar.apply(first)
+    val v1 = server.pluginManager.getPermission("my.fly")!!
+    assertEquals("Old description", v1.description)
+
+    registrar.apply(second)
+    val v2 = server.pluginManager.getPermission("my.fly")!!
+    assertEquals("New description", v2.description)
+    assert(v1 !== v2) { "Description change must replace the Permission instance" }
+  }
+
+  @Test
+  fun `clear after apply leaves pluginManager with no leftover permissions`() {
+    registrar.apply(description("a" to "A", "b" to "B", "c" to "C"))
+    assertEquals(3, registrar.registered().size)
+    registrar.clear()
+    assertNull(server.pluginManager.getPermission("a"))
+    assertNull(server.pluginManager.getPermission("b"))
+    assertNull(server.pluginManager.getPermission("c"))
+  }
+
   // ── children cascade ────────────────────────────────────────────────
 
   @Test

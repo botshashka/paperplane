@@ -12,7 +12,11 @@ import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.plugin.java.JavaPlugin
 import org.bukkit.scheduler.BukkitTask
 
-class BuildStatusBar(private val plugin: JavaPlugin, private val host: InnerPluginHost) {
+class BuildStatusBar(
+    private val plugin: JavaPlugin,
+    private val host: InnerPluginHost,
+    private val serverRoot: File = plugin.dataFolder.absoluteFile.parentFile.parentFile,
+) {
   companion object {
     private const val POLL_INTERVAL_TICKS = 5L
   }
@@ -62,7 +66,7 @@ class BuildStatusBar(private val plugin: JavaPlugin, private val host: InnerPlug
   // ── Build status (companion-status.json) ───────────────────────────
 
   private fun pollBuildStatus() {
-    val statusFile = File(serverRoot(), ".paperplane/companion-status.json")
+    val statusFile = File(serverRoot, ".paperplane/companion-status.json")
     if (!statusFile.exists()) return
     try {
       val json = gson.fromJson(statusFile.readText(), com.google.gson.JsonObject::class.java)
@@ -94,8 +98,11 @@ class BuildStatusBar(private val plugin: JavaPlugin, private val host: InnerPlug
 
   // ── Load request (load-request.json) ───────────────────────────────
 
+  /** Visible for tests: drives one polling iteration without the Bukkit scheduler. */
+  internal fun pollLoadRequestForTest() = pollLoadRequest()
+
   private fun pollLoadRequest() {
-    val requestFile = File(serverRoot(), ".paperplane/load-request.json")
+    val requestFile = File(serverRoot, ".paperplane/load-request.json")
     if (!requestFile.exists()) return
     if (inflightRequest) return
 
@@ -179,7 +186,7 @@ class BuildStatusBar(private val plugin: JavaPlugin, private val host: InnerPlug
       for (world in plugin.server.worlds) {
         world.save()
       }
-      val flagFile = File(serverRoot(), ".paperplane/save-complete")
+      val flagFile = File(serverRoot, ".paperplane/save-complete")
       flagFile.parentFile.mkdirs()
       flagFile.writeText(System.currentTimeMillis().toString())
     } catch (e: IOException) {
@@ -189,7 +196,7 @@ class BuildStatusBar(private val plugin: JavaPlugin, private val host: InnerPlug
 
   private fun writeFlag(name: String, content: String) {
     try {
-      val ppDir = File(serverRoot(), ".paperplane").apply { mkdirs() }
+      val ppDir = File(serverRoot, ".paperplane").apply { mkdirs() }
       File(ppDir, name).writeText(content)
     } catch (e: IOException) {
       plugin.logger.warning("Failed to write $name flag: ${e.message}")
@@ -203,5 +210,4 @@ class BuildStatusBar(private val plugin: JavaPlugin, private val host: InnerPlug
     }
   }
 
-  private fun serverRoot(): File = plugin.dataFolder.absoluteFile.parentFile.parentFile
 }
