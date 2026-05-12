@@ -5,12 +5,13 @@ import org.bukkit.Server
 /**
  * Notifies Paper that the command tree changed so connected clients see the update.
  *
- * `syncCommands()` is on `CraftServer` (Paper-internal) but not on the Bukkit `Server` interface
- * — there's no public-API substitute. Calling it via reflection is unavoidable.
+ * Calls `CraftServer#syncCommands()` reflectively (it's not on the Bukkit `Server` interface).
+ * That call rebuilds the server-side Brigadier dispatcher AND pushes `ClientboundCommandsPacket`
+ * to every online player, so we don't need a separate per-player `updateCommands()` loop — adding
+ * one races with Paper's own send on the shared dispatcher tree and produces a `CME`.
  *
- * It's best-effort: if the method has been renamed or the call fails (e.g. during a partially
- * torn-down server), tab-complete may show stale state but the registered commands still execute
- * correctly. We don't fail the host on a missed sync.
+ * Best-effort: failures (e.g. partially torn-down server) are swallowed so a missed refresh never
+ * takes down the host. The worst case is stale tab-complete until the next sync.
  */
 internal object BrigadierSync {
   fun sync(server: Server) {
