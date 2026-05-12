@@ -81,14 +81,6 @@ class InnerPluginHostFullLoadTest {
             probe,
             Logger.getLogger("InnerPluginHostFullLoadTest"),
         )
-    // Make InnerPluginHost use the no-arg ctor path (which runs field initializers) instead of
-    // Unsafe.allocateInstance. The patcher itself ran in the @BeforeEach above; we just need to
-    // flip the static flag so the host trusts the patch is in place.
-    val patchedField =
-        Class.forName("dev.paperplane.companion.JavaPluginPatcher").getDeclaredField("isPatched")
-    patchedField.isAccessible = true
-    patchedField.set(null, true)
-
     TestInnerPluginCounters.reset()
   }
 

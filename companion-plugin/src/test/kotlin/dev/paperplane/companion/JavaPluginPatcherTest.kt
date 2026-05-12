@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.objectweb.asm.ClassReader
@@ -195,10 +196,13 @@ class JavaPluginPatcherTest {
   }
 
   @Test
-  fun `patchIfNeeded returns false when agent not loaded`() {
-    // In test env there's no Java agent
-    assertFalse(JavaPluginPatcher.patchIfNeeded())
-    assertFalse(JavaPluginPatcher.isPatched)
+  fun `patchIfNeeded throws AgentNotAvailableException when agent not loaded`() {
+    // The test harness installs ByteBuddy's agent for InnerPluginHostFullLoadTest, but
+    // PaperPlane's own agent (dev.paperplane.agent.PaperPlaneAgent) is absent — so the
+    // class lookup inside resolveInstrumentation fails and patchIfNeeded must surface that
+    // loudly rather than silently no-op'ing.
+    val ex = assertThrows(AgentNotAvailableException::class.java) { JavaPluginPatcher.patchIfNeeded() }
+    assertNotNull(ex.message)
   }
 
   @Test

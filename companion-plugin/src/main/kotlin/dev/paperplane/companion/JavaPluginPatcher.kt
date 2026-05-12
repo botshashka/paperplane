@@ -17,10 +17,8 @@ import org.objectweb.asm.Opcodes
  *
  * **Why this is needed**: Directory-based hot-reload uses [DevPluginClassLoader] (which extends
  * URLClassLoader, not PluginClassLoader). JavaPlugin's constructor checks
- * `this.getClass().getClassLoader() instanceof PluginClassLoader` and throws if it fails. Without
- * this patch, we'd have to use Unsafe.allocateInstance() which bypasses ALL constructors and field
- * initializers — causing NPEs for any plugin with object-type field initializers (e.g.,
- * `AtomicInteger`, `HashMap`).
+ * `this.getClass().getClassLoader() instanceof PluginClassLoader` and throws if it fails. The
+ * companion requires the PaperPlane javaagent to perform this retransform.
  *
  * **What the patch does**: Replaces the throw path with an early return. When the classloader IS a
  * PluginClassLoader (normal server loading), the original `initialize(this)` call is preserved.
@@ -31,10 +29,6 @@ object JavaPluginPatcher {
 
   private val logger = Logger.getLogger("PaperPlane")
 
-  @Volatile
-  var isPatched: Boolean = false
-    private set
-
   /**
    * Returns the agent's [Instrumentation] handle, or `null` if the agent isn't loaded. Exposed so
    * other components (e.g. the host's NMS-class probe) can reuse the agent's API without
@@ -43,30 +37,24 @@ object JavaPluginPatcher {
   fun instrumentation(): Instrumentation? = resolveInstrumentation()
 
   /**
-   * Patches JavaPlugin's constructor if Instrumentation is available. Safe to call multiple times —
-   * only patches once.
-   *
-   * @return true if patched (now or previously), false if agent not available
+   * Patches JavaPlugin's constructor via the PaperPlane javaagent. Throws
+   * [AgentNotAvailableException] if the agent isn't loaded or the retransform fails — there is no
+   * supported configuration in which the companion can do its job without this patch, so failing
+   * fast is correct.
    */
-  fun patchIfNeeded(): Boolean {
-    if (isPatched) return true
-
-    val inst = resolveInstrumentation()
-    if (inst == null) {
-      logger.warning(
-          "JavaPluginPatcher: Instrumentation not available (agent not loaded). " +
-              "Directory-based reload will fall back to Unsafe.allocateInstance()."
-      )
-      return false
-    }
+  fun patchIfNeeded() {
+    val inst =
+        resolveInstrumentation()
+            ?: throw AgentNotAvailableException(
+                "PaperPlane javaagent not loaded. Re-run with the agent attached " +
+                    "(the CLI wires -javaagent automatically; verify with 'ppl dev --version'). " +
+                    "See https://github.com/botshashka/paperplane/issues if this persists.")
 
     val transformer = JavaPluginTransformer()
     inst.addTransformer(transformer, true)
-    return try {
+    try {
       inst.retransformClasses(org.bukkit.plugin.java.JavaPlugin::class.java)
-      isPatched = true
       logger.info("JavaPlugin constructor patched for dev-mode class loading")
-      true
     } catch (t: Throwable) {
       // Catch Throwable: JVMTI wraps verifier failures as InternalError, not VerifyError,
       // and future failure modes may use yet other types. Walk the cause chain so the real
@@ -80,9 +68,7 @@ object JavaPluginPatcher {
         cur = cur.cause
         depth++
       }
-      logger.warning(sb.toString())
-      t.stackTrace.take(5).forEach { logger.warning("  at $it") }
-      false
+      throw AgentNotAvailableException(sb.toString())
     } finally {
       inst.removeTransformer(transformer)
     }
@@ -98,6 +84,9 @@ object JavaPluginPatcher {
     }
   }
 }
+
+/** Thrown when the PaperPlane javaagent is missing or its retransform of JavaPlugin fails. */
+class AgentNotAvailableException(message: String) : RuntimeException(message)
 
 /**
  * ASM ClassFileTransformer that rewrites JavaPlugin's no-arg constructor.
@@ -124,7 +113,6 @@ internal class JavaPluginTransformer : ClassFileTransformer {
 
   companion object {
     private const val TARGET_CLASS = "org/bukkit/plugin/java/JavaPlugin"
-    private const val PCL_CLASS = "org/bukkit/plugin/java/PluginClassLoader"
   }
 
   override fun transform(

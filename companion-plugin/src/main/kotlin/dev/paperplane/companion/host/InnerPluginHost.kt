@@ -192,16 +192,7 @@ open class InnerPluginHost(
     val classLoader = DevPluginClassLoader(urls, parentClassLoader, server.pluginManager)
 
     val mainClass = classLoader.loadClass(description.main)
-    val plugin: JavaPlugin =
-        if (JavaPluginPatcher.isPatched) {
-          mainClass.getDeclaredConstructor().newInstance() as JavaPlugin
-        } else {
-          // Pre-Paper-1.21? JavaPluginPatcher couldn't transform the constructor. Fall back to
-          // Unsafe.allocateInstance which skips field initializers — risky but better than
-          // failing the load entirely.
-          logger.warning("JavaPlugin not patched — skipping field initializers via Unsafe.")
-          allocateInstanceUnsafely(mainClass) as JavaPlugin
-        }
+    val plugin = mainClass.getDeclaredConstructor().newInstance() as JavaPlugin
     return plugin to classLoader
   }
 
@@ -343,13 +334,6 @@ open class InnerPluginHost(
     } else {
       consecutiveLeaks = 0
     }
-  }
-
-  private fun allocateInstanceUnsafely(cls: Class<*>): Any {
-    val unsafeClass = Class.forName("sun.misc.Unsafe")
-    val unsafe = unsafeClass.getDeclaredField("theUnsafe").apply { isAccessible = true }.get(null)
-    val allocateInstance = unsafeClass.getMethod("allocateInstance", Class::class.java)
-    return allocateInstance.invoke(unsafe, cls)
   }
 
   private data class Active(

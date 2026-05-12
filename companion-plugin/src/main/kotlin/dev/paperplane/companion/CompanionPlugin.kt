@@ -53,6 +53,9 @@ class CompanionPlugin : JavaPlugin() {
       logger.severe(e.message)
       // Disable rather than throw — Bukkit catches throws here and prints stack noise.
       server.pluginManager.disablePlugin(this)
+    } catch (e: AgentNotAvailableException) {
+      logger.severe(e.message)
+      server.pluginManager.disablePlugin(this)
     } catch (
         @Suppress("TooGenericExceptionCaught") // Startup involves reflection, I/O, and server API
         e: Exception) {
