@@ -119,6 +119,58 @@ class FileWatcherTest {
   }
 
   @Test
+  fun `detects changes to extra files outside the watched dir`() {
+    val srcDir = File(tempDir, "src")
+    srcDir.mkdirs()
+    val buildFile = File(tempDir, "build.gradle.kts")
+    buildFile.writeText("// initial")
+
+    val changes = CopyOnWriteArrayList<List<String>>()
+    val latch = CountDownLatch(1)
+    val watcher =
+        FileWatcher(srcDir, debounceMs = 200, extraFiles = listOf(buildFile)) {
+          changes.add(it)
+          latch.countDown()
+        }
+    watcher.start()
+
+    Thread.sleep(600)
+    buildFile.writeText("// modified")
+
+    assertTrue(latch.await(5, TimeUnit.SECONDS), "Extra-file change should be detected")
+    watcher.stop()
+
+    val allChanged = changes.flatten()
+    assertTrue(
+        allChanged.any { it.endsWith("build.gradle.kts") },
+        "build.gradle.kts should appear in changes")
+  }
+
+  @Test
+  fun `extra files missing on disk are tolerated`() {
+    val srcDir = File(tempDir, "src")
+    srcDir.mkdirs()
+    val missing = File(tempDir, "does-not-exist.kts")
+    val present = File(tempDir, "build.gradle.kts")
+    present.writeText("// initial")
+
+    val changes = CopyOnWriteArrayList<List<String>>()
+    val latch = CountDownLatch(1)
+    val watcher =
+        FileWatcher(srcDir, debounceMs = 200, extraFiles = listOf(missing, present)) {
+          changes.add(it)
+          latch.countDown()
+        }
+    watcher.start()
+
+    Thread.sleep(600)
+    present.writeText("// modified")
+
+    assertTrue(latch.await(5, TimeUnit.SECONDS), "Present extra-file change should be detected")
+    watcher.stop()
+  }
+
+  @Test
   fun `detects file deletion`() {
     val srcDir = File(tempDir, "src")
     srcDir.mkdirs()

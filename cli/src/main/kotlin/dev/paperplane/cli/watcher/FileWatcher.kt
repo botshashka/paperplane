@@ -6,6 +6,7 @@ import java.io.File
 open class FileWatcher(
     private val watchDir: File,
     private val debounceMs: Long = 2000,
+    private val extraFiles: List<File> = emptyList(),
     protected val onChange: (List<String>) -> Unit,
 ) {
   companion object {
@@ -82,6 +83,11 @@ open class FileWatcher(
         .onEnter { !shouldIgnoreDir(it.name) }
         .filter { it.isFile && !shouldIgnore(it.name) }
         .forEach { result[normalizePath(it.absolutePath)] = it.lastModified() }
+    for (extra in extraFiles) {
+      if (extra.isFile) {
+        result[normalizePath(extra.absolutePath)] = extra.lastModified()
+      }
+    }
     return result
   }
 

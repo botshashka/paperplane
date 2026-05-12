@@ -50,6 +50,22 @@ internal class DevSession(
   }
 
   /**
+   * Build-config files watched alongside `src/`. A change in any of these regenerates `plugin.yml`
+   * (commands/permissions block) or alters dependencies, so it must trigger a rebuild — the same
+   * way a source edit does. Both Kotlin and Groovy DSL variants are listed; [FileWatcher] tolerates
+   * the ones that don't exist on disk.
+   */
+  private val buildConfigFiles: List<File>
+    get() =
+        listOf(
+            File(projectDir, "build.gradle.kts"),
+            File(projectDir, "build.gradle"),
+            File(projectDir, "settings.gradle.kts"),
+            File(projectDir, "settings.gradle"),
+            File(projectDir, "gradle.properties"),
+        )
+
+  /**
    * The live server + metadata pair shared between startup, fix recovery, and the main watch loop.
    */
   data class RunningState(val metadata: ProjectMetadata, val paperJar: File)
@@ -235,7 +251,7 @@ internal class DevSession(
     val srcDir = File(projectDir, "src")
     val recovered = LinkedBlockingQueue<RunningState>(1)
     val watcher =
-        FileWatcher(srcDir, config.dev.debounceMs) { changedFiles ->
+        FileWatcher(srcDir, config.dev.debounceMs, extraFiles = buildConfigFiles) { changedFiles ->
           ui.phase {
             val shortName = changedFiles.firstOrNull()?.let { File(it).name } ?: "files"
             change("Change detected: $shortName")
@@ -294,7 +310,7 @@ internal class DevSession(
   ) {
     val srcDir = File(projectDir, "src")
     val watcher =
-        FileWatcher(srcDir, config.dev.debounceMs) { changedFiles ->
+        FileWatcher(srcDir, config.dev.debounceMs, extraFiles = buildConfigFiles) { changedFiles ->
           ui.phase {
             val shortName = changedFiles.firstOrNull()?.let { File(it).name } ?: "files"
             val extra = if (changedFiles.size > 1) " (+${changedFiles.size - 1} more)" else ""

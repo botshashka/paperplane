@@ -15,7 +15,7 @@ class FakeFileWatcher(
     watchDir: File,
     debounceMs: Long = 0,
     onChange: (List<String>) -> Unit,
-) : FileWatcher(watchDir, debounceMs, onChange) {
+) : FileWatcher(watchDir, debounceMs, onChange = onChange) {
 
   /** Ordered log of `start` / `stop` calls. */
   val calls: MutableList<String> = mutableListOf()
