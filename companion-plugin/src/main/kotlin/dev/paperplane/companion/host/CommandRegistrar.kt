@@ -1,9 +1,10 @@
 package dev.paperplane.companion.host
 
+import java.lang.reflect.Constructor
 import java.util.logging.Logger
 import org.bukkit.Server
-import org.bukkit.command.PaperPlanePluginCommandFactory
 import org.bukkit.command.PluginCommand
+import org.bukkit.plugin.Plugin
 import org.bukkit.plugin.PluginDescriptionFile
 import org.bukkit.plugin.java.JavaPlugin
 
@@ -19,10 +20,21 @@ import org.bukkit.plugin.java.JavaPlugin
  * Tracks state per [JavaPlugin] instance because reload swaps the plugin reference. The previous
  * plugin's commands are torn down via [clear] before the new plugin's [apply] runs.
  *
- * `PluginCommand` is constructed via [PaperPlanePluginCommandFactory] (compile-time package
- * access) — no reflection.
+ * `PluginCommand`'s constructor is package-private to `org.bukkit.command`. A previous attempt
+ * dodged reflection by placing a helper class in that package for compile-time access, but Paper's
+ * `PluginClassLoader` refuses to load `org.bukkit.*` classes from plugin JARs — see
+ * [dev.paperplane.companion.ProtectedPackagesTest]. The standard escape hatch every Bukkit plugin
+ * framework uses is a cached reflective constructor; we do the same.
  */
 class CommandRegistrar(private val server: Server, private val logger: Logger) {
+
+  companion object {
+    private val pluginCommandCtor: Constructor<PluginCommand> =
+        PluginCommand::class
+            .java
+            .getDeclaredConstructor(String::class.java, Plugin::class.java)
+            .apply { isAccessible = true }
+  }
 
   /** Lowercase command name → registered command. Source of truth for the diff. */
   private val applied = mutableMapOf<String, PluginCommand>()
@@ -42,7 +54,7 @@ class CommandRegistrar(private val server: Server, private val logger: Logger) {
 
     for ((name, spec) in desired) {
       if (applied.containsKey(name)) continue // already registered, no churn
-      val cmd = PaperPlanePluginCommandFactory.create(name, plugin)
+      val cmd = pluginCommandCtor.newInstance(name, plugin)
       configureCommand(cmd, spec)
       val registered = server.commandMap.register(description.name, cmd)
       if (!registered) {
