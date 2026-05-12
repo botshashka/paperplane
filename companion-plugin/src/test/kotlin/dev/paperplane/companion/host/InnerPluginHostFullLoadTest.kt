@@ -173,6 +173,45 @@ class InnerPluginHostFullLoadTest {
     assertSame(second, lookup["reloadone"], "lookupNames must point at the new instance")
   }
 
+  // ── Reload rejects NMS-using plugins ────────────────────────────────
+
+  @Test
+  fun `reload is rejected when usesNmsClasses returns true`() {
+    // Build a host that pretends every loaded inner plugin touches NMS. The first load is a
+    // FRESH load — usesNmsClasses isn't checked there. The SECOND request enters reload(), which
+    // calls usesNmsClasses(active.plugin) before any teardown and must abort with a clear message.
+    val nmsHost =
+        object :
+            InnerPluginHost(
+                fakeServer,
+                javaClass.classLoader,
+                ReflectionProbe.probe(fakeServer),
+                Logger.getLogger("InnerPluginHostFullLoadTest.nms"),
+            ) {
+          override fun usesNmsClasses(plugin: JavaPlugin): Boolean = true
+        }
+
+    val first = nmsHost.handleRequest(makeLoadRequest("NmsCanary", classSuffix = "V1"))
+    assertTrue(first is HostLoadResult.Ok, "fresh load should succeed regardless of NMS heuristic")
+    val firstInstance = nmsHost.current()
+    assertNotNull(firstInstance)
+
+    val second = nmsHost.handleRequest(makeLoadRequest("NmsCanary", classSuffix = "V2"))
+    assertTrue(second is HostLoadResult.Failed, "reload must be rejected for NMS-using plugins")
+    assertTrue(
+        (second as HostLoadResult.Failed).message.contains("NMS"),
+        "rejection message should mention NMS, got: ${second.message}",
+    )
+
+    // The original instance must still be live — rejection happens BEFORE teardown.
+    assertSame(firstInstance, nmsHost.current(), "old instance must remain after reload rejection")
+    assertTrue(firstInstance!!.isEnabled, "old plugin must remain enabled after reload rejection")
+    assertEquals(1, TestInnerPluginCounters.enableCount.get(), "no second onEnable")
+    assertEquals(0, TestInnerPluginCounters.disableCount.get(), "no onDisable on rejection")
+
+    nmsHost.shutdown()
+  }
+
   // ── Failed load leaves no residue ───────────────────────────────────
 
   @Test

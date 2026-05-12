@@ -290,7 +290,7 @@ open class InnerPluginHost(
 
   // ── safety nets ─────────────────────────────────────────────────────
 
-  private fun usesNmsClasses(plugin: JavaPlugin): Boolean {
+  protected open fun usesNmsClasses(plugin: JavaPlugin): Boolean {
     val inst = JavaPluginPatcher.instrumentation() ?: return false
     return containsNmsClasses(inst, plugin.javaClass.classLoader)
   }
