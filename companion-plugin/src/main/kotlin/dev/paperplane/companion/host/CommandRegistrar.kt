@@ -25,8 +25,16 @@ import org.bukkit.plugin.java.JavaPlugin
  * `PluginClassLoader` refuses to load `org.bukkit.*` classes from plugin JARs — see
  * [dev.paperplane.companion.ProtectedPackagesTest]. The standard escape hatch every Bukkit plugin
  * framework uses is a cached reflective constructor; we do the same.
+ *
+ * Help-topic registration is delegated to [HelpMapWriter] alongside every `commandMap` write, so
+ * `/help` stays in sync with the currently-loaded inner plugin across hot-reload. The public
+ * `HelpMap` API is unsuitable on its own — see [HelpMapWriter] for why.
  */
-class CommandRegistrar(private val server: Server, private val logger: Logger) {
+class CommandRegistrar(
+    private val server: Server,
+    private val helpMapWriter: HelpMapWriter,
+    private val logger: Logger,
+) {
 
   companion object {
     private val pluginCommandCtor: Constructor<PluginCommand> =
@@ -62,6 +70,7 @@ class CommandRegistrar(private val server: Server, private val logger: Logger) {
             "Command '$name' could not be registered under '${description.name}' fallback prefix.")
       }
       applied[name] = cmd
+      helpMapWriter.register(cmd)
     }
 
     BrigadierSync.sync(server)
@@ -83,6 +92,7 @@ class CommandRegistrar(private val server: Server, private val logger: Logger) {
    * entries pointing at our [cmd] (covers aliases and the `pluginName:` prefix variants both).
    */
   private fun unregisterFully(cmd: PluginCommand) {
+    helpMapWriter.unregister(cmd)
     cmd.unregister(server.commandMap)
     val known = server.commandMap.knownCommands
     val keys = known.entries.filter { it.value === cmd }.map { it.key }

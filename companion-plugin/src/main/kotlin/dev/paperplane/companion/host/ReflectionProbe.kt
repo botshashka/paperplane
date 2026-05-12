@@ -3,7 +3,9 @@ package dev.paperplane.companion.host
 import java.io.File
 import java.lang.reflect.Field
 import java.lang.reflect.Method
+import java.lang.reflect.ParameterizedType
 import org.bukkit.Server
+import org.bukkit.help.HelpTopic
 import org.bukkit.plugin.PluginDescriptionFile
 import org.bukkit.plugin.PluginManager
 import org.bukkit.plugin.SimplePluginManager
@@ -16,7 +18,7 @@ import org.bukkit.plugin.java.JavaPlugin
  * [UnsupportedPaperVersionException] and refuse to start — better a clear error than partial
  * functionality.
  *
- * **The host's entire reflection footprint lives here.** Two reflection points:
+ * **The host's entire reflection footprint lives here.** Three reflection points:
  *
  * 1. **JavaPlugin init** — try the package-private
  *    `JavaPlugin.init(PluginLoader, Server, PluginDescriptionFile, File, File, ClassLoader)` first;
@@ -29,12 +31,21 @@ import org.bukkit.plugin.java.JavaPlugin
  *    `PaperPluginManagerImpl.getPlugin(name)` for cross-plugin dependency lookups. Symmetric
  *    add/remove on every host load/unload.
  *    Bukkit source: <https://hub.spigotmc.org/stash/projects/SPIGOT/repos/bukkit/browse/src/main/java/org/bukkit/plugin/SimplePluginManager.java>
+ *
+ * 3. **SimpleHelpMap.helpTopics** — `Map<String, HelpTopic>` consulted by `/help`. Paper's
+ *    `HelpMap.initializeCommands()` runs once during `enablePlugins(POSTWORLD)`, strictly before
+ *    the companion's first scheduler tick fires the host load, so inner-plugin commands miss the
+ *    one-shot pass. Public `HelpMap.addTopic` skips existing keys and there is no `removeTopic`,
+ *    so direct map mutation is the only way to keep `/help` in sync across hot-reload. Resolved
+ *    by generic signature (`Map<String, HelpTopic>`), not field name — survives a rename.
+ *    CraftBukkit source: <https://github.com/PaperMC/Paper/blob/main/paper-server/src/main/java/org/bukkit/craftbukkit/help/SimpleHelpMap.java>
  */
 class ReflectionProbe
 private constructor(
     val javaPluginInit: Method?,
     val javaPluginFields: JavaPluginFields?,
     val spmLookupNamesField: Field,
+    val helpTopics: MutableMap<String, HelpTopic>,
 ) {
   init {
     require(javaPluginInit != null || javaPluginFields != null) {
@@ -67,11 +78,21 @@ private constructor(
                 null
               }
 
-      if (errors.isNotEmpty() || lookupField == null) {
+      val helpTopics =
+          resolveHelpTopicsMap(server)
+              ?: run {
+                errors.add(
+                    "SimpleHelpMap.helpTopics field (Map<String, HelpTopic>) not found on " +
+                        "${server.helpMap.javaClass.name}. Host cannot register help topics for " +
+                        "inner-plugin commands.")
+                null
+              }
+
+      if (errors.isNotEmpty() || lookupField == null || helpTopics == null) {
         throw UnsupportedPaperVersionException(buildMessage(server, errors))
       }
 
-      return ReflectionProbe(initMethod, fields, lookupField)
+      return ReflectionProbe(initMethod, fields, lookupField, helpTopics)
     }
 
     private fun resolveInitMethod(): Method? =
@@ -104,6 +125,34 @@ private constructor(
     private fun resolveSpmLookupNamesField(server: Server): Field? {
       val spm = unwrapSpm(server.pluginManager) ?: return null
       return field(spm.javaClass, "lookupNames")
+    }
+
+    /**
+     * Locates the `Map<String, HelpTopic>` field on the runtime [org.bukkit.help.HelpMap]
+     * implementation by **generic signature**, not field name, and returns the live map instance.
+     * Paper's `SimpleHelpMap.helpTopics` has been that exact name and type since 2012, but a future
+     * rename would silently break `/help` integration if we keyed on the name. Walking declared
+     * fields and matching on the parameterized type also lets the same resolver work against
+     * MockBukkit's `HelpMapMock`, which calls its field `topics` instead.
+     *
+     * Returns the first matching field's value. If `SimpleHelpMap` ever declares a second
+     * `Map<String, HelpTopic>` field, the first one declared wins — acceptable failure mode
+     * because the probe-pinning tests would catch the ambiguity at our next dependency bump.
+     */
+    internal fun resolveHelpTopicsMap(server: Server): MutableMap<String, HelpTopic>? {
+      val helpMap = server.helpMap
+      for (f in helpMap.javaClass.declaredFields) {
+        val generic = f.genericType as? ParameterizedType ?: continue
+        val raw = generic.rawType as? Class<*> ?: continue
+        if (!Map::class.java.isAssignableFrom(raw)) continue
+        val args = generic.actualTypeArguments
+        if (args.size == 2 && args[0] == String::class.java && args[1] == HelpTopic::class.java) {
+          f.isAccessible = true
+          @Suppress("UNCHECKED_CAST")
+          return f.get(helpMap) as MutableMap<String, HelpTopic>
+        }
+      }
+      return null
     }
 
     /**

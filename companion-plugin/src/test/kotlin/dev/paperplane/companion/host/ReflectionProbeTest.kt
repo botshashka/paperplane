@@ -1,7 +1,11 @@
 package dev.paperplane.companion.host
 
 import org.bukkit.Server
+import org.bukkit.command.CommandSender
 import org.bukkit.command.SimpleCommandMap
+import org.bukkit.help.HelpMap
+import org.bukkit.help.HelpTopic
+import org.bukkit.help.HelpTopicFactory
 import org.bukkit.plugin.PluginManager
 import org.bukkit.plugin.SimplePluginManager
 import org.junit.jupiter.api.AfterEach
@@ -125,6 +129,37 @@ class ReflectionProbeTest {
   }
 
   @Test
+  fun `helpTopics is the live backing map of the HelpMap`() {
+    // Mutations to the probed map must be visible via the HelpMap's public API, otherwise direct
+    // writes wouldn't reach `/help`.
+    val spm = SimplePluginManager(server, SimpleCommandMap(server, mutableMapOf()))
+    val probe = ReflectionProbe.probe(FakeServerWithSpm(server, spm))
+
+    val topic = StubHelpTopic("/probe-check")
+    probe.helpTopics["/probe-check"] = topic
+    assertSame(topic, server.helpMap.getHelpTopic("/probe-check"))
+  }
+
+  @Test
+  fun `probe fails fast when helpMap has no Map of String to HelpTopic field`() {
+    val spm = SimplePluginManager(server, SimpleCommandMap(server, mutableMapOf()))
+    val fakeServer = FakeServerWithCustomHelpMap(server, spm, HelpMapWithoutTopicsField())
+
+    val ex =
+        assertThrows(UnsupportedPaperVersionException::class.java) {
+          ReflectionProbe.probe(fakeServer)
+        }
+    assertTrue(
+        ex.message!!.contains("SimpleHelpMap.helpTopics"),
+        "Error must point at the failed reflection point, got: ${ex.message}",
+    )
+    assertTrue(
+        ex.message!!.contains("github.com/botshashka/paperplane"),
+        "Error must include issue tracker URL for debugging",
+    )
+  }
+
+  @Test
   fun `JavaPlugin private fields are not final-immutable - we must be able to set them`() {
     // The fallback path mutates these fields. Verify they aren't `final` in a way that would block
     // reflective set. `Field.set` works even for `private final` since JDK 9 if accessible, but if
@@ -156,5 +191,46 @@ class ReflectionProbeTest {
       private val spm: SimplePluginManager,
   ) : Server by delegate {
     override fun getPluginManager(): PluginManager = spm
+  }
+
+  /** Server with a real SPM and a custom HelpMap implementation. */
+  private class FakeServerWithCustomHelpMap(
+      private val delegate: Server,
+      private val spm: SimplePluginManager,
+      private val helpMap: HelpMap,
+  ) : Server by delegate {
+    override fun getPluginManager(): PluginManager = spm
+
+    override fun getHelpMap(): HelpMap = helpMap
+  }
+
+  /** HelpMap implementation with no `Map<String, HelpTopic>` field, to drive the failure path. */
+  private class HelpMapWithoutTopicsField : HelpMap {
+    @Suppress("unused") private val unrelated: String = "decoy"
+
+    override fun getHelpTopic(topicName: String): HelpTopic? = null
+
+    override fun getHelpTopics(): Collection<HelpTopic> = emptyList()
+
+    override fun addTopic(topic: HelpTopic) = Unit
+
+    override fun clear() = Unit
+
+    override fun registerHelpTopicFactory(
+        commandClass: Class<*>,
+        factory: HelpTopicFactory<*>,
+    ) = Unit
+
+    override fun getIgnoredPlugins(): List<String> = emptyList()
+  }
+
+  /** Minimal HelpTopic for probe-level tests. */
+  private class StubHelpTopic(topicName: String) : HelpTopic() {
+    init {
+      name = topicName
+      shortText = ""
+    }
+
+    override fun canSee(player: CommandSender): Boolean = true
   }
 }

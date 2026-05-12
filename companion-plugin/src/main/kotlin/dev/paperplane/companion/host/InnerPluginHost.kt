@@ -58,7 +58,8 @@ open class InnerPluginHost(
         }
   }
 
-  private val commandRegistrar = CommandRegistrar(server, logger)
+  private val helpMapWriter = HelpMapWriter(server.helpMap, probe.helpTopics)
+  private val commandRegistrar = CommandRegistrar(server, helpMapWriter, logger)
   private val permissionRegistrar = PermissionRegistrar(server)
   private val leakedClassLoaders = mutableListOf<WeakReference<ClassLoader>>()
   private var consecutiveLeaks = 0
