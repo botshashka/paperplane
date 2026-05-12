@@ -5,7 +5,10 @@ import java.io.File
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.plugins.JavaPluginExtension
-import org.gradle.api.tasks.Internal
+import org.gradle.api.provider.ListProperty
+import org.gradle.api.provider.Property
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.SourceSet
 import org.gradle.api.tasks.TaskAction
@@ -13,7 +16,12 @@ import org.gradle.work.DisableCachingByDefault
 
 @DisableCachingByDefault(because = "Metadata changes every build")
 abstract class MetadataTask : DefaultTask() {
-  @get:Internal lateinit var extension: PaperPlaneExtension
+  @get:Input abstract val pluginName: Property<String>
+  @get:Input @get:Optional abstract val mainClass: Property<String>
+  @get:Input @get:Optional abstract val apiVersion: Property<String>
+  @get:Input abstract val projectVersion: Property<String>
+  @get:Input @get:Optional abstract val depend: ListProperty<String>
+  @get:Input @get:Optional abstract val softDepend: ListProperty<String>
 
   @get:OutputDirectory abstract val outputDir: DirectoryProperty
 
@@ -59,20 +67,20 @@ abstract class MetadataTask : DefaultTask() {
     val metadata =
         mapOf(
             "jarPath" to jarPath,
-            "paperApiVersion" to (extension.apiVersion.orNull ?: "unknown"),
-            "mainClass" to (extension.mainClass.orNull ?: "unknown"),
-            "pluginName" to extension.pluginName.get(),
+            "paperApiVersion" to (apiVersion.orNull ?: "unknown"),
+            "mainClass" to (mainClass.orNull ?: "unknown"),
+            "pluginName" to pluginName.get(),
             "projectDir" to project.projectDir.absolutePath,
-            "version" to project.version.toString(),
+            "version" to projectVersion.get(),
             "classesDir" to classesDir,
             "classesDirs" to classesDirs,
             "resourcesDir" to resourcesDir,
             "runtimeClasspath" to runtimeJars,
-            "depend" to (extension.depend.orNull ?: emptyList<String>()),
-            "softdepend" to (extension.softDepend.orNull ?: emptyList<String>()),
+            "depend" to (depend.orNull ?: emptyList<String>()),
+            "softdepend" to (softDepend.orNull ?: emptyList<String>()),
             "loadbefore" to emptyList<String>(),
             "load" to "POSTWORLD",
-            "apiVersion" to (extension.apiVersion.orNull ?: ""),
+            "apiVersion" to (apiVersion.orNull ?: ""),
         )
 
     val outFile = File(outputDir.get().asFile, "metadata.json")

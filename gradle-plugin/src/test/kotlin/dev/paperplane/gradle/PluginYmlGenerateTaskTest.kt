@@ -257,4 +257,45 @@ class PluginYmlGenerateTaskTest {
 
     assertTrue(yml.contains("api-version: 1.21"))
   }
+
+  @Test
+  fun `task re-runs when extension changes between builds`() {
+    setupProject(baseBuildScript)
+    val first = runTask("ppGeneratePluginYml")
+    assertEquals(TaskOutcome.SUCCESS, first.task(":ppGeneratePluginYml")?.outcome)
+    assertFalse(generatedPluginYml().contains("commands:"), "first run has no commands")
+
+    setupProject(
+        baseBuildScript +
+            "\n" +
+            """
+            paperplane {
+                commands {
+                    create("ping") {
+                        description.set("Replies with pong")
+                    }
+                }
+            }
+            """
+                .trimIndent()
+    )
+    val second = runTask("ppGeneratePluginYml")
+    val outcome = second.task(":ppGeneratePluginYml")?.outcome
+    assertTrue(
+        outcome == TaskOutcome.SUCCESS,
+        "expected re-run after extension change, got $outcome",
+    )
+    val yml = generatedPluginYml()
+    assertTrue(yml.contains("commands:"), "second run should include commands section")
+    assertTrue(yml.contains("  ping:"), "second run should include ping command")
+    assertTrue(yml.contains("    description: Replies with pong"))
+  }
+
+  @Test
+  fun `task is up-to-date when nothing changes between builds`() {
+    setupProject(baseBuildScript)
+    runTask("ppGeneratePluginYml")
+    val second = runTask("ppGeneratePluginYml")
+    assertEquals(TaskOutcome.UP_TO_DATE, second.task(":ppGeneratePluginYml")?.outcome)
+  }
 }
