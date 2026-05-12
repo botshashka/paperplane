@@ -4,9 +4,9 @@ import dev.paperplane.companion.DevPluginClassLoader
 import dev.paperplane.companion.JavaPluginPatcher
 import java.io.File
 import java.io.InputStream
+import java.lang.instrument.Instrumentation
 import java.lang.ref.WeakReference
 import java.net.URLClassLoader
-import java.util.Vector
 import java.util.jar.JarFile
 import java.util.logging.Logger
 import org.bukkit.Server
@@ -44,6 +44,18 @@ open class InnerPluginHost(
     private const val THREAD_JOIN_TIMEOUT_MS = 2000L
     private const val MAX_THREAD_STACK_FRAMES = 5
     private const val MAX_CONSECUTIVE_LEAKS = 3
+
+    /**
+     * Returns true when [inst]'s view of loaded classes shows any NMS or CraftBukkit class defined
+     * by [classLoader]. Pulled out as a pure helper so tests can drive it with a fake
+     * [Instrumentation] without booting Paper.
+     */
+    internal fun containsNmsClasses(inst: Instrumentation, classLoader: ClassLoader): Boolean =
+        inst.allLoadedClasses.any { c ->
+          c.classLoader === classLoader &&
+              (c.name.startsWith("net.minecraft.") ||
+                  c.name.startsWith("org.bukkit.craftbukkit."))
+        }
   }
 
   private val commandRegistrar = CommandRegistrar(server, logger)
@@ -288,16 +300,8 @@ open class InnerPluginHost(
   // ── safety nets ─────────────────────────────────────────────────────
 
   private fun usesNmsClasses(plugin: JavaPlugin): Boolean {
-    return try {
-      val classLoader = plugin.javaClass.classLoader
-      val classesField = ClassLoader::class.java.getDeclaredField("classes")
-      classesField.isAccessible = true
-      @Suppress("UNCHECKED_CAST") val classes = classesField.get(classLoader) as Vector<Class<*>>
-      val snapshot: List<Class<*>> = synchronized(classes) { classes.toList() }
-      snapshot.any { c -> c.name.startsWith("net.minecraft.") || c.name.startsWith("org.bukkit.craftbukkit.") }
-    } catch (_: ReflectiveOperationException) {
-      false
-    }
+    val inst = JavaPluginPatcher.instrumentation() ?: return false
+    return containsNmsClasses(inst, plugin.javaClass.classLoader)
   }
 
   private fun interruptPluginThreads(classLoader: ClassLoader) {

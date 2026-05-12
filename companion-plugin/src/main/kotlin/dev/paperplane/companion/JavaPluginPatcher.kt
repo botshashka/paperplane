@@ -36,6 +36,13 @@ object JavaPluginPatcher {
     private set
 
   /**
+   * Returns the agent's [Instrumentation] handle, or `null` if the agent isn't loaded. Exposed so
+   * other components (e.g. the host's NMS-class probe) can reuse the agent's API without
+   * duplicating the lookup.
+   */
+  fun instrumentation(): Instrumentation? = resolveInstrumentation()
+
+  /**
    * Patches JavaPlugin's constructor if Instrumentation is available. Safe to call multiple times —
    * only patches once.
    *
