@@ -66,6 +66,25 @@ internal class DevSession(
         )
 
   /**
+   * If any of [changedFiles] is one of our [buildConfigFiles], drop the cached Tooling API
+   * connection so the next build/compile reconnects with a freshly-evaluated script.
+   *
+   * The Tooling API caches build-script evaluation on the [ProjectConnection][org.gradle.tooling.ProjectConnection],
+   * so an in-session edit to `build.gradle.kts` (e.g. removing a `commands { create("ping") }`
+   * block) doesn't propagate until the connection is torn down — without this we'd keep regenerating
+   * stale `plugin.yml`s and re-registering removed commands until the user restarts `ppl dev`.
+   *
+   * Source-only edits skip this entirely, so the fast path is unchanged.
+   */
+  internal fun maybeInvalidateGradleConnection(changedFiles: List<String>) {
+    val buildConfigPaths =
+        buildConfigFiles.map { FileWatcher.normalizePath(it.absolutePath) }.toSet()
+    if (changedFiles.any { it in buildConfigPaths }) {
+      gradle.close()
+    }
+  }
+
+  /**
    * The live server + metadata pair shared between startup, fix recovery, and the main watch loop.
    */
   data class RunningState(val metadata: ProjectMetadata, val paperJar: File)
@@ -252,6 +271,7 @@ internal class DevSession(
     val recovered = LinkedBlockingQueue<RunningState>(1)
     val watcher =
         FileWatcher(srcDir, config.dev.debounceMs, extraFiles = buildConfigFiles) { changedFiles ->
+          maybeInvalidateGradleConnection(changedFiles)
           ui.phase {
             val shortName = changedFiles.firstOrNull()?.let { File(it).name } ?: "files"
             change("Change detected: $shortName")
@@ -311,6 +331,7 @@ internal class DevSession(
     val srcDir = File(projectDir, "src")
     val watcher =
         FileWatcher(srcDir, config.dev.debounceMs, extraFiles = buildConfigFiles) { changedFiles ->
+          maybeInvalidateGradleConnection(changedFiles)
           ui.phase {
             val shortName = changedFiles.firstOrNull()?.let { File(it).name } ?: "files"
             val extra = if (changedFiles.size > 1) " (+${changedFiles.size - 1} more)" else ""

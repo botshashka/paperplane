@@ -80,4 +80,60 @@ class GradleBridgeMetadataIntegrationTest {
         "expected compile error file path to be rendered, got: ${terminal.writes}",
     )
   }
+
+  /**
+   * Reproduces the production HMR bug: the Tooling API caches build-script evaluation on the live
+   * [org.gradle.tooling.ProjectConnection], so an in-session edit to `build.gradle.kts` is not
+   * observed by a follow-up `compileOnly()` against the same connection — manifesting as
+   * `plugin.yml` (or here, a marker file written from the script) holding the pre-edit value.
+   *
+   * `close()` drops the connection so the next `compileOnly()` lazily reconnects and re-evaluates
+   * the script. This test pins that contract end-to-end: after `close()`, the new script value
+   * IS observed.
+   */
+  @Test
+  fun `close lets the next compileOnly observe edits to the build script`() {
+    File(tempDir, "settings.gradle.kts").writeText("rootProject.name = \"scratch\"\n")
+    val marker = File(tempDir, "build/script-marker.txt")
+
+    fun writeBuildScript(value: String) {
+      File(tempDir, "build.gradle.kts")
+          .writeText(
+              """
+              plugins { java }
+              val markerValue = "$value"
+              tasks.named("classes") {
+                doLast {
+                  val out = file("build/script-marker.txt")
+                  out.parentFile.mkdirs()
+                  out.writeText(markerValue)
+                }
+              }
+              """
+                  .trimIndent(),
+          )
+    }
+
+    writeBuildScript("v1")
+    val bridge = newBridge()
+    try {
+      assertTrue(bridge.compileOnly(), "first compileOnly should succeed")
+      assertEquals("v1", marker.readText())
+
+      writeBuildScript("v2")
+      bridge.close()
+
+      assertTrue(
+          bridge.compileOnly(),
+          "compileOnly after close should reconnect lazily and succeed",
+      )
+      assertEquals(
+          "v2",
+          marker.readText(),
+          "after close(), the fresh script evaluation must be visible — this is the HMR fix",
+      )
+    } finally {
+      bridge.close()
+    }
+  }
 }

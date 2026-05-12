@@ -12,6 +12,14 @@ open class FileWatcher(
   companion object {
     private const val POLL_INTERVAL_MS = 500L
     private const val STOP_JOIN_TIMEOUT_MS = 2000L
+
+    /**
+     * Normalize a file path the same way the watcher does when emitting changed-file paths. Callers
+     * comparing paths against the watcher's output (e.g. DevSession deciding whether a build-config
+     * file changed) must run their candidate paths through this — on Windows the watcher lowercases,
+     * so a case-mismatched check would silently miss changes.
+     */
+    fun normalizePath(path: String): String = if (Platform.isWindows) path.lowercase() else path
   }
 
   @Volatile private var running = false
@@ -102,7 +110,4 @@ open class FileWatcher(
         name == ".paperplane" ||
         name == "node_modules"
   }
-
-  private fun normalizePath(path: String): String =
-      if (Platform.isWindows) path.lowercase() else path
 }

@@ -4,6 +4,7 @@ import dev.paperplane.cli.Versions
 import dev.paperplane.cli.config.PaperPlaneConfig
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.gradle.ProjectMetadata
+import dev.paperplane.cli.watcher.FileWatcher
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.RecordingTerminal
@@ -244,5 +245,107 @@ class DevSessionTest {
           session.resolveMcVersion(metadata("1.21.4"))
         }
     assertTrue(ex.message!!.contains("1.16"))
+  }
+
+  // ── maybeInvalidateGradleConnection ─────────────────────────────────
+
+  private class CountingGradleBridge(projectDir: File, ui: TerminalUI) : GradleBridge(projectDir, ui) {
+    var closeCount = 0
+      private set
+
+    override fun doClose() {
+      closeCount++
+    }
+  }
+
+  private fun invalidationSession(bridge: CountingGradleBridge): DevSession {
+    val config = PaperPlaneConfig.load(tempDir, ui)
+    return DevSession(
+        config = config,
+        ppDir = tempDir,
+        gradle = bridge,
+        downloader = PaperDownloader(File(tempDir, "cache")),
+        projectDir = tempDir,
+        ui = ui,
+    )
+  }
+
+  @Test
+  fun `maybeInvalidateGradleConnection does nothing for source-only changes`() {
+    val bridge = CountingGradleBridge(tempDir, ui)
+    val session = invalidationSession(bridge)
+    val srcPath = FileWatcher.normalizePath(File(tempDir, "src/main/java/Foo.java").absolutePath)
+
+    session.maybeInvalidateGradleConnection(listOf(srcPath))
+
+    assertEquals(0, bridge.closeCount)
+  }
+
+  @Test
+  fun `maybeInvalidateGradleConnection closes when build-gradle-kts changes`() {
+    val bridge = CountingGradleBridge(tempDir, ui)
+    val session = invalidationSession(bridge)
+    val buildPath =
+        FileWatcher.normalizePath(File(tempDir, "build.gradle.kts").absolutePath)
+
+    session.maybeInvalidateGradleConnection(listOf(buildPath))
+
+    assertEquals(1, bridge.closeCount)
+  }
+
+  @Test
+  fun `maybeInvalidateGradleConnection closes when settings or properties change`() {
+    val bridge = CountingGradleBridge(tempDir, ui)
+    val session = invalidationSession(bridge)
+    val settingsPath =
+        FileWatcher.normalizePath(File(tempDir, "settings.gradle.kts").absolutePath)
+    val propsPath =
+        FileWatcher.normalizePath(File(tempDir, "gradle.properties").absolutePath)
+
+    session.maybeInvalidateGradleConnection(listOf(settingsPath))
+    session.maybeInvalidateGradleConnection(listOf(propsPath))
+
+    assertEquals(2, bridge.closeCount)
+  }
+
+  @Test
+  fun `maybeInvalidateGradleConnection closes once for mixed change sets`() {
+    val bridge = CountingGradleBridge(tempDir, ui)
+    val session = invalidationSession(bridge)
+    val srcPath = FileWatcher.normalizePath(File(tempDir, "src/main/java/Foo.java").absolutePath)
+    val buildPath =
+        FileWatcher.normalizePath(File(tempDir, "build.gradle.kts").absolutePath)
+
+    session.maybeInvalidateGradleConnection(listOf(srcPath, buildPath))
+
+    assertEquals(1, bridge.closeCount)
+  }
+
+  @Test
+  fun `maybeInvalidateGradleConnection matches normalized watcher paths byte-for-byte`() {
+    // The watcher emits paths via FileWatcher.normalizePath, and the check normalizes the
+    // build-config paths the same way before comparison. Whatever a real file's absolute path
+    // looks like on disk, sending it back through normalizePath must produce a hit — otherwise
+    // the watcher and the check would silently disagree.
+    val bridge = CountingGradleBridge(tempDir, ui)
+    val session = invalidationSession(bridge)
+    val watcherEmitted =
+        FileWatcher.normalizePath(File(tempDir, "build.gradle.kts").absoluteFile.path)
+
+    session.maybeInvalidateGradleConnection(listOf(watcherEmitted))
+
+    assertEquals(1, bridge.closeCount)
+  }
+
+  @Test
+  fun `maybeInvalidateGradleConnection ignores non-matching paths in the changed list`() {
+    val bridge = CountingGradleBridge(tempDir, ui)
+    val session = invalidationSession(bridge)
+    val unrelated =
+        FileWatcher.normalizePath(File(tempDir, "build.gradle.unrelated").absolutePath)
+
+    session.maybeInvalidateGradleConnection(listOf(unrelated))
+
+    assertEquals(0, bridge.closeCount)
   }
 }
