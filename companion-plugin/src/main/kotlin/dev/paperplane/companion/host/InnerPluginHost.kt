@@ -37,6 +37,7 @@ open class InnerPluginHost(
     private val parentClassLoader: ClassLoader,
     private val probe: ReflectionProbe,
     private val logger: Logger,
+    private val hostPlugin: org.bukkit.plugin.Plugin? = null,
 ) {
 
   companion object {
@@ -172,6 +173,12 @@ open class InnerPluginHost(
     server.pluginManager.disablePlugin(a.plugin)
     HandlerList.unregisterAll(a.plugin)
     server.scheduler.cancelTasks(a.plugin)
+    // CraftScheduler.cancelTasks enqueues a sentinel task (anonymous CraftScheduler$3) that
+    // captures `plugin` via val$plugin. After parsePending() consumes it, CraftScheduler.head is
+    // reassigned to point at that sentinel — pinning the inner plugin and its classloader for the
+    // entire idle gap until something else is enqueued. Posting a host-owned no-op forces head to
+    // advance to a task that captures only the long-lived companion, releasing the inner plugin.
+    hostPlugin?.let { server.scheduler.runTask(it, Runnable {}) }
     server.servicesManager.unregisterAll(a.plugin)
     server.messenger.unregisterIncomingPluginChannel(a.plugin)
     server.messenger.unregisterOutgoingPluginChannel(a.plugin)
@@ -339,11 +346,148 @@ open class InnerPluginHost(
       if (confirmed > 0) {
         consecutiveLeaks++
         logger.warning("$confirmed classloader(s) leaked (#$consecutiveLeaks)")
+        dumpLeakDiagnostics()
       } else {
         consecutiveLeaks = 0
       }
     } else {
       consecutiveLeaks = 0
+    }
+  }
+
+  /**
+   * Diagnostic: when a leak is confirmed, dump what's keeping each surviving leaked classloader
+   * alive — class count, sample class names, and any threads still rooted in it. Helps identify the
+   * actual pinner instead of guessing at Paper subsystems one-by-one.
+   */
+  private fun dumpLeakDiagnostics() {
+    val survivors = leakedClassLoaders.dropLast(1).mapNotNull { it.get() }
+    if (survivors.isEmpty()) return
+    val inst = JavaPluginPatcher.instrumentation()
+    val allLoaded = inst?.allLoadedClasses
+    logger.warning("── leak diagnostics: ${survivors.size} surviving loader(s) ──")
+    survivors.forEachIndexed { i, cl ->
+      val tag = "loader#$i ${cl::class.java.simpleName}@${System.identityHashCode(cl).toString(16)}"
+      val classes = allLoaded?.filter { it.classLoader === cl } ?: emptyList()
+      val sample = classes.take(20).joinToString(", ") { it.name }
+      logger.warning(
+          "  $tag — ${classes.size} class(es) still loaded${if (sample.isNotEmpty()) ": $sample" else ""}"
+      )
+      val threads = Thread.getAllStackTraces().keys.filter { it.contextClassLoader === cl }
+      if (threads.isNotEmpty()) {
+        logger.warning("  $tag — ${threads.size} thread(s) with this contextClassLoader:")
+        threads.forEach { t ->
+          val frames =
+              t.stackTrace.take(MAX_THREAD_STACK_FRAMES).joinToString("\n      ") { it.toString() }
+          logger.warning("    '${t.name}' (state=${t.state}, daemon=${t.isDaemon})\n      $frames")
+        }
+      }
+      val pluginsListed = scanPluginManagerForLoader(cl)
+      logger.warning("  $tag — pluginManager.plugins scan: ${pluginsListed.size} match(es)")
+      pluginsListed.forEach { logger.warning("    $it") }
+
+      val cmdsListed = scanCommandMapForLoader(cl)
+      logger.warning("  $tag — commandMap.knownCommands scan: ${cmdsListed.size} match(es)")
+      cmdsListed.forEach { logger.warning("    $it") }
+
+      val loggers = scanJulLoggersForLoader(cl)
+      logger.warning(
+          "  $tag — java.util.logging Loggers naming this loader's class: ${loggers.size}"
+      )
+      loggers.forEach { logger.warning("    $it") }
+
+      val initiated = if (inst != null) inst.getInitiatedClasses(cl).size else -1
+      logger.warning("  $tag — Instrumentation.getInitiatedClasses count: $initiated")
+
+      // Dump heap on the first leak (most actionable). Subsequent leaks are redundant —
+      // same root, same dump.
+      if (!heapDumped) {
+        heapDumped = true
+        tryDumpHeap()
+      }
+    }
+    if (inst == null) {
+      logger.warning("  (Instrumentation unavailable — class enumeration skipped)")
+    }
+    logger.warning("── end leak diagnostics ──")
+  }
+
+  private fun scanPluginManagerForLoader(cl: ClassLoader): List<String> {
+    return try {
+      server.pluginManager.plugins
+          .filter { it.javaClass.classLoader === cl }
+          .map {
+            "${it.javaClass.name}@${System.identityHashCode(it).toString(16)} " +
+                "(name=${it.name}, enabled=${it.isEnabled})"
+          }
+    } catch (
+        @Suppress("TooGenericExceptionCaught") // Diagnostic — never throw out of leak reporting.
+        e: Exception) {
+      listOf("(scan failed: ${e.javaClass.simpleName}: ${e.message})")
+    }
+  }
+
+  private fun scanCommandMapForLoader(cl: ClassLoader): List<String> {
+    return try {
+      val map = server.commandMap.knownCommands
+      map.entries.mapNotNull { (k, c) ->
+        val plugin = runCatching { c.javaClass.getMethod("getPlugin").invoke(c) }.getOrNull()
+        if (plugin != null && plugin.javaClass.classLoader === cl) {
+          "knownCommands[$k] -> ${c.javaClass.simpleName}: ${c.name}"
+        } else null
+      }
+    } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+      listOf("(scan failed: ${e.javaClass.simpleName}: ${e.message})")
+    }
+  }
+
+  /**
+   * j.u.l.LogManager keeps loggers in a global named map. Bukkit's PluginLogger names itself after
+   * `plugin.getClass().getCanonicalName()`, so if the LogManager still has an entry named after a
+   * class from this loader, that's a signal (though the value itself is WeakReference'd).
+   */
+  private fun scanJulLoggersForLoader(cl: ClassLoader): List<String> {
+    return try {
+      val lm = java.util.logging.LogManager.getLogManager()
+      val names = lm.loggerNames.toList()
+      names
+          .filter { name ->
+            // Best-effort: match logger names that look like classes we'd expect from this loader.
+            // Without walking the heap, we can't directly tie a logger to a classloader, so we
+            // probe by class-existence.
+            try {
+              val klass = Class.forName(name, false, cl)
+              klass.classLoader === cl
+            } catch (_: Throwable) {
+              false
+            }
+          }
+          .map { "Logger '$it'" }
+    } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+      listOf("(scan failed: ${e.javaClass.simpleName}: ${e.message})")
+    }
+  }
+
+  private var heapDumped = false
+
+  private fun tryDumpHeap() {
+    try {
+      val mxBeanClass = Class.forName("com.sun.management.HotSpotDiagnosticMXBean")
+      val mbeanServer = java.lang.management.ManagementFactory.getPlatformMBeanServer()
+      val bean =
+          java.lang.management.ManagementFactory.newPlatformMXBeanProxy(
+              mbeanServer,
+              "com.sun.management:type=HotSpotDiagnostic",
+              mxBeanClass,
+          )
+      val path = File(System.getProperty("user.dir"), "paperplane-leak.hprof").absolutePath
+      File(path).delete()
+      mxBeanClass
+          .getMethod("dumpHeap", String::class.java, Boolean::class.javaPrimitiveType)
+          .invoke(bean, path, true /* live only */)
+      logger.warning("  heap dump written to: $path  (open in Eclipse MAT / VisualVM)")
+    } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+      logger.warning("  heap dump failed: ${e.javaClass.simpleName}: ${e.message}")
     }
   }
 

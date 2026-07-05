@@ -23,7 +23,7 @@ class CompanionPlugin : JavaPlugin() {
       // Probe Paper internals once at startup. Fails fast on an unsupported Paper version with a
       // clear error rather than limping along.
       val probe = ReflectionProbe.probe(server)
-      host = InnerPluginHost(server, javaClass.classLoader, probe, logger)
+      host = InnerPluginHost(server, javaClass.classLoader, probe, logger, hostPlugin = this)
 
       errorCatcher = ErrorCatcher(this)
       buildStatusBar = BuildStatusBar(this, host)
