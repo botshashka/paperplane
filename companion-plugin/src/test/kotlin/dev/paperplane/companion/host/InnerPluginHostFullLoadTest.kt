@@ -312,6 +312,16 @@ class InnerPluginHostFullLoadTest {
     override fun disablePlugin(plugin: org.bukkit.plugin.Plugin) {
       if (plugin is JavaPlugin && plugin.isEnabled) plugin.isEnabled = false
     }
+
+    // Real Paper's manager resolves getPlugin(name) from SPM's lookupNames map. The default
+    // `by spm` delegation would call back into spm.getPlugin, which re-delegates here → infinite
+    // recursion. Read lookupNames directly, exactly as PaperPluginManagerImpl does.
+    override fun getPlugin(name: String): org.bukkit.plugin.Plugin? {
+      val field = SimplePluginManager::class.java.getDeclaredField("lookupNames")
+      field.isAccessible = true
+      @Suppress("UNCHECKED_CAST") val map = field.get(spm) as Map<String, org.bukkit.plugin.Plugin>
+      return map[name.lowercase()]
+    }
   }
 }
 

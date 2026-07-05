@@ -2,6 +2,7 @@ package dev.paperplane.companion.host
 
 import dev.paperplane.companion.DevPluginClassLoader
 import dev.paperplane.companion.JavaPluginPatcher
+import dev.paperplane.companion.PluginInitContext
 import java.io.File
 import java.io.InputStream
 import java.lang.instrument.Instrumentation
@@ -20,14 +21,15 @@ import org.bukkit.plugin.java.JavaPlugin
  * `plugins/`. When the CLI signals a load via `load-request.json`, the host:
  *
  * 1. Parses and validates `plugin.yml` (rejects unsupported shapes — `load: STARTUP` etc).
- * 2. Builds a child [DevPluginClassLoader] with cross-plugin visibility.
- * 3. Instantiates the inner plugin (no-arg ctor; JavaPluginPatcher already removed the
- *    PluginClassLoader type check).
- * 4. Initializes JavaPlugin via [ReflectionProbe] (init method first; fields fallback).
- * 5. Registers the inner plugin in `SimplePluginManager.lookupNames` so cross-plugin
+ * 2. Builds a child [DevPluginClassLoader] (a
+ *    [io.papermc.paper.plugin.provider.classloader.ConfiguredPluginClassLoader]) with cross-plugin
+ *    visibility, carrying a [PluginInitContext].
+ * 3. Instantiates the inner plugin (no-arg ctor). Paper's `JavaPlugin` ctor sees the loader is a
+ *    `ConfiguredPluginClassLoader` and calls back into `init(plugin)`, wiring the plugin's state.
+ * 4. Registers the inner plugin in `SimplePluginManager.lookupNames` so cross-plugin
  *    `getPlugin(name)` works.
- * 6. Applies commands + permissions diffs via the public-API registrars.
- * 7. Calls `pluginManager.enablePlugin(inner)` — fires `PluginEnableEvent` correctly.
+ * 5. Applies commands + permissions diffs via the public-API registrars.
+ * 6. Calls `pluginManager.enablePlugin(inner)` — fires `PluginEnableEvent` correctly.
  *
  * Reload is teardown + load. Teardown is entirely public API except for the symmetric `lookupNames`
  * removal.
@@ -122,7 +124,7 @@ open class InnerPluginHost(
     }
 
     val (plugin, classLoader) = loadPlugin(request, description)
-    initializeAndRegister(plugin, classLoader, description)
+    initializeAndRegister(plugin, description)
     active = Active(plugin, classLoader, description.name)
     return HostLoadResult.Ok(description.name, 0)
   }
@@ -157,7 +159,7 @@ open class InnerPluginHost(
     leakedClassLoaders.add(WeakReference(a.classLoader))
 
     val (plugin, classLoader) = loadPlugin(request, description)
-    initializeAndRegister(plugin, classLoader, description)
+    initializeAndRegister(plugin, description)
     active = Active(plugin, classLoader, description.name)
 
     if (!plugin.isEnabled) {
@@ -204,57 +206,37 @@ open class InnerPluginHost(
       description: PluginDescriptionFile,
   ): Pair<JavaPlugin, DevPluginClassLoader> {
     val urls = buildClassLoaderUrls(request)
-    val classLoader = DevPluginClassLoader(urls, parentClassLoader, server.pluginManager)
+    val dataFolder = File(server.pluginsFolder, description.name)
+    val context = PluginInitContext(server, description, dataFolder, File(request.jarPath))
+    val classLoader = DevPluginClassLoader(urls, parentClassLoader, server.pluginManager, context)
 
     val mainClass = classLoader.loadClass(description.main)
     val plugin = mainClass.getDeclaredConstructor().newInstance() as JavaPlugin
+    // Transition-window fallback: while the ASM patcher still exists (removed in Commit 3), the
+    // patched ctor skips CPCL init. Also guards hypothetical Paper builds where init never fires.
+    if (classLoader.getPlugin() == null) classLoader.init(plugin)
+    check(classLoader.getPlugin() === plugin) {
+      "Inner plugin was not initialized by its classloader"
+    }
     return plugin to classLoader
   }
 
   private fun initializeAndRegister(
       plugin: JavaPlugin,
-      classLoader: DevPluginClassLoader,
       description: PluginDescriptionFile,
   ) {
-    val dataFolder = File(server.pluginsFolder, description.name)
-    initializePlugin(plugin, description, dataFolder, classLoader)
     addToLookupNames(description.name, plugin)
+    if (server.pluginManager.getPlugin(description.name) != null) {
+      logger.info("Cross-plugin lookup verified for '${description.name}'")
+    } else {
+      logger.warning(
+          "Cross-plugin lookup FAILED for '${description.name}' — getPlugin(name) returns null"
+      )
+    }
     permissionRegistrar.apply(description)
     commandRegistrar.apply(plugin, description)
     server.pluginManager.enablePlugin(plugin)
   }
-
-  /**
-   * Sets the JavaPlugin's internal state. Tries the package-private `init(...)` method first; falls
-   * back to direct field injection only if init was not resolvable at probe time.
-   */
-  private fun initializePlugin(
-      plugin: JavaPlugin,
-      description: PluginDescriptionFile,
-      dataFolder: File,
-      classLoader: ClassLoader,
-  ) {
-    val initMethod = probe.javaPluginInit
-    if (initMethod != null) {
-      val loader = makeJavaPluginLoader()
-      initMethod.invoke(plugin, loader, server, description, dataFolder, dataFolder, classLoader)
-      return
-    }
-
-    val fields =
-        probe.javaPluginFields ?: error("ReflectionProbe accepted with neither init nor fields")
-    fields.server.set(plugin, server)
-    fields.description.set(plugin, description)
-    fields.dataFolder.set(plugin, dataFolder)
-    fields.file.set(plugin, dataFolder)
-    fields.classLoader.set(plugin, classLoader)
-  }
-
-  @Suppress(
-      "DEPRECATION"
-  ) // JavaPluginLoader is deprecated but the only legitimate constructor for init().
-  private fun makeJavaPluginLoader(): org.bukkit.plugin.java.JavaPluginLoader =
-      org.bukkit.plugin.java.JavaPluginLoader(server)
 
   private fun addToLookupNames(name: String, plugin: JavaPlugin) {
     val spm = ReflectionProbe.unwrapSpm(server.pluginManager) ?: return
