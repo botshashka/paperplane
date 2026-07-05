@@ -172,6 +172,40 @@ class FileWatcherTest {
   }
 
   @Test
+  fun `a file saved while onChange is running still triggers the next cycle`() {
+    val srcDir = File(tempDir, "src")
+    srcDir.mkdirs()
+    File(srcDir, "Existing.kt").writeText("initial")
+
+    val changes = CopyOnWriteArrayList<List<String>>()
+    val firstFired = CountDownLatch(1)
+    val secondFired = CountDownLatch(2)
+    val watcher =
+        FileWatcher(srcDir, debounceMs = 200) {
+          changes.add(it)
+          // Simulates a user save landing mid-rebuild: written inside onChange, i.e. exactly the
+          // window the post-handle re-snapshot used to silently absorb.
+          if (firstFired.count == 1L) File(srcDir, "SavedDuringRebuild.kt").writeText("edit")
+          firstFired.countDown()
+          secondFired.countDown()
+        }
+    watcher.start()
+
+    Thread.sleep(600)
+    File(srcDir, "First.kt").writeText("change 1")
+
+    assertTrue(firstFired.await(5, TimeUnit.SECONDS), "First change should fire")
+    assertTrue(
+        secondFired.await(5, TimeUnit.SECONDS),
+        "A save landing during onChange must trigger another cycle, not be rebased away",
+    )
+    watcher.stop()
+
+    val allChanged = changes.flatten()
+    assertTrue(allChanged.any { it.endsWith("SavedDuringRebuild.kt") })
+  }
+
+  @Test
   fun `detects file deletion`() {
     val srcDir = File(tempDir, "src")
     srcDir.mkdirs()

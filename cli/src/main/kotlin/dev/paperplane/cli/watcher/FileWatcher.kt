@@ -40,23 +40,11 @@ open class FileWatcher(
                     Thread.sleep(POLL_INTERVAL_MS)
 
                     val current = snapshot()
-
-                    // Find changed files
-                    for ((path, modTime) in current) {
-                      val prev = lastSnapshot[path]
-                      if (prev == null || prev != modTime) {
-                        changedFiles.add(path)
-                        lastChangeTime = System.currentTimeMillis()
-                      }
+                    val newChanges = diff(lastSnapshot, current)
+                    if (newChanges.isNotEmpty()) {
+                      changedFiles.addAll(newChanges)
+                      lastChangeTime = System.currentTimeMillis()
                     }
-                    // Find deleted files
-                    for (path in lastSnapshot.keys) {
-                      if (path !in current) {
-                        changedFiles.add(path)
-                        lastChangeTime = System.currentTimeMillis()
-                      }
-                    }
-
                     lastSnapshot = current
 
                     // Debounce: fire after quiet period
@@ -67,8 +55,16 @@ open class FileWatcher(
                       val files = changedFiles.toList()
                       changedFiles.clear()
                       onChange(files)
-                      // Re-snapshot after rebuild since build may have changed files
-                      lastSnapshot = snapshot()
+                      // Files may change while onChange runs (a save mid-rebuild). Rebase the
+                      // baseline to the post-handle state, but carry the diff into changedFiles —
+                      // silently rebasing would swallow those edits and never rebuild them.
+                      val post = snapshot()
+                      val duringHandle = diff(lastSnapshot, post)
+                      if (duringHandle.isNotEmpty()) {
+                        changedFiles.addAll(duringHandle)
+                        lastChangeTime = System.currentTimeMillis()
+                      }
+                      lastSnapshot = post
                     }
                   }
                 },
@@ -82,6 +78,18 @@ open class FileWatcher(
   open fun stop() {
     running = false
     thread?.join(STOP_JOIN_TIMEOUT_MS)
+  }
+
+  /** Paths changed, added, or deleted between [prev] and [current]. */
+  private fun diff(prev: Map<String, Long>, current: Map<String, Long>): Set<String> {
+    val changed = mutableSetOf<String>()
+    for ((path, modTime) in current) {
+      if (prev[path] != modTime) changed.add(path)
+    }
+    for (path in prev.keys) {
+      if (path !in current) changed.add(path)
+    }
+    return changed
   }
 
   private fun snapshot(): Map<String, Long> {
