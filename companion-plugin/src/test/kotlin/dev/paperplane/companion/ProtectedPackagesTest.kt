@@ -8,8 +8,8 @@ import org.junit.jupiter.api.Test
  * Structural guard: the companion JAR must NOT ship classes in server-protected packages.
  *
  * Paper's `PluginClassLoader` refuses to load classes whose names start with `org.bukkit.*`,
- * `net.minecraft.*`, or `io.papermc.*` from a plugin JAR — only the server itself is allowed to
- * own those namespaces. Shipping a class there compiles fine but throws `NoClassDefFoundError` at
+ * `net.minecraft.*`, or `io.papermc.*` from a plugin JAR — only the server itself is allowed to own
+ * those namespaces. Shipping a class there compiles fine but throws `NoClassDefFoundError` at
  * runtime the first time the host tries to use it.
  *
  * This test scans the compiled `main` classes directory rather than the assembled shadowJar so it

@@ -22,8 +22,8 @@ import org.objectweb.asm.Opcodes
  *
  * **What the patch does**: Replaces the throw path with an early return. When the classloader IS a
  * PluginClassLoader (normal server loading), the original `initialize(this)` call is preserved.
- * When it's NOT (dev-mode loading), the constructor simply returns —
- * `InnerPluginHost` handles the JavaPlugin field setup separately via `ReflectionProbe`.
+ * When it's NOT (dev-mode loading), the constructor simply returns — `InnerPluginHost` handles the
+ * JavaPlugin field setup separately via `ReflectionProbe`.
  */
 object JavaPluginPatcher {
 
@@ -48,7 +48,8 @@ object JavaPluginPatcher {
             ?: throw AgentNotAvailableException(
                 "PaperPlane javaagent not loaded. Re-run with the agent attached " +
                     "(the CLI wires -javaagent automatically; verify with 'ppl dev --version'). " +
-                    "See https://github.com/botshashka/paperplane/issues if this persists.")
+                    "See https://github.com/botshashka/paperplane/issues if this persists."
+            )
 
     val transformer = JavaPluginTransformer()
     inst.addTransformer(transformer, true)

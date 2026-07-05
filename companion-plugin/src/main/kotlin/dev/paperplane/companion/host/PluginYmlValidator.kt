@@ -9,9 +9,8 @@ import org.bukkit.plugin.PluginLoadOrder
  * Validates a user plugin's `plugin.yml` against the constraints of being hosted by the companion.
  *
  * The companion runs `load: POSTWORLD` and only loads its inner plugin after `ServerLoadEvent` —
- * which means certain plugin.yml shapes are incompatible with hot-reload mode. Detect them here
- * and surface a clear actionable error rather than failing at load time with a confusing stack
- * trace.
+ * which means certain plugin.yml shapes are incompatible with hot-reload mode. Detect them here and
+ * surface a clear actionable error rather than failing at load time with a confusing stack trace.
  */
 object PluginYmlValidator {
 
@@ -22,8 +21,8 @@ object PluginYmlValidator {
   }
 
   /**
-   * Validates against hard architectural limits. If validation fails, the host must abort the
-   * load and surface [Result.Reject.message] to the CLI for display to the user.
+   * Validates against hard architectural limits. If validation fails, the host must abort the load
+   * and surface [Result.Reject.message] to the CLI for display to the user.
    *
    * Soft warnings (missing softdepends) are logged but do not fail validation — same as Paper.
    */
@@ -38,7 +37,8 @@ object PluginYmlValidator {
       return Result.Reject(
           "Plugin '${description.name}' declares `load: STARTUP`. " +
               "PaperPlane hot-reload runs POSTWORLD and cannot host STARTUP plugins. " +
-              "Set `dev.mode: restart` in paperplane.yml.")
+              "Set `dev.mode: restart` in paperplane.yml."
+      )
     }
 
     val apiVersion = description.apiVersion
@@ -47,7 +47,8 @@ object PluginYmlValidator {
       if (paperApi != null && compareApiVersions(apiVersion, paperApi) > 0) {
         return Result.Reject(
             "Plugin '${description.name}' requires api-version $apiVersion but the running Paper " +
-                "server is $paperApi. Update Paper or lower api-version.")
+                "server is $paperApi. Update Paper or lower api-version."
+        )
       }
     }
 
@@ -55,14 +56,16 @@ object PluginYmlValidator {
       if (server.pluginManager.getPlugin(dep) == null) {
         return Result.Reject(
             "Plugin '${description.name}' depends on '$dep', but it is not loaded. " +
-                "Add it to `server.plugins` in paperplane.yml or place it in plugins/.")
+                "Add it to `server.plugins` in paperplane.yml or place it in plugins/."
+        )
       }
     }
 
     for (dep in description.softDepend) {
       if (server.pluginManager.getPlugin(dep) == null) {
         logger.info(
-            "Soft-dependency '$dep' is not loaded; '${description.name}' will run without it.")
+            "Soft-dependency '$dep' is not loaded; '${description.name}' will run without it."
+        )
       }
     }
 

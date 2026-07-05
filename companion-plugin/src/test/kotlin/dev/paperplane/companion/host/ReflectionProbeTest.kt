@@ -57,9 +57,7 @@ class ReflectionProbeTest {
     // MockBukkit's PluginManagerMock isn't a SimplePluginManager and doesn't wrap one,
     // so the probe must reject this rather than limp along.
     val ex =
-        assertThrows(UnsupportedPaperVersionException::class.java) {
-          ReflectionProbe.probe(server)
-        }
+        assertThrows(UnsupportedPaperVersionException::class.java) { ReflectionProbe.probe(server) }
     assertTrue(
         ex.message!!.contains("SimplePluginManager.lookupNames"),
         "Error must point at the failed reflection point, got: ${ex.message}",
@@ -171,7 +169,13 @@ class ReflectionProbeTest {
 
     // None should be static (they're per-instance).
     for (f in
-        listOf(fields.server, fields.description, fields.dataFolder, fields.file, fields.classLoader)) {
+        listOf(
+            fields.server,
+            fields.description,
+            fields.dataFolder,
+            fields.file,
+            fields.classLoader,
+        )) {
       assertTrue(
           !java.lang.reflect.Modifier.isStatic(f.modifiers),
           "${f.name} must be instance field; got static",

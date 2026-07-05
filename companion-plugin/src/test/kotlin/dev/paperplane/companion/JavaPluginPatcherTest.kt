@@ -201,7 +201,8 @@ class JavaPluginPatcherTest {
     // PaperPlane's own agent (dev.paperplane.agent.PaperPlaneAgent) is absent — so the
     // class lookup inside resolveInstrumentation fails and patchIfNeeded must surface that
     // loudly rather than silently no-op'ing.
-    val ex = assertThrows(AgentNotAvailableException::class.java) { JavaPluginPatcher.patchIfNeeded() }
+    val ex =
+        assertThrows(AgentNotAvailableException::class.java) { JavaPluginPatcher.patchIfNeeded() }
     assertNotNull(ex.message)
   }
 

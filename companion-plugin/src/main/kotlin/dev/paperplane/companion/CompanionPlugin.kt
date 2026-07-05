@@ -78,7 +78,9 @@ class CompanionPlugin : JavaPlugin() {
       try {
         host.shutdown()
       } catch (
-          @Suppress("TooGenericExceptionCaught") // Defensive — inner teardown shouldn't take companion down
+          @Suppress(
+              "TooGenericExceptionCaught"
+          ) // Defensive — inner teardown shouldn't take companion down
           e: Exception) {
         logger.warning("Inner plugin shutdown raised: ${e.message}")
       }

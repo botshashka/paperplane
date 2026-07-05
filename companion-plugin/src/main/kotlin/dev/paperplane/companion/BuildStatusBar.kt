@@ -132,7 +132,9 @@ class BuildStatusBar(
 
     // Try in-place class redefinition first if HotSwapper is available and the change is
     // method-body-only. Skips the full host reload entirely.
-    if (host.isLoaded() && request.changedClasses.isNotEmpty() && request.classesDirs.isNotEmpty()) {
+    if (
+        host.isLoaded() && request.changedClasses.isNotEmpty() && request.classesDirs.isNotEmpty()
+    ) {
       if (tryHotSwap(request)) {
         writeFlag("load-complete", "hotswap=ok,total=0")
         broadcast(Component.text("${request.pluginName} hot-swapped!", NamedTextColor.GREEN))
@@ -167,8 +169,7 @@ class BuildStatusBar(
     if (hotSwapper == null) hotSwapper = HotSwapper(plugin.logger)
     if (!hotSwapper!!.isAvailable()) return false
     val classLoader = inner.javaClass.classLoader
-    val result =
-        hotSwapper!!.redefine(request.changedClasses, classLoader, request.classesDirs)
+    val result = hotSwapper!!.redefine(request.changedClasses, classLoader, request.classesDirs)
     return when (result) {
       HotSwapResult.SUCCESS -> true
       else -> {
@@ -209,5 +210,4 @@ class BuildStatusBar(
       player.sendMessage(full)
     }
   }
-
 }

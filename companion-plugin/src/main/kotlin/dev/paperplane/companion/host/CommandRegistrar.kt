@@ -67,7 +67,8 @@ class CommandRegistrar(
       val registered = server.commandMap.register(description.name, cmd)
       if (!registered) {
         logger.warning(
-            "Command '$name' could not be registered under '${description.name}' fallback prefix.")
+            "Command '$name' could not be registered under '${description.name}' fallback prefix."
+        )
       }
       applied[name] = cmd
       helpMapWriter.register(cmd)
@@ -86,8 +87,8 @@ class CommandRegistrar(
   }
 
   /**
-   * `Command.unregister(CommandMap)` only flips internal state; it does NOT remove the command
-   * from the command map's known-commands lookup. Without removing the entries, the next call to
+   * `Command.unregister(CommandMap)` only flips internal state; it does NOT remove the command from
+   * the command map's known-commands lookup. Without removing the entries, the next call to
    * `CommandMap.getCommand(name)` still returns the torn-down command. Walk the map and drop any
    * entries pointing at our [cmd] (covers aliases and the `pluginName:` prefix variants both).
    */

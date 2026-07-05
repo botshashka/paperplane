@@ -20,25 +20,29 @@ import org.bukkit.plugin.java.JavaPlugin
  *
  * **The host's entire reflection footprint lives here.** Three reflection points:
  *
- * 1. **JavaPlugin init** — try the package-private
- *    `JavaPlugin.init(PluginLoader, Server, PluginDescriptionFile, File, File, ClassLoader)` first;
- *    fall back to direct private-field injection (`server`, `description`, `dataFolder`, `file`,
- *    `classLoader`). The init method is the designated init path; field injection is the safety
- *    net for hypothetical future Paper versions that rename or remove init.
- *    Spigot/Paper source: <https://hub.spigotmc.org/stash/projects/SPIGOT/repos/bukkit/browse/src/main/java/org/bukkit/plugin/java/JavaPlugin.java>
+ * 1. **JavaPlugin init** — try the package-private `JavaPlugin.init(PluginLoader, Server,
+ *    PluginDescriptionFile, File, File, ClassLoader)` first; fall back to direct private-field
+ *    injection (`server`, `description`, `dataFolder`, `file`, `classLoader`). The init method is
+ *    the designated init path; field injection is the safety net for hypothetical future Paper
+ *    versions that rename or remove init. Spigot/Paper source:
+ *
+ * <https://hub.spigotmc.org/stash/projects/SPIGOT/repos/bukkit/browse/src/main/java/org/bukkit/plugin/java/JavaPlugin.java>
  *
  * 2. **SimplePluginManager.lookupNames** — `Map<String, Plugin>` consulted by Paper's
  *    `PaperPluginManagerImpl.getPlugin(name)` for cross-plugin dependency lookups. Symmetric
- *    add/remove on every host load/unload.
- *    Bukkit source: <https://hub.spigotmc.org/stash/projects/SPIGOT/repos/bukkit/browse/src/main/java/org/bukkit/plugin/SimplePluginManager.java>
+ *    add/remove on every host load/unload. Bukkit source:
+ *
+ * <https://hub.spigotmc.org/stash/projects/SPIGOT/repos/bukkit/browse/src/main/java/org/bukkit/plugin/SimplePluginManager.java>
  *
  * 3. **SimpleHelpMap.helpTopics** — `Map<String, HelpTopic>` consulted by `/help`. Paper's
  *    `HelpMap.initializeCommands()` runs once during `enablePlugins(POSTWORLD)`, strictly before
  *    the companion's first scheduler tick fires the host load, so inner-plugin commands miss the
- *    one-shot pass. Public `HelpMap.addTopic` skips existing keys and there is no `removeTopic`,
- *    so direct map mutation is the only way to keep `/help` in sync across hot-reload. Resolved
- *    by generic signature (`Map<String, HelpTopic>`), not field name — survives a rename.
- *    CraftBukkit source: <https://github.com/PaperMC/Paper/blob/main/paper-server/src/main/java/org/bukkit/craftbukkit/help/SimpleHelpMap.java>
+ *    one-shot pass. Public `HelpMap.addTopic` skips existing keys and there is no `removeTopic`, so
+ *    direct map mutation is the only way to keep `/help` in sync across hot-reload. Resolved by
+ *    generic signature (`Map<String, HelpTopic>`), not field name — survives a rename. CraftBukkit
+ *    source:
+ *
+ * <https://github.com/PaperMC/Paper/blob/main/paper-server/src/main/java/org/bukkit/craftbukkit/help/SimpleHelpMap.java>
  */
 class ReflectionProbe
 private constructor(
@@ -55,8 +59,8 @@ private constructor(
 
   companion object {
     /**
-     * Resolves all reflection targets. Throws [UnsupportedPaperVersionException] if the host
-     * cannot proceed.
+     * Resolves all reflection targets. Throws [UnsupportedPaperVersionException] if the host cannot
+     * proceed.
      */
     fun probe(server: Server): ReflectionProbe {
       val errors = mutableListOf<String>()
@@ -66,7 +70,8 @@ private constructor(
       if (initMethod == null && fields == null) {
         errors.add(
             "Neither JavaPlugin.init(...) nor private fields (server, description, dataFolder, file, classLoader) were resolvable. " +
-                "Host cannot construct an inner plugin without one of these paths.")
+                "Host cannot construct an inner plugin without one of these paths."
+        )
       }
 
       val lookupField =
@@ -74,7 +79,8 @@ private constructor(
               ?: run {
                 errors.add(
                     "SimplePluginManager.lookupNames field not found. " +
-                        "Host cannot register the inner plugin for cross-plugin name lookups.")
+                        "Host cannot register the inner plugin for cross-plugin name lookups."
+                )
                 null
               }
 
@@ -84,7 +90,8 @@ private constructor(
                 errors.add(
                     "SimpleHelpMap.helpTopics field (Map<String, HelpTopic>) not found on " +
                         "${server.helpMap.javaClass.name}. Host cannot register help topics for " +
-                        "inner-plugin commands.")
+                        "inner-plugin commands."
+                )
                 null
               }
 
@@ -136,8 +143,8 @@ private constructor(
      * MockBukkit's `HelpMapMock`, which calls its field `topics` instead.
      *
      * Returns the first matching field's value. If `SimpleHelpMap` ever declares a second
-     * `Map<String, HelpTopic>` field, the first one declared wins — acceptable failure mode
-     * because the probe-pinning tests would catch the ambiguity at our next dependency bump.
+     * `Map<String, HelpTopic>` field, the first one declared wins — acceptable failure mode because
+     * the probe-pinning tests would catch the ambiguity at our next dependency bump.
      */
     internal fun resolveHelpTopicsMap(server: Server): MutableMap<String, HelpTopic>? {
       val helpMap = server.helpMap
@@ -157,8 +164,8 @@ private constructor(
 
     /**
      * Modern Paper wraps `SimplePluginManager` inside `PaperPluginManagerImpl`. The wrapper
-     * delegates name lookups to SPM, so SPM is the canonical write target. Walk one level of
-     * fields to find the nested SPM if the manager isn't already SPM.
+     * delegates name lookups to SPM, so SPM is the canonical write target. Walk one level of fields
+     * to find the nested SPM if the manager isn't already SPM.
      */
     internal fun unwrapSpm(pm: PluginManager): SimplePluginManager? {
       if (pm is SimplePluginManager) return pm
@@ -195,7 +202,9 @@ private constructor(
             "unknown"
           }
       return buildString {
-        appendLine("Unsupported Paper version (Paper $paperVersion). PaperPlane needs to be updated.")
+        appendLine(
+            "Unsupported Paper version (Paper $paperVersion). PaperPlane needs to be updated."
+        )
         appendLine("Please open an issue at https://github.com/botshashka/paperplane")
         appendLine()
         appendLine("Probe failures:")

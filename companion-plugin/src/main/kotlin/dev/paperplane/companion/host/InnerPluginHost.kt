@@ -6,7 +6,6 @@ import java.io.File
 import java.io.InputStream
 import java.lang.instrument.Instrumentation
 import java.lang.ref.WeakReference
-import java.net.URLClassLoader
 import java.util.jar.JarFile
 import java.util.logging.Logger
 import org.bukkit.Server
@@ -30,8 +29,8 @@ import org.bukkit.plugin.java.JavaPlugin
  * 6. Applies commands + permissions diffs via the public-API registrars.
  * 7. Calls `pluginManager.enablePlugin(inner)` — fires `PluginEnableEvent` correctly.
  *
- * Reload is teardown + load. Teardown is entirely public API except for the symmetric
- * `lookupNames` removal.
+ * Reload is teardown + load. Teardown is entirely public API except for the symmetric `lookupNames`
+ * removal.
  */
 open class InnerPluginHost(
     private val server: Server,
@@ -53,8 +52,7 @@ open class InnerPluginHost(
     internal fun containsNmsClasses(inst: Instrumentation, classLoader: ClassLoader): Boolean =
         inst.allLoadedClasses.any { c ->
           c.classLoader === classLoader &&
-              (c.name.startsWith("net.minecraft.") ||
-                  c.name.startsWith("org.bukkit.craftbukkit."))
+              (c.name.startsWith("net.minecraft.") || c.name.startsWith("org.bukkit.craftbukkit."))
         }
   }
 
@@ -77,24 +75,25 @@ open class InnerPluginHost(
   open fun isLoaded(): Boolean = active != null
 
   /**
-   * Top-level entry point: handle a [LoadRequest]. First request loads; subsequent requests
-   * reload. Tear-down on failure does NOT happen automatically — the previous plugin remains
-   * loaded if reload fails (matches the existing rollback semantics).
+   * Top-level entry point: handle a [LoadRequest]. First request loads; subsequent requests reload.
+   * Tear-down on failure does NOT happen automatically — the previous plugin remains loaded if
+   * reload fails (matches the existing rollback semantics).
    */
   open fun handleRequest(request: HostLoadRequest): HostLoadResult {
     val start = System.currentTimeMillis()
     return try {
       if (active == null) {
-        loadFresh(request)
-      } else {
-        reload(request)
-      }.let { result ->
-        val ms = System.currentTimeMillis() - start
-        when (result) {
-          is HostLoadResult.Ok -> HostLoadResult.Ok(result.pluginName, ms)
-          is HostLoadResult.Failed -> HostLoadResult.Failed(result.message, ms)
-        }
-      }
+            loadFresh(request)
+          } else {
+            reload(request)
+          }
+          .let { result ->
+            val ms = System.currentTimeMillis() - start
+            when (result) {
+              is HostLoadResult.Ok -> HostLoadResult.Ok(result.pluginName, ms)
+              is HostLoadResult.Failed -> HostLoadResult.Failed(result.message, ms)
+            }
+          }
     } catch (
         @Suppress("TooGenericExceptionCaught") // Last-resort safety net for the whole pipeline.
         e: Exception) {
@@ -114,7 +113,8 @@ open class InnerPluginHost(
   // ── load ────────────────────────────────────────────────────────────
 
   private fun loadFresh(request: HostLoadRequest): HostLoadResult {
-    val description = readDescription(request) ?: return HostLoadResult.Failed("plugin.yml not found", 0)
+    val description =
+        readDescription(request) ?: return HostLoadResult.Failed("plugin.yml not found", 0)
     when (val v = PluginYmlValidator.validate(description, server, logger)) {
       is PluginYmlValidator.Result.Reject -> return HostLoadResult.Failed(v.message, 0)
       PluginYmlValidator.Result.Ok -> {}
@@ -133,15 +133,20 @@ open class InnerPluginHost(
 
     if (shouldForceBlueGreen) {
       return HostLoadResult.Failed(
-          "Hot-reload disabled: $consecutiveLeaks consecutive classloader leaks", 0)
+          "Hot-reload disabled: $consecutiveLeaks consecutive classloader leaks",
+          0,
+      )
     }
 
     if (usesNmsClasses(a.plugin)) {
       return HostLoadResult.Failed(
-          "Plugin '${a.name}' uses NMS/CraftBukkit classes — skipping hot-reload", 0)
+          "Plugin '${a.name}' uses NMS/CraftBukkit classes — skipping hot-reload",
+          0,
+      )
     }
 
-    val description = readDescription(request) ?: return HostLoadResult.Failed("plugin.yml not found", 0)
+    val description =
+        readDescription(request) ?: return HostLoadResult.Failed("plugin.yml not found", 0)
     when (val v = PluginYmlValidator.validate(description, server, logger)) {
       is PluginYmlValidator.Result.Reject -> return HostLoadResult.Failed(v.message, 0)
       PluginYmlValidator.Result.Ok -> {}
@@ -177,7 +182,9 @@ open class InnerPluginHost(
     try {
       a.classLoader.close()
     } catch (
-        @Suppress("TooGenericExceptionCaught") // close() may throw on broken streams; logged + swallowed
+        @Suppress(
+            "TooGenericExceptionCaught"
+        ) // close() may throw on broken streams; logged + swallowed
         e: Exception) {
       logger.warning("Failed to close inner classloader: ${e.message}")
     }
@@ -211,8 +218,8 @@ open class InnerPluginHost(
   }
 
   /**
-   * Sets the JavaPlugin's internal state. Tries the package-private `init(...)` method first;
-   * falls back to direct field injection only if init was not resolvable at probe time.
+   * Sets the JavaPlugin's internal state. Tries the package-private `init(...)` method first; falls
+   * back to direct field injection only if init was not resolvable at probe time.
    */
   private fun initializePlugin(
       plugin: JavaPlugin,
@@ -227,7 +234,8 @@ open class InnerPluginHost(
       return
     }
 
-    val fields = probe.javaPluginFields ?: error("ReflectionProbe accepted with neither init nor fields")
+    val fields =
+        probe.javaPluginFields ?: error("ReflectionProbe accepted with neither init nor fields")
     fields.server.set(plugin, server)
     fields.description.set(plugin, description)
     fields.dataFolder.set(plugin, dataFolder)
@@ -235,7 +243,9 @@ open class InnerPluginHost(
     fields.classLoader.set(plugin, classLoader)
   }
 
-  @Suppress("DEPRECATION") // JavaPluginLoader is deprecated but the only legitimate constructor for init().
+  @Suppress(
+      "DEPRECATION"
+  ) // JavaPluginLoader is deprecated but the only legitimate constructor for init().
   private fun makeJavaPluginLoader(): org.bukkit.plugin.java.JavaPluginLoader =
       org.bukkit.plugin.java.JavaPluginLoader(server)
 

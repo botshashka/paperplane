@@ -14,9 +14,9 @@ import org.bukkit.help.HelpTopic
  *   keeps the stale `PluginCommand` reference.
  * - There is no `removeTopic`, so commands removed from `plugin.yml` would leave dangling entries.
  *
- * Direct mutation of the backing map fixes both: `put` replaces, `remove` removes. The backing
- * map is resolved once at companion startup by [ReflectionProbe] via generic-signature lookup
- * (not field name), so this survives a future rename of `SimpleHelpMap.helpTopics`.
+ * Direct mutation of the backing map fixes both: `put` replaces, `remove` removes. The backing map
+ * is resolved once at companion startup by [ReflectionProbe] via generic-signature lookup (not
+ * field name), so this survives a future rename of `SimpleHelpMap.helpTopics`.
  */
 class HelpMapWriter(
     private val helpMap: HelpMap,
@@ -53,10 +53,10 @@ class HelpMapWriter(
  * plugin JARs, and reflecting into it would add a second probe target. Subclassing `HelpTopic`
  * directly (a paper-api class) costs nothing.
  *
- * **UX note**: Paper's `SimpleHelpMap` filters `instanceof CommandAliasHelpTopic` out of the
- * master `/help` index. This subclass won't match that `instanceof`, so PaperPlane-registered
- * aliases appear in the master `/help` listing alongside primaries. For a plugin-dev tool that's
- * arguably useful — every command surface the plugin exposes is visible at a glance.
+ * **UX note**: Paper's `SimpleHelpMap` filters `instanceof CommandAliasHelpTopic` out of the master
+ * `/help` index. This subclass won't match that `instanceof`, so PaperPlane-registered aliases
+ * appear in the master `/help` listing alongside primaries. For a plugin-dev tool that's arguably
+ * useful — every command surface the plugin exposes is visible at a glance.
  */
 class PaperPlaneAliasHelpTopic(
     alias: String,

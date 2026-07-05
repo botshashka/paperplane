@@ -118,11 +118,14 @@ class InnerPluginHostFullLoadTest {
 
     // onEnable ran (plugin is enabled).
     assertTrue(inner.isEnabled, "pluginManager.enablePlugin must have been called")
-    assertEquals(1, TestInnerPluginCounters.enableCount.get(), "onEnable must have been called once")
+    assertEquals(
+        1,
+        TestInnerPluginCounters.enableCount.get(),
+        "onEnable must have been called once",
+    )
 
     // lookupNames was written symmetrically — getPlugin must return the inner.
-    @Suppress("UNCHECKED_CAST")
-    val lookup = readLookupNames()
+    @Suppress("UNCHECKED_CAST") val lookup = readLookupNames()
     assertSame(
         inner,
         lookup["fullloadone"],
@@ -166,7 +169,11 @@ class InnerPluginHostFullLoadTest {
     // Different classloader instances → different Class objects → different JavaPlugin instances.
     assertTrue(first !== second, "Reload must produce a fresh JavaPlugin instance")
     assertEquals(2, TestInnerPluginCounters.enableCount.get(), "onEnable must run twice")
-    assertEquals(1, TestInnerPluginCounters.disableCount.get(), "old plugin's onDisable must have run")
+    assertEquals(
+        1,
+        TestInnerPluginCounters.disableCount.get(),
+        "old plugin's onDisable must have run",
+    )
 
     // lookupNames must point at the new instance.
     val lookup = readLookupNames()
@@ -231,8 +238,8 @@ class InnerPluginHostFullLoadTest {
   // ── helpers ─────────────────────────────────────────────────────────
 
   /**
-   * Builds a JAR containing [TestInnerPlugin]'s compiled `.class` plus a `plugin.yml` that names
-   * it as the main class. The JAR lands in [tempDir] so cleanup is automatic.
+   * Builds a JAR containing [TestInnerPlugin]'s compiled `.class` plus a `plugin.yml` that names it
+   * as the main class. The JAR lands in [tempDir] so cleanup is automatic.
    */
   private fun makeLoadRequest(
       pluginName: String,
@@ -294,8 +301,7 @@ class InnerPluginHostFullLoadTest {
    * `JavaPlugin.setEnabled` directly — that's what real Paper does under the hood, minus the
    * datapack/event plumbing we don't need here.
    */
-  private class MinimalEnableManager(private val spm: SimplePluginManager) :
-      PluginManager by spm {
+  private class MinimalEnableManager(private val spm: SimplePluginManager) : PluginManager by spm {
     // JavaPlugin.setEnabled internally calls onEnable / onDisable on transition. We only need to
     // flip the flag — Paper's manager would also fire PluginEnable/DisableEvent, but the host
     // tests don't observe events.
@@ -310,9 +316,9 @@ class InnerPluginHostFullLoadTest {
 }
 
 /**
- * Cross-classloader counter. Lives in its own file (loaded only by the system classloader) so
- * the JAR-bundled [TestInnerPlugin] (loaded by `DevPluginClassLoader`) and the test (loaded by
- * the system classloader) see the SAME counters. If we put the counters on `TestInnerPlugin`'s
+ * Cross-classloader counter. Lives in its own file (loaded only by the system classloader) so the
+ * JAR-bundled [TestInnerPlugin] (loaded by `DevPluginClassLoader`) and the test (loaded by the
+ * system classloader) see the SAME counters. If we put the counters on `TestInnerPlugin`'s
  * companion, each classloader would see its own copy and onEnable bumps would be invisible.
  */
 object TestInnerPluginCounters {
@@ -326,9 +332,9 @@ object TestInnerPluginCounters {
 }
 
 /**
- * The fixture plugin loaded into the host. References [TestInnerPluginCounters] (NOT bundled in
- * our JAR), which the child classloader resolves through its parent — keeping the counter shared
- * across both loads of TestInnerPlugin (the system one in test classpath, and the one loaded by
+ * The fixture plugin loaded into the host. References [TestInnerPluginCounters] (NOT bundled in our
+ * JAR), which the child classloader resolves through its parent — keeping the counter shared across
+ * both loads of TestInnerPlugin (the system one in test classpath, and the one loaded by
  * DevPluginClassLoader from the JAR).
  */
 class TestInnerPlugin : JavaPlugin() {

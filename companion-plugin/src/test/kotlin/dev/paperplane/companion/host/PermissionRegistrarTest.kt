@@ -127,13 +127,13 @@ class PermissionRegistrarTest {
     val first =
         PluginDescriptionFile(
             ("name: MyPlugin\nmain: x\nversion: 1.0\npermissions:\n" +
-                "  my.fly:\n    description: Old description")
+                    "  my.fly:\n    description: Old description")
                 .byteInputStream(),
         )
     val second =
         PluginDescriptionFile(
             ("name: MyPlugin\nmain: x\nversion: 1.0\npermissions:\n" +
-                "  my.fly:\n    description: New description")
+                    "  my.fly:\n    description: New description")
                 .byteInputStream(),
         )
     registrar.apply(first)

@@ -10,11 +10,10 @@ import org.bukkit.plugin.PluginDescriptionFile
  * `removePermission` API.
  *
  * Like [CommandRegistrar], maintains a per-host snapshot so reloads can register additions and
- * unregister removals without churn. Children-permission cascades are flattened: every node in
- * the tree gets its own `Permission` object.
+ * unregister removals without churn. Children-permission cascades are flattened: every node in the
+ * tree gets its own `Permission` object.
  *
- * Zero reflection. The `Permission` class and `PluginManager.addPermission` are public Bukkit
- * API.
+ * Zero reflection. The `Permission` class and `PluginManager.addPermission` are public Bukkit API.
  */
 class PermissionRegistrar(private val server: Server) {
 
@@ -55,8 +54,8 @@ class PermissionRegistrar(private val server: Server) {
   fun registered(): Set<String> = applied.keys.toSet()
 
   /**
-   * Identity-ish comparison: same default, same description, same children map. Cheap; matches
-   * the subset of [Permission] state that affects runtime semantics.
+   * Identity-ish comparison: same default, same description, same children map. Cheap; matches the
+   * subset of [Permission] state that affects runtime semantics.
    */
   private fun samePermission(a: Permission, b: Permission): Boolean {
     if (a.default != b.default) return false

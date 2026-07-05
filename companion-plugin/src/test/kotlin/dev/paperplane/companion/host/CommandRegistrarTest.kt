@@ -108,7 +108,10 @@ class CommandRegistrarTest {
   @Test
   fun `apply adding a command registers it`() {
     registrar.apply(plugin, description("fly" to mapOf<String, Any>()))
-    registrar.apply(plugin, description("fly" to mapOf<String, Any>(), "tp" to mapOf<String, Any>()))
+    registrar.apply(
+        plugin,
+        description("fly" to mapOf<String, Any>(), "tp" to mapOf<String, Any>()),
+    )
     assertEquals(setOf("fly", "tp"), registrar.registered())
   }
 
@@ -116,7 +119,10 @@ class CommandRegistrarTest {
 
   @Test
   fun `clear removes all registered commands`() {
-    registrar.apply(plugin, description("fly" to mapOf<String, Any>(), "tp" to mapOf<String, Any>()))
+    registrar.apply(
+        plugin,
+        description("fly" to mapOf<String, Any>(), "tp" to mapOf<String, Any>()),
+    )
     registrar.clear()
     assertTrue(registrar.registered().isEmpty())
     assertEquals(null, server.commandMap.getCommand("fly"))
@@ -193,7 +199,10 @@ class CommandRegistrarTest {
 
   @Test
   fun `apply registers a GenericCommandHelpTopic per primary command`() {
-    registrar.apply(plugin, description("fly" to mapOf<String, Any>(), "tp" to mapOf<String, Any>()))
+    registrar.apply(
+        plugin,
+        description("fly" to mapOf<String, Any>(), "tp" to mapOf<String, Any>()),
+    )
 
     val flyTopic = server.helpMap.getHelpTopic("/fly")
     val tpTopic = server.helpMap.getHelpTopic("/tp")
