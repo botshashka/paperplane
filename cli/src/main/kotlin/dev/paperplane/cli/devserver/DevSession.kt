@@ -114,8 +114,38 @@ internal class DevSession(
     /** Initial build failed — caller should enter fix recovery. */
     object BuildFailed : StartupOutcome()
 
+    /**
+     * Initial plugin load was rejected by the host (bad plugin.yml, probe failure, a crash in
+     * onEnable, …). Recoverable: the fix is a source/config edit, so — like [BuildFailed] — the
+     * caller enters fix recovery and keeps `ppl dev` alive rather than exiting.
+     */
+    object LoadFailed : StartupOutcome()
+
     /** Unrecoverable (metadata missing, server failed to start, proxy failed, etc.). */
     object Aborted : StartupOutcome()
+  }
+
+  /**
+   * What [startServerAndReport] produced. Distinguishes a recoverable plugin-load failure (route to
+   * fix recovery, keeping the session alive) from an unrecoverable server-start failure (abort).
+   * Prior to this type both collapsed to a null return and every mode aborted `ppl dev` on a load
+   * failure — so a plugin.yml typo killed the session instead of dropping into the same keep-alive
+   * fix loop a compile error gets.
+   */
+  sealed class ServerStartResult {
+    data class Running(val state: RunningState) : ServerStartResult()
+
+    /** The host rejected/timed-out the load, or the server died mid-load — enter fix recovery. */
+    object LoadFailed : ServerStartResult()
+
+    /** Server process never became ready — abort. */
+    object Aborted : ServerStartResult()
+
+    /**
+     * The live server when the start succeeded, else null. Convenience for fix-recovery callers.
+     */
+    val stateOrNull: RunningState?
+      get() = (this as? Running)?.state
   }
 
   /** Result of an initial-build-and-resolve attempt used during startup or fix recovery. */
@@ -369,7 +399,9 @@ internal class DevSession(
   /**
    * Starts a Paper server and emits the standard cleanupStale → configure → copy plugin/companion →
    * start → waitForReady → success/error ribbon. Used by initial startup in all three modes and by
-   * the fix-recovery callback. Returns a [RunningState] on success or null on failure.
+   * the fix-recovery callback. Returns a [ServerStartResult]: [ServerStartResult.Running] on
+   * success, [ServerStartResult.LoadFailed] when the host rejects the plugin load (recoverable via
+   * fix recovery), or [ServerStartResult.Aborted] when the server never came up.
    *
    * Optional parameters let each mode tailor the flow:
    * - [jvmArgs] defaults to [config].server.jvmArgs; HotReloadMode appends
@@ -394,7 +426,7 @@ internal class DevSession(
       spinLabel: String = "Starting Paper ${resolveMcVersion(metadata)} server...",
       readyMessage: String = "Paper ${resolveMcVersion(metadata)} server ready",
       extraConfigure: (PaperServerManager) -> Unit = {},
-  ): RunningState? {
+  ): ServerStartResult {
     serverManager.cleanupStale()
     serverManager.configure(config.server)
     extraConfigure(serverManager)
@@ -414,7 +446,7 @@ internal class DevSession(
     if (!ready) {
       ui.error("Server failed to start", serverDuration)
       serverManager.writeCompanionStatus("error", mapOf("message" to "Server failed to start"))
-      return null
+      return ServerStartResult.Aborted
     }
 
     // Companion is up and probed. Hand it the staged plugin to load, then wait for and consume the
@@ -436,25 +468,30 @@ internal class DevSession(
         ui.success("Plugin loaded")
         ui.success(readyMessage, serverDuration)
         serverManager.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
-        RunningState(metadata, paperJar)
+        ServerStartResult.Running(RunningState(metadata, paperJar))
       }
       is LoadWaitResult.Failed -> {
         ui.error("Plugin failed to load: ${loadResult.message}")
+        loadFailureHint(loadResult)?.let { ui.status(it) }
         serverManager.writeCompanionStatus("error", mapOf("message" to "Plugin load failed"))
-        // Startup is declared failed — stop the server rather than leave it running unattended
-        // until the next rebuild reaps it with a hard kill.
+        // A rejected load is recoverable via a source/config edit — stop the just-started server so
+        // no stale instance lingers while the user fixes it, and let fix recovery keep the session
+        // alive (a fresh server is started on the next successful rebuild).
         serverManager.stop()
-        null
+        ServerStartResult.LoadFailed
       }
       LoadWaitResult.TimedOut -> {
         ui.error("Timed out waiting for the plugin to load")
+        loadFailureHint(loadResult)?.let { ui.status(it) }
         serverManager.writeCompanionStatus("error", mapOf("message" to "Plugin load timed out"))
         serverManager.stop()
-        null
+        ServerStartResult.LoadFailed
       }
       LoadWaitResult.ServerExited -> {
         ui.error("Server exited while loading the plugin")
-        null
+        loadFailureHint(loadResult)?.let { ui.status(it) }
+        // Server process is already dead — nothing to stop; recover on the next edit.
+        ServerStartResult.LoadFailed
       }
     }
   }

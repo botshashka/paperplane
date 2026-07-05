@@ -227,6 +227,49 @@ class BlueGreenModeRenderTest {
     assertFalse(fixture.terminal.writes.any { it.contains("Watching for changes") })
   }
 
+  // ── Initial-load failure → fix recovery ────────────────────────────
+  // A rejected initial plugin *load* (after the proxy + backend are up) is recoverable via a
+  // source/config edit, so it routes to StartupOutcome.LoadFailed → fix recovery with a "Waiting
+  // for changes..." footer, rather than aborting `ppl dev`. The proxy stays up for the retry.
+
+  @Test
+  fun `failed initial load routes to LoadFailed and waits for changes`() {
+    val (mode, fixture, proxy) = newMode()
+    fixture.loadWaitResult = LoadWaitResult.Failed("plugin.yml not found", null)
+
+    val outcome = mode.runStartup()
+
+    assertEquals(DevSession.StartupOutcome.LoadFailed, outcome)
+    assertTrue(
+        fixture.terminal.writes.any { it.contains("Plugin failed to load: plugin.yml not found") }
+    )
+    assertTrue(
+        fixture.terminal.writes.any { it.contains("paperplane { } block in build.gradle.kts") }
+    )
+    assertTrue(fixture.terminal.writes.any { it.contains("Waiting for changes") })
+    // The proxy came up before the load failed and is left running for the fix-recovery retry.
+    assertTrue(proxy.calls.contains("waitForReady"))
+    assertFalse(
+        mode.fixRecoveryEntered,
+        "runStartup must not call enterFixRecovery internally; control returns to run()",
+    )
+  }
+
+  @Test
+  fun `server exit during initial load routes to LoadFailed and waits for changes`() {
+    val (mode, fixture, _) = newMode()
+    fixture.loadWaitResult = LoadWaitResult.ServerExited
+
+    val outcome = mode.runStartup()
+
+    assertEquals(DevSession.StartupOutcome.LoadFailed, outcome)
+    assertTrue(
+        fixture.terminal.writes.any { it.contains("Server exited while loading the plugin") }
+    )
+    assertTrue(fixture.terminal.writes.any { it.contains("static") && it.contains("onEnable") })
+    assertTrue(fixture.terminal.writes.any { it.contains("Waiting for changes") })
+  }
+
   // ── Server log interleaving ────────────────────────────────────────
 
   @Test

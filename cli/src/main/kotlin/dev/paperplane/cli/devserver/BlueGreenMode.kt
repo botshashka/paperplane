@@ -109,7 +109,8 @@ internal open class BlueGreenMode(
     val state: RunningState =
         when (val outcome = runStartup()) {
           is StartupOutcome.Running -> outcome.state
-          StartupOutcome.BuildFailed -> enterFixRecovery() ?: return
+          StartupOutcome.BuildFailed,
+          StartupOutcome.LoadFailed -> enterFixRecovery() ?: return
           StartupOutcome.Aborted -> return
         }
 
@@ -155,7 +156,15 @@ internal open class BlueGreenMode(
             }
           }
       if (!startProxy()) return@phase PhaseEnd.None
-      val state = startInitialServer(metadata, paperJar) ?: return@phase PhaseEnd.None
+      val state =
+          when (val result = startInitialServer(metadata, paperJar)) {
+            is DevSession.ServerStartResult.Running -> result.state
+            DevSession.ServerStartResult.LoadFailed -> {
+              outcome = StartupOutcome.LoadFailed
+              return@phase PhaseEnd.Waiting
+            }
+            DevSession.ServerStartResult.Aborted -> return@phase PhaseEnd.None
+          }
       session.showServerInfo(
           metadata,
           "localhost:${PaperServerManager.DEFAULT_PORT} (via proxy)",
@@ -224,7 +233,7 @@ internal open class BlueGreenMode(
   private fun startInitialServer(
       metadata: ProjectMetadata,
       paperJar: File,
-  ): DevSession.RunningState? {
+  ): DevSession.ServerStartResult {
     val active = servers[activeSlot]!!
     // Clean stale lock files on BOTH slots before binding — the standby may have leftover state
     // from a previous crash, and we don't want it holding its port when pre-warm runs.

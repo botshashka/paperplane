@@ -177,6 +177,52 @@ class RestartModeRenderTest {
     assertFalse(fixture.terminal.writes.any { it.contains("Watching for changes") })
   }
 
+  // ── runStartup initial-load failure → fix recovery ─────────────────
+  // A rejected initial *load* (bad plugin.yml, probe failure, onEnable crash) is recoverable via a
+  // source/config edit, so it routes to StartupOutcome.LoadFailed → fix recovery with a "Waiting
+  // for changes..." footer, the same as an initial build failure — not the Aborted exit path.
+
+  @Test
+  fun `failed initial load routes to LoadFailed, stops the server, and waits for changes`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    fixture.loadWaitResult = LoadWaitResult.Failed("plugin.yml not found", null)
+    val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
+    val mode = TestableRestartMode(fixture.session, server)
+
+    val outcome = mode.runStartup()
+
+    assertEquals(DevSession.StartupOutcome.LoadFailed, outcome)
+    assertTrue(
+        fixture.terminal.writes.any { it.contains("Plugin failed to load: plugin.yml not found") }
+    )
+    assertTrue(
+        fixture.terminal.writes.any { it.contains("paperplane { } block in build.gradle.kts") }
+    )
+    assertTrue(fixture.terminal.writes.any { it.contains("Waiting for changes") })
+    assertTrue(server.calls.contains("stop"))
+    assertFalse(
+        mode.fixRecoveryEntered,
+        "runStartup must not call enterFixRecovery internally; control returns to run()",
+    )
+  }
+
+  @Test
+  fun `server exit during initial load routes to LoadFailed and waits for changes`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    fixture.loadWaitResult = LoadWaitResult.ServerExited
+    val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
+    val mode = TestableRestartMode(fixture.session, server)
+
+    val outcome = mode.runStartup()
+
+    assertEquals(DevSession.StartupOutcome.LoadFailed, outcome)
+    assertTrue(
+        fixture.terminal.writes.any { it.contains("Server exited while loading the plugin") }
+    )
+    assertTrue(fixture.terminal.writes.any { it.contains("static") && it.contains("onEnable") })
+    assertTrue(fixture.terminal.writes.any { it.contains("Waiting for changes") })
+  }
+
   // ── rebuild happy path ─────────────────────────────────────────────
 
   @Test

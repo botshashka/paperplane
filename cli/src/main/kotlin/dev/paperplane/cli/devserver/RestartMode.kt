@@ -28,7 +28,8 @@ internal open class RestartMode(
     val state: RunningState =
         when (val outcome = runStartup()) {
           is StartupOutcome.Running -> outcome.state
-          StartupOutcome.BuildFailed -> enterFixRecovery() ?: return
+          StartupOutcome.BuildFailed,
+          StartupOutcome.LoadFailed -> enterFixRecovery() ?: return
           StartupOutcome.Aborted -> return
         }
 
@@ -51,8 +52,9 @@ internal open class RestartMode(
   /**
    * Runs the startup sequence (metadata → build → paper download → server start → info) inside a
    * single phase. Returns [StartupOutcome.Running] on success, [StartupOutcome.BuildFailed] if the
-   * initial build failed (caller should enter fix recovery), or [StartupOutcome.Aborted] for
-   * unrecoverable failures (metadata missing, server failed to start).
+   * initial build failed or [StartupOutcome.LoadFailed] if the plugin was rejected at load (both
+   * route to fix recovery), or [StartupOutcome.Aborted] for unrecoverable failures (metadata
+   * missing, server failed to start).
    */
   internal fun runStartup(): StartupOutcome {
     var outcome: StartupOutcome = StartupOutcome.Aborted
@@ -75,8 +77,14 @@ internal open class RestartMode(
             }
           }
       val state =
-          session.startServerAndReport(serverManager, metadata, paperJar)
-              ?: return@phase PhaseEnd.None
+          when (val result = session.startServerAndReport(serverManager, metadata, paperJar)) {
+            is DevSession.ServerStartResult.Running -> result.state
+            DevSession.ServerStartResult.LoadFailed -> {
+              outcome = StartupOutcome.LoadFailed
+              return@phase PhaseEnd.Waiting
+            }
+            DevSession.ServerStartResult.Aborted -> return@phase PhaseEnd.None
+          }
       session.showServerInfo(
           metadata,
           "localhost:${PaperServerManager.DEFAULT_PORT}",
@@ -103,7 +111,10 @@ internal open class RestartMode(
         when (val attempt = session.handleFixAttempt(serverManager)) {
           is DevSession.FixAttempt.BuildFailed -> null
           is DevSession.FixAttempt.Success ->
-              session.startServerAndReport(serverManager, attempt.metadata, attempt.paperJar)
+              // Null on a still-failing load keeps the fix-recovery loop waiting for the next edit.
+              session
+                  .startServerAndReport(serverManager, attempt.metadata, attempt.paperJar)
+                  .stateOrNull
         }
       }
 

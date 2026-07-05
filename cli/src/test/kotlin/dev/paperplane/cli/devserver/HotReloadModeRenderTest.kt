@@ -9,6 +9,8 @@ import java.io.File
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -144,9 +146,12 @@ class HotReloadModeRenderTest {
   }
 
   // ── Initial load result branches ───────────────────────────────────
+  // A failed initial *load* is recoverable (the fix is a source/config edit), so it must route to
+  // StartupOutcome.LoadFailed → fix recovery with a "Waiting for changes..." footer — not abort
+  // `ppl dev` — mirroring how an initial build failure behaves.
 
   @Test
-  fun `failed initial load reports the host message, stops the server, and aborts`() {
+  fun `failed initial load routes to LoadFailed, stops the server, and waits for changes`() {
     val fixture = DevSessionFixture(tempDir).withMetadata()
     fixture.loadWaitResult = LoadWaitResult.Failed("plugin.yml not found", null)
     val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
@@ -154,10 +159,16 @@ class HotReloadModeRenderTest {
 
     val outcome = mode.runStartup()
 
-    assertEquals(DevSession.StartupOutcome.Aborted, outcome)
+    assertEquals(DevSession.StartupOutcome.LoadFailed, outcome)
     assertTrue(
         fixture.terminal.writes.any { it.contains("Plugin failed to load: plugin.yml not found") }
     )
+    // The diagnosis hint points at the plugin.yml source of truth.
+    assertTrue(
+        fixture.terminal.writes.any { it.contains("paperplane { } block in build.gradle.kts") },
+        "a plugin.yml failure should hint at the paperplane { } block",
+    )
+    assertTrue(fixture.terminal.writes.any { it.contains("Waiting for changes") })
     assertTrue(
         server.calls.contains("stop"),
         "a rejected load must stop the just-started server, not leave it running unattended",
@@ -165,7 +176,7 @@ class HotReloadModeRenderTest {
   }
 
   @Test
-  fun `timed-out initial load reports the timeout, stops the server, and aborts`() {
+  fun `timed-out initial load routes to LoadFailed, stops the server, and waits for changes`() {
     val fixture = DevSessionFixture(tempDir).withMetadata()
     fixture.loadWaitResult = LoadWaitResult.TimedOut
     val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
@@ -173,15 +184,17 @@ class HotReloadModeRenderTest {
 
     val outcome = mode.runStartup()
 
-    assertEquals(DevSession.StartupOutcome.Aborted, outcome)
+    assertEquals(DevSession.StartupOutcome.LoadFailed, outcome)
     assertTrue(
         fixture.terminal.writes.any { it.contains("Timed out waiting for the plugin to load") }
     )
+    assertTrue(fixture.terminal.writes.any { it.contains("never reported back") })
+    assertTrue(fixture.terminal.writes.any { it.contains("Waiting for changes") })
     assertTrue(server.calls.contains("stop"))
   }
 
   @Test
-  fun `server exit during initial load reports it and aborts`() {
+  fun `server exit during initial load routes to LoadFailed and waits for changes`() {
     val fixture = DevSessionFixture(tempDir).withMetadata()
     fixture.loadWaitResult = LoadWaitResult.ServerExited
     val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
@@ -189,10 +202,58 @@ class HotReloadModeRenderTest {
 
     val outcome = mode.runStartup()
 
-    assertEquals(DevSession.StartupOutcome.Aborted, outcome)
+    assertEquals(DevSession.StartupOutcome.LoadFailed, outcome)
     assertTrue(
         fixture.terminal.writes.any { it.contains("Server exited while loading the plugin") }
     )
+    assertTrue(fixture.terminal.writes.any { it.contains("static") && it.contains("onEnable") })
+    assertTrue(fixture.terminal.writes.any { it.contains("Waiting for changes") })
+  }
+
+  // ── Fix-recovery restart preserves hot-reload wiring ───────────────
+  // Regression: HotReloadMode's fix-recovery restart previously called startServerAndReport with
+  // default args, silently dropping hotReload=true / JBR java / the redefinition agent. The
+  // recovered server must start with the same hot-reload wiring the initial startup uses.
+
+  @Test
+  fun `fix-recovery restart preserves the hot-reload agent wiring`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
+    val mode = TestableHotReloadMode(fixture.session, server)
+    val metadata = fixture.gradle.nextMetadata!!
+    val paperJar = File(fixture.ppDir, "paper.jar").apply { writeText("fake") }
+
+    var result: DevSession.RunningState? = null
+    fixture.ui.phase {
+      result = mode.startAfterFix(DevSession.FixAttempt.Success(metadata, paperJar))
+      PhaseEnd.None
+    }
+
+    // The recovered server must start with hotReload=true, not the default false.
+    assertTrue(
+        server.calls.any { it.startsWith("start(") && it.contains("hotReload=true") },
+        "recovered server must keep the hot-reload agent wiring, got: ${server.calls}",
+    )
+    assertNotNull(result, "a successful recovered load must hand back a RunningState")
+    assertTrue(fixture.terminal.writes.any { it.contains("Plugin loaded") })
+  }
+
+  @Test
+  fun `fix-recovery restart returns null when the load still fails`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    fixture.loadWaitResult = LoadWaitResult.Failed("still broken", null)
+    val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
+    val mode = TestableHotReloadMode(fixture.session, server)
+    val metadata = fixture.gradle.nextMetadata!!
+    val paperJar = File(fixture.ppDir, "paper.jar").apply { writeText("fake") }
+
+    var result: DevSession.RunningState? = null
+    fixture.ui.phase {
+      result = mode.startAfterFix(DevSession.FixAttempt.Success(metadata, paperJar))
+      PhaseEnd.None
+    }
+
+    assertNull(result, "a still-failing load must keep fix recovery waiting (null handoff)")
   }
 
   // ── Stale protocol flags are cleared before start ──────────────────

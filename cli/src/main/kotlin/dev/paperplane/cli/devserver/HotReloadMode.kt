@@ -85,7 +85,8 @@ internal open class HotReloadMode(
     val state: RunningState =
         when (val outcome = runStartup()) {
           is StartupOutcome.Running -> outcome.state
-          StartupOutcome.BuildFailed -> enterFixRecovery() ?: return
+          StartupOutcome.BuildFailed,
+          StartupOutcome.LoadFailed -> enterFixRecovery() ?: return
           StartupOutcome.Aborted -> return
         }
 
@@ -126,14 +127,24 @@ internal open class HotReloadMode(
             }
           }
       val state =
-          session.startServerAndReport(
-              serverManager = serverManager,
-              metadata = metadata,
-              paperJar = paperJar,
-              jvmArgs = hotReloadJvmArgs(),
-              hotReload = true,
-              javaBin = javaRuntime.bin,
-          ) ?: return@phase PhaseEnd.None
+          when (
+              val result =
+                  session.startServerAndReport(
+                      serverManager = serverManager,
+                      metadata = metadata,
+                      paperJar = paperJar,
+                      jvmArgs = hotReloadJvmArgs(),
+                      hotReload = true,
+                      javaBin = javaRuntime.bin,
+                  )
+          ) {
+            is DevSession.ServerStartResult.Running -> result.state
+            DevSession.ServerStartResult.LoadFailed -> {
+              outcome = StartupOutcome.LoadFailed
+              return@phase PhaseEnd.Waiting
+            }
+            DevSession.ServerStartResult.Aborted -> return@phase PhaseEnd.None
+          }
       session.showServerInfo(
           metadata,
           "localhost:${PaperServerManager.DEFAULT_PORT}",
@@ -163,10 +174,27 @@ internal open class HotReloadMode(
       ) { _ ->
         when (val attempt = session.handleFixAttempt(serverManager)) {
           is DevSession.FixAttempt.BuildFailed -> null
-          is DevSession.FixAttempt.Success ->
-              session.startServerAndReport(serverManager, attempt.metadata, attempt.paperJar)
+          is DevSession.FixAttempt.Success -> startAfterFix(attempt)
         }
       }
+
+  /**
+   * Starts the server after a successful fix-recovery rebuild. Must mirror [runStartup]'s startup
+   * args — the agent/JBR wiring (`hotReload = true`, [hotReloadJvmArgs], the JBR [javaBin]) — so a
+   * recovered server isn't silently downgraded to a plain JVM without the redefinition agent.
+   * Returns null on a still-failing load so the fix-recovery loop keeps waiting for the next edit.
+   */
+  internal fun startAfterFix(attempt: DevSession.FixAttempt.Success): RunningState? =
+      session
+          .startServerAndReport(
+              serverManager = serverManager,
+              metadata = attempt.metadata,
+              paperJar = attempt.paperJar,
+              jvmArgs = hotReloadJvmArgs(),
+              hotReload = true,
+              javaBin = javaRuntime.bin,
+          )
+          .stateOrNull
 
   // ── Rebuild ──────────────────────────────────────────────────────────
 

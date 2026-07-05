@@ -36,6 +36,40 @@ data class LeakSummary(
 )
 
 /**
+ * Maps an initial-load failure to one short, actionable hint, rendered dimly under the host's
+ * message by [DevSession.startServerAndReport] so a load failure diagnoses its likely cause instead
+ * of just stating it. Returns null only for [LoadWaitResult.Ok].
+ *
+ * The categories mirror [LoadWaitResult]'s failure shapes:
+ * - [LoadWaitResult.Failed] whose message mentions `plugin.yml` — PaperPlane generates plugin.yml
+ *   from the `paperplane { }` block, so that's where the user looks (missing/typo'd block).
+ *   `paper-plugin.yml` messages are excluded: that's the host telling the user to switch modes, and
+ *   pointing at the paperplane block would be wrong advice.
+ * - Any other [LoadWaitResult.Failed] (probe failure, NMS use, an onEnable exception surfaced as
+ *   the host message) — the detail is in the server log printed above.
+ * - [LoadWaitResult.TimedOut] — the host never answered; the server log is the place to look.
+ * - [LoadWaitResult.ServerExited] — the JVM died mid-load, which almost always means a crash in the
+ *   plugin's static initializer or onEnable.
+ */
+internal fun loadFailureHint(result: LoadWaitResult): String? =
+    when (result) {
+      is LoadWaitResult.Failed ->
+          if (
+              result.message.contains("plugin.yml", ignoreCase = true) &&
+                  !result.message.contains("paper-plugin.yml", ignoreCase = true)
+          )
+              "PaperPlane generates plugin.yml from the paperplane { } block in build.gradle.kts — " +
+                  "check that block and rebuild."
+          else "See the server log above for the plugin's load error."
+      LoadWaitResult.TimedOut ->
+          "The plugin never reported back — check the server log above for errors during load."
+      LoadWaitResult.ServerExited ->
+          "The server crashed while loading — likely an exception in the plugin's static " +
+              "initializer or onEnable. See the log above."
+      is LoadWaitResult.Ok -> null
+    }
+
+/**
  * Renders a concise leak warning when the host attributes a memory leak to the reload. No-op when
  * the report carries no attribution (the common case). One line, not a diagnostic dump — the full
  * diagnostics land server-side in the dev log.
