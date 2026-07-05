@@ -248,7 +248,8 @@ internal open class BlueGreenMode(
 
   // ── Rebuild ──────────────────────────────────────────────────────────
 
-  private fun rebuild(metadata: ProjectMetadata, paperJar: File): Pair<Slot, PhaseEnd> {
+  /** Internal for tests: the deploy/transfer/pre-warm cycle is driven directly. */
+  internal fun rebuild(metadata: ProjectMetadata, paperJar: File): Pair<Slot, PhaseEnd> {
     val totalStart = System.currentTimeMillis()
     val active = servers[activeSlot]!!
     val standbySlot = activeSlot.other()
@@ -277,6 +278,11 @@ internal open class BlueGreenMode(
             }
 
     return standbySlot to PhaseEnd.Watching
+  }
+
+  /** Internal for tests: blocks until the post-swap pre-warm finishes. */
+  internal fun awaitPreWarmForTest() {
+    preWarmThread?.join()
   }
 
   private fun buildAndSync(
@@ -326,7 +332,7 @@ internal open class BlueGreenMode(
       paperJar: File,
       totalStart: Long,
   ): Boolean {
-    standby.copyPlugin(builtJar)
+    standby.copyPluginToPluginsDir(builtJar)
     standby.copyCompanion()
 
     // The standby is about to become the active server — surface its logs.
@@ -376,7 +382,7 @@ internal open class BlueGreenMode(
       standby.configure(session.config.server)
       standby.configureVelocityForwarding(velocityManager.forwardingSecret)
       ServerSync.syncServerState(source.serverDir, standby.serverDir, pluginJar.name)
-      standby.copyPlugin(pluginJar)
+      standby.copyPluginToPluginsDir(pluginJar)
       standby.copyCompanion()
       // Pre-warmed standby runs silently — its logs would interleave with the active server's.
       standby.logSuppressed = true
@@ -401,13 +407,15 @@ internal open class BlueGreenMode(
     velocityManager.waitForReady(PaperServerManager.DEFAULT_PORT)
   }
 
-  private fun startFixedServer(metadata: ProjectMetadata, paperJar: File): RunningState? {
+  internal fun startFixedServer(metadata: ProjectMetadata, paperJar: File): RunningState? {
     val blue = servers[Slot.SERVER]!!
     blue.cleanupStale()
     blue.configure(session.config.server)
     blue.configureVelocityForwarding(velocityManager.forwardingSecret)
     val builtJar = File(session.projectDir, metadata.jarPath)
-    blue.copyPlugin(builtJar)
+    // Native deploy into plugins/ — staging here would boot the recovered server WITHOUT the
+    // user's plugin while still reporting "Server ready".
+    blue.copyPluginToPluginsDir(builtJar)
     blue.copyCompanion()
 
     val serverStart = System.currentTimeMillis()

@@ -6,6 +6,7 @@ import dev.paperplane.companion.host.HostLoadReport
 import dev.paperplane.companion.host.HostLoadRequest
 import dev.paperplane.companion.host.HostLoadResult
 import dev.paperplane.companion.host.InnerPluginHost
+import dev.paperplane.companion.host.UnsupportedPaperVersionException
 import java.io.File
 import java.io.IOException
 import java.nio.file.Path
@@ -14,9 +15,17 @@ import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.plugin.java.JavaPlugin
 import org.bukkit.scheduler.BukkitTask
 
+/**
+ * [hostProvider] builds the [InnerPluginHost] (probing Paper internals) on first load request
+ * rather than at companion startup. Native modes (restart/blue-green) never send a load request, so
+ * their companion — which may run on a Paper version that predates the plugin-loader API — never
+ * probes and stays fully functional (status bar, save protection, auto-op). The host is memoized on
+ * first success; a failed init answers every request with `load-failed` and the companion keeps
+ * running.
+ */
 class BuildStatusBar(
     private val plugin: JavaPlugin,
-    private val host: InnerPluginHost,
+    private val hostProvider: () -> InnerPluginHost,
     private val serverRoot: File = plugin.dataFolder.absoluteFile.parentFile.parentFile,
 ) {
   companion object {
@@ -34,6 +43,18 @@ class BuildStatusBar(
   private var inflightRequest = false
   private var hotSwapper: HotSwapper? = null
   private var agentWarningLogged = false
+
+  // Lazily built by [resolveHost] on the first load request. Null until then (native modes never
+  // reach it). After a failed init, [hostInitError] holds the message and every subsequent request
+  // is answered with load-failed instead of re-probing.
+  private var host: InnerPluginHost? = null
+  private var hostInitError: String? = null
+
+  /**
+   * The host if it was ever built, for teardown. Null in native modes where no load ever arrived.
+   */
+  val hostOrNull: InnerPluginHost?
+    get() = host
 
   /**
    * True while the active server's world is no longer authoritative — either the save is in
@@ -143,7 +164,60 @@ class BuildStatusBar(
     }
   }
 
+  /**
+   * Builds the host on first use, memoizing the result. On a failed init the companion itself stays
+   * up (status bar and save protection keep working even where hot-reload can't), and EVERY request
+   * — not just the first — is answered with a `load-failed` echoing its own requestId: the CLI's
+   * waiter filters results by requestId, so an unanswered request would surface as a generic
+   * timeout instead of the real failure.
+   */
+  private fun resolveHost(request: HostLoadRequest): InnerPluginHost? {
+    host?.let {
+      return it
+    }
+    hostInitError?.let { message ->
+      writeInitFailure(request, message)
+      return null
+    }
+    return try {
+      hostProvider().also { host = it }
+    } catch (
+        @Suppress("TooGenericExceptionCaught") // Anything the probe or host constructor throws must
+        // reach the CLI as load-failed; escaping into the scheduler tick would leave the request
+        // unanswered and the CLI staring at a timeout.
+        e: Exception) {
+      val message =
+          when (e) {
+            is UnsupportedPaperVersionException ->
+                e.message ?: "Unsupported Paper version for hot-reload"
+            else -> "Hot-reload host failed to initialize: ${e.javaClass.simpleName}: ${e.message}"
+          }
+      hostInitError = message
+      plugin.logger.severe(message)
+      if (e !is UnsupportedPaperVersionException) {
+        plugin.logger.severe(e.stackTraceToString())
+      }
+      writeInitFailure(request, message)
+      null
+    }
+  }
+
+  private fun writeInitFailure(request: HostLoadRequest, message: String) {
+    writeReport(
+        HostLoadReport(
+            requestId = request.requestId,
+            status = HostLoadReport.STATUS_FAILED,
+            strategy = HostLoadReport.STRATEGY_FRESH,
+            durationMs = 0,
+            pluginName = request.pluginName,
+            message = message,
+        )
+    )
+  }
+
   private fun handleRequest(request: HostLoadRequest) {
+    val host = resolveHost(request) ?: return
+
     if (!agentWarningLogged && AgentAccess.instrumentation() == null) {
       plugin.logger.warning(
           "PaperPlane agent not loaded — hot-swap tier and NMS detection disabled; " +
@@ -161,7 +235,7 @@ class BuildStatusBar(
     // Try in-place class redefinition first if HotSwapper is available and the change is
     // method-body-only. Skips the full host reload entirely.
     if (wasLoaded && request.changedClasses.isNotEmpty() && request.classesDirs.isNotEmpty()) {
-      if (tryHotSwap(request)) {
+      if (tryHotSwap(host, request)) {
         writeReport(
             HostLoadReport(
                 requestId = request.requestId,
@@ -228,7 +302,7 @@ class BuildStatusBar(
             )
       }
 
-  private fun tryHotSwap(request: HostLoadRequest): Boolean {
+  private fun tryHotSwap(host: InnerPluginHost, request: HostLoadRequest): Boolean {
     val inner = host.current() ?: return false
     if (hotSwapper == null) hotSwapper = HotSwapper(plugin.logger)
     if (!hotSwapper!!.isAvailable()) return false

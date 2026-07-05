@@ -1,6 +1,7 @@
 package dev.paperplane.cli.devserver
 
 import dev.paperplane.cli.Versions
+import dev.paperplane.cli.config.DevMode
 import dev.paperplane.cli.config.PaperPlaneConfig
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.gradle.MetadataResult
@@ -57,6 +58,13 @@ internal class DevSession(
      * because the first load races the tail of server startup (worlds, datapacks) on a cold JVM.
      */
     private const val INITIAL_LOAD_TIMEOUT_MS = 30_000L
+
+    /**
+     * Minimum Paper version for hot-reload. The companion host implements
+     * `ConfiguredPluginClassLoader`, which only exists on Paper 1.19.3+. Restart and blue-green
+     * load natively and have no such floor.
+     */
+    private const val HOT_RELOAD_MIN_PAPER = "1.19.3"
   }
 
   /**
@@ -202,6 +210,24 @@ internal class DevSession(
   }
 
   /**
+   * Hot-reload requires Paper 1.19.3+ (the version that introduced `ConfiguredPluginClassLoader`,
+   * which the companion host implements). Fail fast with an actionable message instead of letting
+   * the companion's probe reject the first load deep into startup. Restart and blue-green deploy
+   * natively and are unaffected — they run on any supported Paper version.
+   */
+  fun enforceHotReloadVersionFloor(mcVersion: String) {
+    if (
+        config.dev.mode == DevMode.HOT_RELOAD &&
+            Versions.compareVersions(mcVersion, HOT_RELOAD_MIN_PAPER) < 0
+    ) {
+      throw IllegalArgumentException(
+          "Hot-reload requires Paper $HOT_RELOAD_MIN_PAPER+. " +
+              "Use `dev.mode: restart` or `blue-green`, or update Paper."
+      )
+    }
+  }
+
+  /**
    * Runs the initial build + Paper download. Returns [BuildOutcome.Success] with the resolved Paper
    * jar on success, or [BuildOutcome.BuildFailed] if the build failed. Emits directly into the
    * caller's phase; never touches block lifecycle.
@@ -223,6 +249,7 @@ internal class DevSession(
     ui.success("Build succeeded", buildDuration)
 
     val mcVersion = resolveMcVersion(metadata)
+    enforceHotReloadVersionFloor(mcVersion)
     val paperJar = downloadPaper(mcVersion)
     return BuildOutcome.Success(paperJar)
   }
@@ -354,9 +381,18 @@ internal class DevSession(
     ui.success("Build succeeded", buildDuration)
 
     val metadata = gradle.metadata().metadataOrNull ?: return FixAttempt.BuildFailed
-    val mcVersion = resolveMcVersion(metadata)
-    val paperJar = downloader.download(mcVersion)
-    return FixAttempt.Success(metadata, paperJar)
+    return try {
+      val mcVersion = resolveMcVersion(metadata)
+      enforceHotReloadVersionFloor(mcVersion)
+      FixAttempt.Success(metadata, downloader.download(mcVersion))
+    } catch (
+        @Suppress("TooGenericExceptionCaught") // The fix loop runs on the watcher thread: an
+        // escaping throw (unsupported version, floor violation, download failure) would kill the
+        // watcher and hang the session. Surface the message and keep waiting for the next edit.
+        e: Exception) {
+      ui.error(e.message ?: "Fix attempt failed: ${e.javaClass.simpleName}")
+      FixAttempt.BuildFailed
+    }
   }
 
   /**
@@ -397,21 +433,26 @@ internal class DevSession(
   }
 
   /**
-   * Starts a Paper server and emits the standard cleanupStale → configure → copy plugin/companion →
-   * start → waitForReady → success/error ribbon. Used by initial startup in all three modes and by
-   * the fix-recovery callback. Returns a [ServerStartResult]: [ServerStartResult.Running] on
+   * Starts a Paper server and emits the standard cleanupStale → configure → deploy plugin/companion
+   * → start → waitForReady → success/error ribbon. Used by initial startup in all three modes and
+   * by the fix-recovery callback. Returns a [ServerStartResult]: [ServerStartResult.Running] on
    * success, [ServerStartResult.LoadFailed] when the host rejects the plugin load (recoverable via
    * fix recovery), or [ServerStartResult.Aborted] when the server never came up.
+   *
+   * [hotReload] selects the deploy strategy. When true, the jar is staged out of Paper's sight
+   * ([PaperServerManager.stagePlugin]) and handed to the companion host via a [LoadRequest] whose
+   * result is awaited — so a rejected load surfaces at startup. When false (restart/blue-green),
+   * the jar is dropped into `plugins/` ([PaperServerManager.copyPluginToPluginsDir]) and Paper
+   * loads it natively; no LoadRequest is written and the ready signal is the whole story.
    *
    * Optional parameters let each mode tailor the flow:
    * - [jvmArgs] defaults to [config].server.jvmArgs; HotReloadMode appends
    *   `-XX:+AllowEnhancedClassRedefinition` when JBR is active.
    * - [hotReload] and [javaBin] are forwarded to [PaperServerManager.start] — HotReloadMode sets
    *   them so the agent gets wired up and the JBR java binary is used.
-   * - [extraConfigure] runs immediately after [PaperServerManager.configure] and before
-   *   [PaperServerManager.copyPlugin]. BlueGreenMode uses it to inject
-   *   [PaperServerManager.configureVelocityForwarding], which must overwrite paper-global.yml that
-   *   `configure()` just wrote.
+   * - [extraConfigure] runs immediately after [PaperServerManager.configure] and before the plugin
+   *   deploy. BlueGreenMode uses it to inject [PaperServerManager.configureVelocityForwarding],
+   *   which must overwrite paper-global.yml that `configure()` just wrote.
    * - [spinLabel] is the spinner message while waiting for the server. Defaults to the standard
    *   "Starting Paper <mcVersion> server..." string.
    * - [readyMessage] is the success banner. Defaults to "Paper <mcVersion> server ready".
@@ -431,8 +472,23 @@ internal class DevSession(
     serverManager.configure(config.server)
     extraConfigure(serverManager)
     val builtJar = File(projectDir, metadata.jarPath)
-    val stagedJarPath = serverManager.copyPlugin(builtJar)
-    serverManager.copyCompanion(depend = metadata.depend, softdepend = metadata.softdepend)
+    // Deploy differs by mode. Hot-reload stages the jar out of Paper's sight and lets the companion
+    // host load it (so the companion must inherit the user's depends). Restart/blue-green drop the
+    // jar into plugins/ and let Paper load it natively — no host, no LoadRequest, no depend
+    // rewrite.
+    val stagedJarPath: String? =
+        if (hotReload) {
+          // A jar left in plugins/ by a previous restart/blue-green session would be natively
+          // loaded alongside the host's staged copy — two live instances, one running stale code.
+          serverManager.removeDeployedPlugin(builtJar.name)
+          val staged = serverManager.stagePlugin(builtJar)
+          serverManager.copyCompanion(depend = metadata.depend, softdepend = metadata.softdepend)
+          staged
+        } else {
+          serverManager.copyPluginToPluginsDir(builtJar)
+          serverManager.copyCompanion()
+          null
+        }
     syncDependencyPlugins(serverManager)
 
     // Clear crashed-session leftovers so the fresh companion doesn't consume a stale request or the
@@ -449,9 +505,41 @@ internal class DevSession(
       return ServerStartResult.Aborted
     }
 
+    // Native modes (no staged jar): Paper already loaded the plugin from plugins/ during boot.
+    // There is no host to send a LoadRequest to and nothing to await — the ready signal is the
+    // whole story.
+    if (stagedJarPath == null) {
+      ui.success(readyMessage, serverDuration)
+      serverManager.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
+      return ServerStartResult.Running(RunningState(metadata, paperJar))
+    }
+
     // Companion is up and probed. Hand it the staged plugin to load, then wait for and consume the
     // result — this is what makes a rejected load (probe failure, unsupported plugin shape) visible
     // at startup instead of silently limping on.
+    return awaitInitialHotReloadLoad(
+        serverManager,
+        metadata,
+        paperJar,
+        stagedJarPath,
+        readyMessage,
+        serverDuration,
+    )
+  }
+
+  /**
+   * Hot-reload only: writes the initial [LoadRequest] and awaits the host's result, mapping it to a
+   * [ServerStartResult]. A rejected/timed-out load stops the server and returns
+   * [ServerStartResult.LoadFailed] so fix recovery can keep the session alive on the next edit.
+   */
+  private fun awaitInitialHotReloadLoad(
+      serverManager: PaperServerManager,
+      metadata: ProjectMetadata,
+      paperJar: File,
+      stagedJarPath: String,
+      readyMessage: String,
+      serverDuration: String,
+  ): ServerStartResult {
     val requestId = writeInitialLoadRequest(serverManager, metadata, stagedJarPath)
     val loadResult =
         ui.spin("Loading ${metadata.pluginName}...") {

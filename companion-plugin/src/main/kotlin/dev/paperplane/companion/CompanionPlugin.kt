@@ -2,7 +2,6 @@ package dev.paperplane.companion
 
 import dev.paperplane.companion.host.InnerPluginHost
 import dev.paperplane.companion.host.ReflectionProbe
-import dev.paperplane.companion.host.UnsupportedPaperVersionException
 import java.io.File
 import org.bukkit.event.EventHandler
 import org.bukkit.event.Listener
@@ -12,17 +11,23 @@ import org.bukkit.plugin.java.JavaPlugin
 class CompanionPlugin : JavaPlugin() {
   private lateinit var errorCatcher: ErrorCatcher
   private lateinit var buildStatusBar: BuildStatusBar
-  private lateinit var host: InnerPluginHost
 
   override fun onEnable() {
     try {
-      // Probe Paper internals once at startup. Fails fast on an unsupported Paper version with a
-      // clear error rather than limping along.
-      val probe = ReflectionProbe.probe(server)
-      host = InnerPluginHost(server, javaClass.classLoader, probe, logger, hostPlugin = this)
-
+      // The host is built lazily on the first load request (hot-reload only). Probing Paper
+      // internals here would fail-fast the whole companion on Paper versions that predate the
+      // plugin-loader API — but restart/blue-green legitimately run on those and only need the
+      // status bar / save protection / auto-op below. The probe happens inside this provider the
+      // first time a load request arrives; BuildStatusBar reports a probe failure as `load-failed`.
       errorCatcher = ErrorCatcher(this)
-      buildStatusBar = BuildStatusBar(this, host)
+      buildStatusBar =
+          BuildStatusBar(
+              this,
+              hostProvider = {
+                val probe = ReflectionProbe.probe(server)
+                InnerPluginHost(server, javaClass.classLoader, probe, logger, hostPlugin = this)
+              },
+          )
 
       server.pluginManager.registerEvents(errorCatcher, this)
       server.pluginManager.registerEvents(AutoOpListener(serverRoot()), this)
@@ -44,13 +49,7 @@ class CompanionPlugin : JavaPlugin() {
           this,
       )
 
-      logger.info("PaperPlane companion enabled (host ready)")
-    } catch (e: UnsupportedPaperVersionException) {
-      logger.severe(e.message)
-      // Surface the failure to the CLI so `ppl dev` reports it immediately instead of waiting out
-      // the server-ready timeout, then disable (Bukkit prints stack noise on a throw here).
-      writeCompanionError(e.message ?: "Unsupported Paper version")
-      server.pluginManager.disablePlugin(this)
+      logger.info("PaperPlane companion enabled")
     } catch (
         @Suppress("TooGenericExceptionCaught") // Startup involves reflection, I/O, and server API
         e: Exception) {
@@ -85,19 +84,20 @@ class CompanionPlugin : JavaPlugin() {
 
   override fun onDisable() {
     // Tear down the inner plugin BEFORE companion's own teardown — otherwise the inner's
-    // onDisable never fires and players' state isn't saved on `stop`.
-    if (::host.isInitialized) {
-      try {
-        host.shutdown()
-      } catch (
-          @Suppress(
-              "TooGenericExceptionCaught"
-          ) // Defensive — inner teardown shouldn't take companion down
-          e: Exception) {
-        logger.warning("Inner plugin shutdown raised: ${e.message}")
-      }
-    }
+    // onDisable never fires and players' state isn't saved on `stop`. The host is only present if a
+    // load request ever built it (hot-reload mode); native modes never created one.
     if (::buildStatusBar.isInitialized) {
+      buildStatusBar.hostOrNull?.let { host ->
+        try {
+          host.shutdown()
+        } catch (
+            @Suppress(
+                "TooGenericExceptionCaught"
+            ) // Defensive — inner teardown shouldn't take companion down
+            e: Exception) {
+          logger.warning("Inner plugin shutdown raised: ${e.message}")
+        }
+      }
       try {
         buildStatusBar.stop()
       } catch (

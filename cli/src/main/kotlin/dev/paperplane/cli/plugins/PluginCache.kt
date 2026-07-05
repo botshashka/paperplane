@@ -15,9 +15,9 @@ import java.security.MessageDigest
  * fresh cache wipe. For `local:` entries the cache returns the original path unchanged — no copy,
  * since the source is already on disk.
  *
- * Downloads follow the same atomic-rename pattern as [PaperServerManager.copyPlugin]: stream to
- * `.{name}.tmp`, verify SHA512, then `ATOMIC_MOVE` into place. Partial downloads can't be mistaken
- * for complete ones because the final file is only created by the rename.
+ * Downloads follow the same atomic-rename pattern as [PaperServerManager.copyPluginToPluginsDir]:
+ * stream to `.{name}.tmp`, verify SHA512, then `ATOMIC_MOVE` into place. Partial downloads can't be
+ * mistaken for complete ones because the final file is only created by the rename.
  *
  * SHA512 (not SHA256) because Modrinth's `hashes` block consistently provides sha1 and sha512 but
  * NOT sha256. We pick sha512 for strength + universal availability across Modrinth files.

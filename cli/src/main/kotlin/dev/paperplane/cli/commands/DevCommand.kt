@@ -50,16 +50,6 @@ class DevCommand(
 
     if (!ensureEulaAccepted(File(ppDir, "server"))) return
 
-    val session =
-        DevSession(
-            config = config,
-            ppDir = ppDir,
-            gradle = GradleBridge(projectDir, ui),
-            downloader = PaperDownloader(File(ppDir, "cache")),
-            projectDir = projectDir,
-            ui = ui,
-        )
-
     val resolvedMode =
         modeFlag?.let {
           try {
@@ -69,6 +59,19 @@ class DevCommand(
             return
           }
         } ?: config.dev.mode
+
+    val session =
+        DevSession(
+            // Fold the --mode override back into the config: DevSession keys mode-specific behavior
+            // (e.g. the hot-reload version floor) on config.dev.mode, which must match the mode
+            // actually run.
+            config = config.copy(dev = config.dev.copy(mode = resolvedMode)),
+            ppDir = ppDir,
+            gradle = GradleBridge(projectDir, ui),
+            downloader = PaperDownloader(File(ppDir, "cache")),
+            projectDir = projectDir,
+            ui = ui,
+        )
 
     when (resolvedMode) {
       DevMode.HOT_RELOAD -> HotReloadMode(session).run()

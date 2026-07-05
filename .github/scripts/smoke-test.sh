@@ -63,8 +63,8 @@ done
 echo "==> Verifying invariants..."
 
 # 1. Companion announced host-ready.
-if ! grep -qF "PaperPlane companion enabled (host ready)" "$LOG_FILE"; then
-  echo "FAIL: 'host ready' marker absent — companion onEnable likely threw."
+if ! grep -qF "PaperPlane companion enabled" "$LOG_FILE"; then
+  echo "FAIL: companion-enabled marker absent — companion onEnable likely threw."
   tail -50 "$LOG_FILE"
   exit 1
 fi

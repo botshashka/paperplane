@@ -252,7 +252,7 @@ internal open class HotReloadMode(
     // Always restage the user JAR so the host can fall back to a JAR load if directory load fails.
     val builtJar = File(session.projectDir, metadata.jarPath)
     if (!builtJar.exists()) session.gradle.build()
-    val stagedJarPath = serverManager.copyPlugin(builtJar)
+    val stagedJarPath = serverManager.stagePlugin(builtJar)
 
     val request = buildLoadRequest(metadata, cachedFastMeta, changes, stagedJarPath)
     when {

@@ -8,6 +8,7 @@ import dev.paperplane.companion.host.InnerPluginHost
 import dev.paperplane.companion.host.LeakAttribution
 import dev.paperplane.companion.host.LeakSummary
 import dev.paperplane.companion.host.ReflectionProbe
+import dev.paperplane.companion.host.UnsupportedPaperVersionException
 import java.io.File
 import java.util.logging.Logger
 import org.bukkit.Server
@@ -61,7 +62,7 @@ class BuildStatusBarLoadRequestTest {
     probe = ReflectionProbe.probe(fakeServer)
     fakeHost = RecordingHost(fakeServer, javaClass.classLoader, probe)
 
-    bar = BuildStatusBar(hostingPlugin, fakeHost, serverRoot)
+    bar = BuildStatusBar(hostingPlugin, { fakeHost }, serverRoot)
   }
 
   @AfterEach
@@ -165,7 +166,7 @@ class BuildStatusBarLoadRequestTest {
             return super.handleRequest(request)
           }
         }
-    val orderingBar = BuildStatusBar(hostingPlugin, orderingHost, serverRoot)
+    val orderingBar = BuildStatusBar(hostingPlugin, { orderingHost }, serverRoot)
     writeRequest(HostLoadRequest(requestId = "r1", jarPath = "/x.jar", pluginName = "Sample"))
     orderingBar.pollLoadRequestForTest()
 
@@ -192,7 +193,7 @@ class BuildStatusBarLoadRequestTest {
             return super.handleRequest(request)
           }
         }
-    val racingBar = BuildStatusBar(hostingPlugin, midHandleWriter, serverRoot)
+    val racingBar = BuildStatusBar(hostingPlugin, { midHandleWriter }, serverRoot)
     writeRequest(HostLoadRequest(requestId = "first", jarPath = "/x.jar", pluginName = "Sample"))
     racingBar.pollLoadRequestForTest()
 
@@ -263,6 +264,124 @@ class BuildStatusBarLoadRequestTest {
     assertEquals("r1", report.requestId)
     assertEquals("failed", report.status)
     assertEquals("plugin.yml not found", report.message)
+  }
+
+  // ── Lazy host provider ──────────────────────────────────────────────
+
+  @Test
+  fun `host provider is not invoked until the first load request arrives`() {
+    var built = 0
+    val lazyBar =
+        BuildStatusBar(
+            hostingPlugin,
+            {
+              built++
+              fakeHost
+            },
+            serverRoot,
+        )
+
+    // No request yet — native modes never send one, so the host must not be built.
+    lazyBar.pollLoadRequestForTest()
+    assertEquals(0, built, "host must not be built without a load request")
+    assertEquals(null, lazyBar.hostOrNull)
+
+    writeRequest(HostLoadRequest(requestId = "r1", jarPath = "/x.jar", pluginName = "Sample"))
+    lazyBar.pollLoadRequestForTest()
+    assertEquals(1, built, "first load request builds the host")
+    assertEquals(fakeHost, lazyBar.hostOrNull)
+  }
+
+  @Test
+  fun `host provider is built once and memoized across requests`() {
+    var built = 0
+    val lazyBar =
+        BuildStatusBar(
+            hostingPlugin,
+            {
+              built++
+              fakeHost
+            },
+            serverRoot,
+        )
+
+    writeRequest(HostLoadRequest(requestId = "r1", jarPath = "/x.jar", pluginName = "Sample"))
+    lazyBar.pollLoadRequestForTest()
+    writeRequest(HostLoadRequest(requestId = "r2", jarPath = "/x.jar", pluginName = "Sample"))
+    lazyBar.pollLoadRequestForTest()
+
+    assertEquals(1, built, "host must be built only once, then reused")
+    assertEquals(2, fakeHost.dispatches)
+  }
+
+  @Test
+  fun `probe failure writes load-failed and keeps the companion running`() {
+    var attempts = 0
+    val failingBar =
+        BuildStatusBar(
+            hostingPlugin,
+            {
+              attempts++
+              throw UnsupportedPaperVersionException("Paper too old for hot-reload")
+            },
+            serverRoot,
+        )
+
+    writeRequest(HostLoadRequest(requestId = "r1", jarPath = "/x.jar", pluginName = "Sample"))
+    failingBar.pollLoadRequestForTest()
+
+    assertEquals(null, failingBar.hostOrNull, "no host is created on probe failure")
+    val report = readReport("load-failed")
+    assertEquals("r1", report.requestId)
+    assertEquals("failed", report.status)
+    assertEquals("Paper too old for hot-reload", report.message)
+  }
+
+  @Test
+  fun `every request after a failed init is answered with load-failed echoing its own requestId`() {
+    var attempts = 0
+    val failingBar =
+        BuildStatusBar(
+            hostingPlugin,
+            {
+              attempts++
+              throw UnsupportedPaperVersionException("Paper too old for hot-reload")
+            },
+            serverRoot,
+        )
+
+    writeRequest(HostLoadRequest(requestId = "r1", jarPath = "/x.jar", pluginName = "Sample"))
+    failingBar.pollLoadRequestForTest()
+    File(ppDir, "load-failed").delete()
+
+    // The CLI's waiter filters results by requestId — a later request left unanswered (or answered
+    // with a stale id) would surface as a timeout instead of the real failure.
+    writeRequest(HostLoadRequest(requestId = "r2", jarPath = "/x.jar", pluginName = "Sample"))
+    failingBar.pollLoadRequestForTest()
+
+    assertEquals(1, attempts, "the init must be attempted only once, not on every request")
+    val report = readReport("load-failed")
+    assertEquals("r2", report.requestId, "the answer must echo the CURRENT request's id")
+    assertEquals("Paper too old for hot-reload", report.message)
+  }
+
+  @Test
+  fun `unexpected init exception is reported as load-failed, not swallowed`() {
+    val failingBar =
+        BuildStatusBar(
+            hostingPlugin,
+            { throw IllegalStateException("helpMap resolution blew up") },
+            serverRoot,
+        )
+
+    writeRequest(HostLoadRequest(requestId = "r1", jarPath = "/x.jar", pluginName = "Sample"))
+    // Must not throw into the scheduler tick.
+    failingBar.pollLoadRequestForTest()
+
+    val report = readReport("load-failed")
+    assertEquals("r1", report.requestId)
+    assertEquals("failed", report.status)
+    assertTrue(report.message!!.contains("helpMap resolution blew up"))
   }
 
   // ── helpers ─────────────────────────────────────────────────────────

@@ -406,16 +406,16 @@ class PaperServerManagerTest {
     assertFalse(result)
   }
 
-  // ── copyPlugin tests ────────────────────────────────────────────────
+  // ── stagePlugin tests (hot-reload deploy) ───────────────────────────
 
   @Test
-  fun `copyPlugin stages to dot-paperplane staged not plugins`() {
+  fun `stagePlugin stages to dot-paperplane staged not plugins`() {
     val manager = createManager()
     manager.configure()
     val sourceJar = File(tempDir, "myplugin.jar")
     sourceJar.writeText("jar-content-v1")
 
-    val stagedPath = manager.copyPlugin(sourceJar)
+    val stagedPath = manager.stagePlugin(sourceJar)
 
     val stagedFile = File(stagedPath)
     assertTrue(stagedFile.isAbsolute, "Staged path should be absolute")
@@ -432,15 +432,108 @@ class PaperServerManagerTest {
   }
 
   @Test
-  fun `copyPlugin overwrites existing staged file`() {
+  fun `stagePlugin overwrites existing staged file`() {
     val manager = createManager()
     manager.configure()
     val sourceJar = File(tempDir, "myplugin.jar")
     sourceJar.writeText("old-content")
-    manager.copyPlugin(sourceJar)
+    manager.stagePlugin(sourceJar)
     sourceJar.writeText("new-content")
-    val stagedPath = manager.copyPlugin(sourceJar)
+    val stagedPath = manager.stagePlugin(sourceJar)
     assertEquals("new-content", File(stagedPath).readText())
+  }
+
+  // ── copyPluginToPluginsDir tests (restart / blue-green native deploy) ─
+
+  @Test
+  fun `copyPluginToPluginsDir lands the jar in plugins so Paper loads it natively`() {
+    val manager = createManager()
+    manager.configure()
+    val sourceJar = File(tempDir, "myplugin.jar")
+    sourceJar.writeText("jar-content-v1")
+
+    manager.copyPluginToPluginsDir(sourceJar)
+
+    val deployed = File(manager.serverDir, "plugins/myplugin.jar")
+    assertTrue(deployed.exists(), "Plugin must land in plugins/ for native loading")
+    assertEquals("jar-content-v1", deployed.readText())
+    assertFalse(
+        File(manager.serverDir, ".paperplane/staged/myplugin.jar").exists(),
+        "Native deploy must not also stage the jar",
+    )
+  }
+
+  @Test
+  fun `copyPluginToPluginsDir overwrites an existing plugin jar`() {
+    val manager = createManager()
+    manager.configure()
+    val sourceJar = File(tempDir, "myplugin.jar")
+    sourceJar.writeText("old-content")
+    manager.copyPluginToPluginsDir(sourceJar)
+    sourceJar.writeText("new-content")
+
+    manager.copyPluginToPluginsDir(sourceJar)
+
+    assertEquals("new-content", File(manager.serverDir, "plugins/myplugin.jar").readText())
+  }
+
+  @Test
+  fun `copyPluginToPluginsDir leaves no temp file`() {
+    val manager = createManager()
+    manager.configure()
+    val sourceJar = File(tempDir, "myplugin.jar")
+    sourceJar.writeText("jar-content")
+
+    manager.copyPluginToPluginsDir(sourceJar)
+
+    val pluginsDir = File(manager.serverDir, "plugins")
+    val tempFiles = pluginsDir.listFiles()?.filter { it.name.endsWith(".tmp") } ?: emptyList()
+    assertTrue(
+        tempFiles.isEmpty(),
+        "No .tmp files should remain, found: ${tempFiles.map { it.name }}",
+    )
+  }
+
+  @Test
+  fun `copyPluginToPluginsDir removes the previously deployed jar when the name changes`() {
+    val manager = createManager()
+    manager.configure()
+    val v1 = File(tempDir, "myplugin-1.0.0.jar").apply { writeText("v1") }
+    val v2 = File(tempDir, "myplugin-1.1.0.jar").apply { writeText("v2") }
+    manager.copyPluginToPluginsDir(v1)
+
+    manager.copyPluginToPluginsDir(v2)
+
+    assertFalse(
+        File(manager.serverDir, "plugins/myplugin-1.0.0.jar").exists(),
+        "the old-name jar must be removed or Paper rejects the new one as a duplicate plugin",
+    )
+    assertTrue(File(manager.serverDir, "plugins/myplugin-1.1.0.jar").exists())
+  }
+
+  @Test
+  fun `removeDeployedPlugin clears a natively deployed jar and its record`() {
+    val manager = createManager()
+    manager.configure()
+    val jar = File(tempDir, "myplugin.jar").apply { writeText("v1") }
+    manager.copyPluginToPluginsDir(jar)
+
+    manager.removeDeployedPlugin(jar.name)
+
+    assertFalse(File(manager.serverDir, "plugins/myplugin.jar").exists())
+    assertFalse(File(manager.serverDir, ".paperplane/deployed-plugin").exists())
+  }
+
+  @Test
+  fun `removeDeployedPlugin removes an unrecorded jar by its current name`() {
+    val manager = createManager()
+    manager.configure()
+    File(manager.serverDir, "plugins").mkdirs()
+    File(manager.serverDir, "plugins/myplugin.jar").writeText("stale native deploy, no record")
+
+    manager.removeDeployedPlugin("myplugin.jar")
+
+    assertFalse(File(manager.serverDir, "plugins/myplugin.jar").exists())
   }
 
   @Test
@@ -489,13 +582,13 @@ class PaperServerManagerTest {
   }
 
   @Test
-  fun `copyPlugin leaves no temp file`() {
+  fun `stagePlugin leaves no temp file`() {
     val manager = createManager()
     manager.configure()
     val sourceJar = File(tempDir, "myplugin.jar")
     sourceJar.writeText("jar-content")
 
-    manager.copyPlugin(sourceJar)
+    manager.stagePlugin(sourceJar)
 
     val stageDir = File(manager.serverDir, ".paperplane/staged")
     val tempFiles = stageDir.listFiles()?.filter { it.name.endsWith(".tmp") } ?: emptyList()

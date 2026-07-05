@@ -145,6 +145,36 @@ class HotReloadModeRenderTest {
     assertFalse(fixture.terminal.writes.any { it.contains("Watching for changes") })
   }
 
+  // ── Hot-reload deploy path: staged, never native ────────────────────
+
+  @Test
+  fun `hot-reload startup stages the jar, clears native leftovers, and writes a LoadRequest`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
+    val mode = TestableHotReloadMode(fixture.session, server)
+
+    mode.runStartup()
+
+    assertTrue(
+        server.calls.any { it.startsWith("stagePlugin(") },
+        "hot-reload must stage the jar for the companion host; calls were ${server.calls}",
+    )
+    assertFalse(
+        server.calls.any { it.startsWith("copyPluginToPluginsDir") },
+        "hot-reload must never deploy into plugins/; calls were ${server.calls}",
+    )
+    // A jar left in plugins/ by a previous restart/blue-green session would be natively loaded
+    // alongside the host's staged copy — two live instances, one running stale code.
+    assertTrue(
+        server.calls.contains("removeDeployedPlugin(test.jar)"),
+        "hot-reload must clear a natively-deployed leftover; calls were ${server.calls}",
+    )
+    assertTrue(
+        File(server.serverDir, ".paperplane/load-request.json").exists(),
+        "hot-reload must hand the staged jar to the host via a LoadRequest",
+    )
+  }
+
   // ── Initial load result branches ───────────────────────────────────
   // A failed initial *load* is recoverable (the fix is a source/config edit), so it must route to
   // StartupOutcome.LoadFailed → fix recovery with a "Waiting for changes..." footer — not abort

@@ -1,11 +1,14 @@
 package dev.paperplane.cli.devserver
 
 import dev.paperplane.cli.Versions
+import dev.paperplane.cli.config.DevMode
 import dev.paperplane.cli.config.PaperPlaneConfig
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.server.PaperServerManager
+import dev.paperplane.cli.testing.DevSessionFixture
+import dev.paperplane.cli.testing.FakePaperServerManager
 import dev.paperplane.cli.ui.RecordingTerminal
 import dev.paperplane.cli.ui.TerminalUI
 import dev.paperplane.cli.watcher.FileWatcher
@@ -25,11 +28,12 @@ class DevSessionTest {
   private fun createSession(
       jbr: String = "off",
       serverVersion: String? = null,
+      mode: DevMode = DevMode.HOT_RELOAD,
   ): DevSession {
     val config =
         PaperPlaneConfig.load(tempDir, ui).let { cfg ->
           cfg.copy(
-              dev = cfg.dev.copy(jbr = jbr),
+              dev = cfg.dev.copy(jbr = jbr, mode = mode),
               server = cfg.server.copy(version = serverVersion),
           )
         }
@@ -141,6 +145,72 @@ class DevSessionTest {
         }
     assertTrue(ex.message!!.contains("not supported"))
     assertTrue(ex.message!!.contains("1.17"))
+  }
+
+  // ── enforceHotReloadVersionFloor ────────────────────────────────────
+
+  @Test
+  fun `hot-reload rejects Paper below 1_19_3`() {
+    val session = createSession(mode = DevMode.HOT_RELOAD)
+    val ex =
+        assertThrows(IllegalArgumentException::class.java) {
+          session.enforceHotReloadVersionFloor("1.19.2")
+        }
+    assertTrue(ex.message!!.contains("Hot-reload requires Paper 1.19.3+"))
+    assertTrue(ex.message!!.contains("restart") && ex.message!!.contains("blue-green"))
+  }
+
+  @Test
+  fun `hot-reload accepts Paper at and above 1_19_3`() {
+    val session = createSession(mode = DevMode.HOT_RELOAD)
+    // Exactly the floor and above must not throw.
+    session.enforceHotReloadVersionFloor("1.19.3")
+    session.enforceHotReloadVersionFloor("1.21.11")
+  }
+
+  @Test
+  fun `initialBuild enforces the hot-reload version floor`() {
+    // Wiring test: the floor must actually run on the startup path, not just exist as a function.
+    val fixture = DevSessionFixture(tempDir).withMetadata(paperApiVersion = "1.19.2")
+    val server =
+        FakePaperServerManager(
+            fixture.ppDir,
+            fixture.downloader,
+            fixture.ui,
+        )
+    val ex =
+        assertThrows(IllegalArgumentException::class.java) {
+          fixture.session.initialBuild(fixture.gradle.nextMetadata!!, server)
+        }
+    assertTrue(ex.message!!.contains("Hot-reload requires Paper 1.19.3+"))
+  }
+
+  @Test
+  fun `handleFixAttempt surfaces a floor violation and keeps the fix loop alive`() {
+    // The fix loop runs on the watcher thread — a floor violation must render as a failed attempt,
+    // not an escaping throw that would kill the watcher and hang the session.
+    val fixture = DevSessionFixture(tempDir).withMetadata(paperApiVersion = "1.19.2")
+
+    val result = fixture.session.handleFixAttempt(null)
+
+    assertEquals(DevSession.FixAttempt.BuildFailed, result)
+    assertTrue(
+        fixture.terminal.writes.any { it.contains("Hot-reload requires Paper 1.19.3+") },
+        "the floor's guidance must reach the user; writes were ${fixture.terminal.writes}",
+    )
+  }
+
+  @Test
+  fun `restart and blue-green skip the hot-reload version floor`() {
+    for (mode in
+        listOf(
+            DevMode.RESTART,
+            DevMode.BLUE_GREEN,
+        )) {
+      val session = createSession(mode = mode)
+      // Even ancient Paper is fine for native modes — no floor applies.
+      session.enforceHotReloadVersionFloor("1.16.5")
+    }
   }
 
   // ── syncOpsBackToConfig ─────────────────────────────────────────────

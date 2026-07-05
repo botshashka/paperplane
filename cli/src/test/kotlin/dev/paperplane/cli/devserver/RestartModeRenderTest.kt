@@ -177,50 +177,37 @@ class RestartModeRenderTest {
     assertFalse(fixture.terminal.writes.any { it.contains("Watching for changes") })
   }
 
-  // ── runStartup initial-load failure → fix recovery ─────────────────
-  // A rejected initial *load* (bad plugin.yml, probe failure, onEnable crash) is recoverable via a
-  // source/config edit, so it routes to StartupOutcome.LoadFailed → fix recovery with a "Waiting
-  // for changes..." footer, the same as an initial build failure — not the Aborted exit path.
+  // ── native deploy: jar into plugins/, no LoadRequest ───────────────
+  // Restart is a "compatible with everything" mode: it drops the jar into plugins/ and lets Paper
+  // load it natively. There is no companion host to send a LoadRequest to, so — unlike hot-reload —
+  // startServerAndReport never stages, never writes load-request.json, and never awaits a load
+  // result (so it can never return LoadFailed for restart).
 
   @Test
-  fun `failed initial load routes to LoadFailed, stops the server, and waits for changes`() {
+  fun `startup deploys the jar into plugins natively without staging or a load request`() {
     val fixture = DevSessionFixture(tempDir).withMetadata()
-    fixture.loadWaitResult = LoadWaitResult.Failed("plugin.yml not found", null)
     val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
     val mode = TestableRestartMode(fixture.session, server)
 
     val outcome = mode.runStartup()
 
-    assertEquals(DevSession.StartupOutcome.LoadFailed, outcome)
+    assertInstanceOf(DevSession.StartupOutcome.Running::class.java, outcome)
     assertTrue(
-        fixture.terminal.writes.any { it.contains("Plugin failed to load: plugin.yml not found") }
+        server.calls.contains("copyPluginToPluginsDir(test.jar)"),
+        "restart must deploy the jar into plugins/; calls were ${server.calls}",
     )
-    assertTrue(
-        fixture.terminal.writes.any { it.contains("paperplane { } block in build.gradle.kts") }
-    )
-    assertTrue(fixture.terminal.writes.any { it.contains("Waiting for changes") })
-    assertTrue(server.calls.contains("stop"))
     assertFalse(
-        mode.fixRecoveryEntered,
-        "runStartup must not call enterFixRecovery internally; control returns to run()",
+        server.calls.any { it.startsWith("stagePlugin") },
+        "restart must NOT stage the jar (that is hot-reload only); calls were ${server.calls}",
     )
-  }
-
-  @Test
-  fun `server exit during initial load routes to LoadFailed and waits for changes`() {
-    val fixture = DevSessionFixture(tempDir).withMetadata()
-    fixture.loadWaitResult = LoadWaitResult.ServerExited
-    val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
-    val mode = TestableRestartMode(fixture.session, server)
-
-    val outcome = mode.runStartup()
-
-    assertEquals(DevSession.StartupOutcome.LoadFailed, outcome)
     assertTrue(
-        fixture.terminal.writes.any { it.contains("Server exited while loading the plugin") }
+        server.calls.contains("copyCompanion(depend=0,softdepend=0)"),
+        "native deploy must not rewrite the companion's depends; calls were ${server.calls}",
     )
-    assertTrue(fixture.terminal.writes.any { it.contains("static") && it.contains("onEnable") })
-    assertTrue(fixture.terminal.writes.any { it.contains("Waiting for changes") })
+    assertFalse(
+        File(server.serverDir, ".paperplane/load-request.json").exists(),
+        "native modes must not write a load-request.json",
+    )
   }
 
   // ── rebuild happy path ─────────────────────────────────────────────
@@ -253,6 +240,13 @@ class RestartModeRenderTest {
     )
     assertTrue(server.calls.contains("stop"))
     assertTrue(server.calls.any { it.startsWith("start(") })
+    // The rebuild must deploy the fresh jar into plugins/ before restarting — otherwise the
+    // restarted server boots without the user's new code.
+    assertTrue(
+        server.calls.contains("copyPluginToPluginsDir(test.jar)"),
+        "rebuild must copy the fresh jar into plugins/; calls were ${server.calls}",
+    )
+    assertFalse(server.calls.any { it.startsWith("stagePlugin") })
   }
 
   // ── rebuild build failure ──────────────────────────────────────────

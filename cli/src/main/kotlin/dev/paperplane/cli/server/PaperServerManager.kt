@@ -207,22 +207,68 @@ open class PaperServerManager(
 
   /**
    * Stages the user's plugin JAR in `.paperplane/staged/`. Paper never sees this directory — the
-   * companion (acting as host) loads the JAR via `InnerPluginHost`. Returns the absolute path.
+   * companion (acting as host) loads the JAR via `InnerPluginHost`. Returns the absolute path. Used
+   * by hot-reload mode.
    */
-  open fun copyPlugin(jarPath: File): String {
-    val stageDir = File(serverDir, ".paperplane/staged").apply { mkdirs() }
-    val staged = File(stageDir, jarPath.name)
-    val temp = File(stageDir, ".${jarPath.name}.tmp")
-    jarPath.copyTo(temp, overwrite = true)
-    atomicMoveOrFallback(temp.toPath(), staged.toPath())
-    return staged.absolutePath
+  open fun stagePlugin(jarPath: File): String =
+      atomicCopyInto(File(serverDir, ".paperplane/staged"), jarPath).absolutePath
+
+  /**
+   * Copies the user's plugin JAR straight into `plugins/` so Paper loads it natively via its own
+   * `PluginClassLoader`. Used by restart and blue-green mode, which are "compatible with
+   * everything" (any Paper version, STARTUP plugins, `paper-plugin.yml`, NMS) precisely because
+   * they don't route the plugin through the companion host. Atomic tmp + move so Paper never scans
+   * a half-written jar.
+   *
+   * Records the deployed jar name so a later deploy under a different name (a version bump changes
+   * the artifact filename) or a mode switch to hot-reload can remove it — a leftover copy in
+   * `plugins/` would be loaded by Paper alongside the new one and rejected as a duplicate plugin,
+   * or silently run stale code.
+   */
+  open fun copyPluginToPluginsDir(jarPath: File) {
+    val record = deployedPluginRecord()
+    val previous = if (record.isFile) record.readText().trim().takeIf { it.isNotEmpty() } else null
+    if (previous != null && previous != jarPath.name) {
+      File(pluginsDir, previous).delete()
+    }
+    atomicCopyInto(pluginsDir, jarPath)
+    record.parentFile.mkdirs()
+    record.writeText(jarPath.name)
+  }
+
+  /**
+   * Removes a natively-deployed user jar from `plugins/`. Hot-reload calls this before starting: it
+   * stages the jar for the companion host instead, and a jar left in `plugins/` by a previous
+   * restart/blue-green session would be natively loaded alongside the host's copy — two live
+   * instances, the native one running stale code. [currentJarName] is deleted as well to cover jars
+   * deployed before the record existed.
+   */
+  open fun removeDeployedPlugin(currentJarName: String) {
+    val record = deployedPluginRecord()
+    if (record.isFile) {
+      record.readText().trim().takeIf { it.isNotEmpty() }?.let { File(pluginsDir, it).delete() }
+      record.delete()
+    }
+    File(pluginsDir, currentJarName).delete()
+  }
+
+  private fun deployedPluginRecord(): File = File(serverDir, ".paperplane/deployed-plugin")
+
+  private fun atomicCopyInto(destDir: File, jar: File): File {
+    destDir.mkdirs()
+    val target = File(destDir, jar.name)
+    val temp = File(destDir, ".${jar.name}.tmp")
+    jar.copyTo(temp, overwrite = true)
+    atomicMoveOrFallback(temp.toPath(), target.toPath())
+    return target
   }
 
   /**
    * Extracts the embedded companion JAR, rewriting its `plugin.yml` to inherit the user's [depend]
-   * / [softdepend] declarations. Paper resolves load order at boot from `plugins/` — since the
-   * user's plugin is no longer in there, we need the companion to claim those depends on the user's
-   * behalf.
+   * / [softdepend] declarations. The rewrite matters only for hot-reload, where the user's plugin
+   * is staged out of `plugins/` and the companion must claim its depends so Paper orders them
+   * before the host loads the plugin. Native modes call this with no arguments: the user's plugin
+   * sits in `plugins/` and Paper resolves its depends directly.
    */
   open fun copyCompanion(
       depend: List<String> = emptyList(),

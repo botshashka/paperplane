@@ -5,6 +5,7 @@ import dev.paperplane.cli.testing.DevSessionFixture
 import dev.paperplane.cli.testing.FakePaperServerManager
 import dev.paperplane.cli.testing.FakeVelocityDownloader
 import dev.paperplane.cli.testing.FakeVelocityManager
+import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
 import dev.paperplane.cli.ui.assertEmittedInOrder
 import dev.paperplane.cli.ui.assertSeparatorBetween
 import java.io.File
@@ -18,12 +19,9 @@ import org.junit.jupiter.api.io.TempDir
 /**
  * Visual regression tests for [BlueGreenMode]'s startup phase.
  *
- * Drives `runStartup` directly with a [DevSessionFixture]-backed `DevSession` plus fake
- * [FakePaperServerManager] (× 2 — server + swap), [FakeVelocityDownloader], and
- * [FakeVelocityManager]. The full rebuild + transfer + pre-warm cycle is not exercised here — it
- * depends on real ServerSync world cloning and a real pre-warm thread, both of which would need
- * their own fakes. The startup phase is the most user-visible rendering path; that's what's locked
- * in here.
+ * Drives `runStartup` (and `rebuild` for the deploy/transfer/pre-warm cycle) directly with a
+ * [DevSessionFixture]-backed `DevSession` plus fake [FakePaperServerManager] (× 2 — server + swap),
+ * [FakeVelocityDownloader], and [FakeVelocityManager].
  */
 class BlueGreenModeRenderTest {
 
@@ -227,47 +225,127 @@ class BlueGreenModeRenderTest {
     assertFalse(fixture.terminal.writes.any { it.contains("Watching for changes") })
   }
 
-  // ── Initial-load failure → fix recovery ────────────────────────────
-  // A rejected initial plugin *load* (after the proxy + backend are up) is recoverable via a
-  // source/config edit, so it routes to StartupOutcome.LoadFailed → fix recovery with a "Waiting
-  // for changes..." footer, rather than aborting `ppl dev`. The proxy stays up for the retry.
+  // ── Native deploy: jar into plugins/, no LoadRequest ───────────────
+  // Blue-green is a "compatible with everything" mode: each backend gets the jar in its plugins/
+  // and Paper loads it natively. No companion host, no LoadRequest, no load await — so
+  // startServerAndReport can never return LoadFailed for blue-green; that path is covered in
+  // HotReloadModeRenderTest.
 
   @Test
-  fun `failed initial load routes to LoadFailed and waits for changes`() {
-    val (mode, fixture, proxy) = newMode()
-    fixture.loadWaitResult = LoadWaitResult.Failed("plugin.yml not found", null)
+  fun `initial startup deploys the jar into the active backend's plugins natively`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    val serverA =
+        FakePaperServerManager(File(fixture.ppDir, "server"), fixture.downloader, fixture.ui)
+    val serverB =
+        FakePaperServerManager(File(fixture.ppDir, "server-swap"), fixture.downloader, fixture.ui)
+    val proxy = FakeVelocityManager(File(fixture.ppDir, "proxy"), fixture.ui)
+    val mode =
+        TestableBlueGreenMode(
+            session = fixture.session,
+            servers =
+                mapOf(BlueGreenMode.Slot.SERVER to serverA, BlueGreenMode.Slot.SWAP to serverB),
+            velocityDownloader = FakeVelocityDownloader(File(fixture.ppDir, "cache")),
+            velocityManager = proxy,
+        )
 
-    val outcome = mode.runStartup()
-
-    assertEquals(DevSession.StartupOutcome.LoadFailed, outcome)
+    assertInstanceOf(DevSession.StartupOutcome.Running::class.java, mode.runStartup())
     assertTrue(
-        fixture.terminal.writes.any { it.contains("Plugin failed to load: plugin.yml not found") }
+        serverA.calls.contains("copyPluginToPluginsDir(test.jar)"),
+        "active backend must receive the jar in plugins/; calls were ${serverA.calls}",
     )
-    assertTrue(
-        fixture.terminal.writes.any { it.contains("paperplane { } block in build.gradle.kts") }
-    )
-    assertTrue(fixture.terminal.writes.any { it.contains("Waiting for changes") })
-    // The proxy came up before the load failed and is left running for the fix-recovery retry.
-    assertTrue(proxy.calls.contains("waitForReady"))
+    assertFalse(serverA.calls.any { it.startsWith("stagePlugin") })
     assertFalse(
-        mode.fixRecoveryEntered,
-        "runStartup must not call enterFixRecovery internally; control returns to run()",
+        File(serverA.serverDir, ".paperplane/load-request.json").exists(),
+        "native modes must not write a load-request.json",
+    )
+    assertTrue(
+        serverA.calls.contains("copyCompanion(depend=0,softdepend=0)"),
+        "native deploy must not rewrite the companion's depends; calls were ${serverA.calls}",
     )
   }
 
+  // ── Rebuild deploys natively to standby and pre-warms the old active ─
+
   @Test
-  fun `server exit during initial load routes to LoadFailed and waits for changes`() {
-    val (mode, fixture, _) = newMode()
-    fixture.loadWaitResult = LoadWaitResult.ServerExited
+  fun `rebuild deploys the fresh jar into the standby's plugins and pre-warms the old active`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    val serverA =
+        FakePaperServerManager(
+            File(fixture.ppDir, "server").apply { mkdirs() },
+            fixture.downloader,
+            fixture.ui,
+        )
+    val serverB =
+        FakePaperServerManager(
+            File(fixture.ppDir, "server-swap").apply { mkdirs() },
+            fixture.downloader,
+            fixture.ui,
+        )
+    val proxy = FakeVelocityManager(File(fixture.ppDir, "proxy"), fixture.ui)
+    val mode =
+        TestableBlueGreenMode(
+            session = fixture.session,
+            servers =
+                mapOf(BlueGreenMode.Slot.SERVER to serverA, BlueGreenMode.Slot.SWAP to serverB),
+            velocityDownloader = FakeVelocityDownloader(File(fixture.ppDir, "cache")),
+            velocityManager = proxy,
+        )
+    assertInstanceOf(DevSession.StartupOutcome.Running::class.java, mode.runStartup())
+    serverA.calls.clear()
+    serverB.calls.clear()
+    // The pre-warm re-deploys the old active only once it is stopped.
+    serverA.runningResult = false
+    val paperJar = File(fixture.ppDir, "paper.jar").apply { writeText("fake") }
 
-    val outcome = mode.runStartup()
+    val (newSlot, end) = mode.rebuild(fixture.gradle.nextMetadata!!, paperJar)
+    mode.awaitPreWarmForTest()
 
-    assertEquals(DevSession.StartupOutcome.LoadFailed, outcome)
+    assertEquals(BlueGreenMode.Slot.SWAP, newSlot)
+    assertEquals(PhaseEnd.Watching, end)
     assertTrue(
-        fixture.terminal.writes.any { it.contains("Server exited while loading the plugin") }
+        serverB.calls.contains("copyPluginToPluginsDir(test.jar)"),
+        "the promoted standby must receive the fresh jar in plugins/; calls were ${serverB.calls}",
     )
-    assertTrue(fixture.terminal.writes.any { it.contains("static") && it.contains("onEnable") })
-    assertTrue(fixture.terminal.writes.any { it.contains("Waiting for changes") })
+    assertFalse(serverB.calls.any { it.startsWith("stagePlugin") })
+    assertTrue(
+        serverA.calls.contains("copyPluginToPluginsDir(test.jar)"),
+        "the pre-warmed old active must receive the fresh jar too; calls were ${serverA.calls}",
+    )
+  }
+
+  // ── Fix-recovery restart deploys natively (regression: startFixedServer) ─
+  // startFixedServer is the hand-rolled fix-recovery restart. Regression guard: staging instead of
+  // deploying boots the recovered server WITHOUT the user's plugin while still reporting "Server
+  // ready". It must deploy into plugins/ like every other blue-green path.
+
+  @Test
+  fun `startFixedServer deploys the recovered server's jar into plugins natively`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    val blue = FakePaperServerManager(File(fixture.ppDir, "server"), fixture.downloader, fixture.ui)
+    val swap =
+        FakePaperServerManager(File(fixture.ppDir, "server-swap"), fixture.downloader, fixture.ui)
+    val proxy = FakeVelocityManager(File(fixture.ppDir, "proxy"), fixture.ui)
+    val mode =
+        TestableBlueGreenMode(
+            session = fixture.session,
+            servers = mapOf(BlueGreenMode.Slot.SERVER to blue, BlueGreenMode.Slot.SWAP to swap),
+            velocityDownloader = FakeVelocityDownloader(File(fixture.ppDir, "cache")),
+            velocityManager = proxy,
+        )
+    val metadata = fixture.gradle.nextMetadata!!
+    val paperJar = File(fixture.ppDir, "paper.jar").apply { writeText("fake") }
+
+    val recovered = mode.startFixedServer(metadata, paperJar)
+
+    assertInstanceOf(DevSession.RunningState::class.java, recovered)
+    assertTrue(
+        blue.calls.contains("copyPluginToPluginsDir(test.jar)"),
+        "the recovered server must load the user plugin from plugins/; calls were ${blue.calls}",
+    )
+    assertFalse(
+        blue.calls.any { it.startsWith("stagePlugin") },
+        "the recovered server must NOT merely stage the jar — that booted it without the plugin",
+    )
   }
 
   // ── Server log interleaving ────────────────────────────────────────

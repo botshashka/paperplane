@@ -38,13 +38,21 @@ class FakePaperServerManager(
     calls += "configureVelocityForwarding"
   }
 
-  override fun copyPlugin(jarPath: File): String {
-    calls += "copyPlugin(${jarPath.name})"
+  override fun stagePlugin(jarPath: File): String {
+    calls += "stagePlugin(${jarPath.name})"
     return "/fake/staged/${jarPath.name}"
   }
 
+  override fun copyPluginToPluginsDir(jarPath: File) {
+    calls += "copyPluginToPluginsDir(${jarPath.name})"
+  }
+
+  override fun removeDeployedPlugin(currentJarName: String) {
+    calls += "removeDeployedPlugin($currentJarName)"
+  }
+
   override fun copyCompanion(depend: List<String>, softdepend: List<String>) {
-    calls += "copyCompanion"
+    calls += "copyCompanion(depend=${depend.size},softdepend=${softdepend.size})"
   }
 
   override fun start(paperJar: File, jvmArgs: List<String>, hotReload: Boolean, javaBin: String) {

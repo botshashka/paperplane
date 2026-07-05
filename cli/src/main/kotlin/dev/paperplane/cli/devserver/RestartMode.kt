@@ -132,8 +132,11 @@ internal open class RestartMode(
     }
     session.ui.success("Build succeeded", buildDuration)
 
+    // Native deploy: the fresh jar goes straight into plugins/ so the restarted Paper loads it
+    // itself. Staging (hot-reload's stagePlugin) would leave plugins/ holding the OLD jar and the
+    // restarted server would boot without the user's new code.
     val builtJar = File(session.projectDir, metadata.jarPath)
-    serverManager.copyPlugin(builtJar)
+    serverManager.copyPluginToPluginsDir(builtJar)
     serverManager.copyCompanion()
 
     val serverStart = System.currentTimeMillis()
