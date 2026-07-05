@@ -1,12 +1,10 @@
 package dev.paperplane.companion.host
 
-import dev.paperplane.companion.JavaPluginTransformer
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.jar.JarEntry
 import java.util.jar.JarOutputStream
 import java.util.logging.Logger
-import net.bytebuddy.agent.ByteBuddyAgent
 import org.bukkit.Server
 import org.bukkit.command.SimpleCommandMap
 import org.bukkit.plugin.PluginManager
@@ -38,10 +36,10 @@ import org.mockbukkit.mockbukkit.ServerMock
  * - Reload semantics: old plugin disabled before new loaded.
  * - Shutdown idempotency.
  *
- * **How it works:** ByteBuddy's agent patches `JavaPlugin.<init>()` once per JVM (matching
- * `JavaPluginBehaviorTest`'s pattern); a [TestInnerPlugin] class is packaged into a JAR fixture
- * with a fabricated `plugin.yml`; the host loads it via `DevPluginClassLoader`. We use a unique
- * plugin name and a single class so the JAR is small and the fixture is hermetic.
+ * **How it works:** a [TestInnerPlugin] class is packaged into a JAR fixture with a fabricated
+ * `plugin.yml`; the host loads it via `DevPluginClassLoader`, whose `ConfiguredPluginClassLoader`
+ * implementation makes the real, unpatched `JavaPlugin` ctor initialize the instance. We use a
+ * unique plugin name and a single class so the JAR is small and the fixture is hermetic.
  */
 class InnerPluginHostFullLoadTest {
 
@@ -54,16 +52,6 @@ class InnerPluginHostFullLoadTest {
 
   @BeforeEach
   fun setUp() {
-    // Patch JavaPlugin once per test (idempotent — patcher's transformer is no-op if applied).
-    val inst = ByteBuddyAgent.install()
-    val transformer = JavaPluginTransformer()
-    inst.addTransformer(transformer, true)
-    try {
-      inst.retransformClasses(JavaPlugin::class.java)
-    } finally {
-      inst.removeTransformer(transformer)
-    }
-
     server = MockBukkit.mock()
     spm = SimplePluginManager(server, SimpleCommandMap(server, mutableMapOf()))
     // Modern Paper's SPM delegates enablePlugin/disablePlugin to a separate manager. Plant a tiny

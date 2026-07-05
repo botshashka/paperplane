@@ -1,7 +1,7 @@
 package dev.paperplane.companion.host
 
+import dev.paperplane.companion.AgentAccess
 import dev.paperplane.companion.DevPluginClassLoader
-import dev.paperplane.companion.JavaPluginPatcher
 import dev.paperplane.companion.PluginInitContext
 import java.io.File
 import java.io.InputStream
@@ -291,7 +291,7 @@ open class InnerPluginHost(
   // ── safety nets ─────────────────────────────────────────────────────
 
   protected open fun usesNmsClasses(plugin: JavaPlugin): Boolean {
-    val inst = JavaPluginPatcher.instrumentation() ?: return false
+    val inst = AgentAccess.instrumentation() ?: return false
     return containsNmsClasses(inst, plugin.javaClass.classLoader)
   }
 
@@ -345,7 +345,7 @@ open class InnerPluginHost(
   private fun dumpLeakDiagnostics() {
     val survivors = leakedClassLoaders.dropLast(1).mapNotNull { it.get() }
     if (survivors.isEmpty()) return
-    val inst = JavaPluginPatcher.instrumentation()
+    val inst = AgentAccess.instrumentation()
     val allLoaded = inst?.allLoadedClasses
     logger.warning("── leak diagnostics: ${survivors.size} surviving loader(s) ──")
     survivors.forEachIndexed { i, cl ->

@@ -197,8 +197,8 @@ open class PaperServerManager(
   }
 
   /**
-   * Stages the user's plugin JAR in `.paperplane/staged/`. Paper never sees this directory —
-   * the companion (acting as host) loads the JAR via `InnerPluginHost`. Returns the absolute path.
+   * Stages the user's plugin JAR in `.paperplane/staged/`. Paper never sees this directory — the
+   * companion (acting as host) loads the JAR via `InnerPluginHost`. Returns the absolute path.
    */
   open fun copyPlugin(jarPath: File): String {
     val stageDir = File(serverDir, ".paperplane/staged").apply { mkdirs() }
@@ -210,17 +210,21 @@ open class PaperServerManager(
   }
 
   /**
-   * Extracts the embedded companion JAR, rewriting its `plugin.yml` to inherit the user's
-   * [depend] / [softdepend] declarations. Paper resolves load order at boot from `plugins/` —
-   * since the user's plugin is no longer in there, we need the companion to claim those depends
-   * on the user's behalf.
+   * Extracts the embedded companion JAR, rewriting its `plugin.yml` to inherit the user's [depend]
+   * / [softdepend] declarations. Paper resolves load order at boot from `plugins/` — since the
+   * user's plugin is no longer in there, we need the companion to claim those depends on the user's
+   * behalf.
    */
-  open fun copyCompanion(depend: List<String> = emptyList(), softdepend: List<String> = emptyList()) {
+  open fun copyCompanion(
+      depend: List<String> = emptyList(),
+      softdepend: List<String> = emptyList(),
+  ) {
     val target = File(pluginsDir, "paperplane-companion.jar")
     val source =
         javaClass.classLoader.getResourceAsStream("paperplane-companion.bin")
             ?: throw IOException(
-                "Resource 'paperplane-companion.bin' not found in CLI jar — corrupted build?")
+                "Resource 'paperplane-companion.bin' not found in CLI jar — corrupted build?"
+            )
     val sourceBytes = source.use { it.readAllBytes() }
     CompanionJarRewriter.rewriteFromBytes(sourceBytes, target, depend, softdepend)
   }
@@ -357,6 +361,7 @@ open class PaperServerManager(
   open fun waitForReady(): Boolean {
     val proc = process ?: return false
     val flagFile = File(serverDir, ".paperplane/server-ready")
+    val errorFile = File(serverDir, ".paperplane/companion-error")
     flagFile.delete() // Clear stale flag
     val startTime = System.currentTimeMillis()
     val timeout = SERVER_READY_TIMEOUT_MS
@@ -364,6 +369,14 @@ open class PaperServerManager(
       if (flagFile.exists()) {
         flagFile.delete()
         return true
+      }
+      // The companion writes this if it fails to enable (e.g. unsupported Paper). Surface it and
+      // abort immediately rather than waiting out the full ready timeout.
+      if (errorFile.exists()) {
+        val message = runCatching { errorFile.readText() }.getOrNull()?.trim().orEmpty()
+        errorFile.delete()
+        ui.error(message.ifEmpty { "PaperPlane companion failed to start." })
+        return false
       }
       Thread.sleep(READY_POLL_INTERVAL_MS)
     }

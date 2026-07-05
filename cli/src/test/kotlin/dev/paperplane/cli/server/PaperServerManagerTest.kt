@@ -13,7 +13,8 @@ import org.junit.jupiter.api.io.TempDir
 class PaperServerManagerTest {
 
   @TempDir lateinit var tempDir: File
-  private val ui = TerminalUI(RecordingTerminal())
+  private val terminal = RecordingTerminal()
+  private val ui = TerminalUI(terminal)
 
   private fun createManager(port: Int = 25566): PaperServerManager {
     val serverDir = File(tempDir, "server-$port")
@@ -458,8 +459,7 @@ class PaperServerManagerTest {
     val yml =
         java.util.jar.JarFile(companionJar).use { jar ->
           val entry =
-              jar.getJarEntry("plugin.yml")
-                  ?: error("plugin.yml missing inside companion jar")
+              jar.getJarEntry("plugin.yml") ?: error("plugin.yml missing inside companion jar")
           jar.getInputStream(entry).bufferedReader().readText()
         }
     assertTrue(
@@ -537,4 +537,68 @@ class PaperServerManagerTest {
     }
   }
 
+  @Test
+  fun `waitForReady surfaces companion-error and returns false`() {
+    val manager = createManager()
+    manager.serverDir.mkdirs()
+    File(manager.serverDir, ".paperplane").mkdirs()
+
+    val proc = ProcessBuilder("sleep", "10").start()
+    val processField = PaperServerManager::class.java.getDeclaredField("process")
+    processField.isAccessible = true
+    processField.set(manager, proc)
+
+    val errorFile = File(manager.serverDir, ".paperplane/companion-error")
+    try {
+      Thread {
+            Thread.sleep(100)
+            errorFile.parentFile.mkdirs()
+            errorFile.writeText("Unsupported Paper version (Paper 1.18)\n")
+          }
+          .start()
+
+      val result = manager.waitForReady()
+
+      assertFalse(result, "companion-error must make waitForReady fail")
+      assertFalse(errorFile.exists(), "companion-error flag must be consumed (deleted)")
+      assertTrue(
+          terminal.raw.contains("Unsupported Paper version (Paper 1.18)"),
+          "the companion's error message must be surfaced to the user, got: ${terminal.raw}",
+      )
+    } finally {
+      proc.destroyForcibly()
+    }
+  }
+
+  @Test
+  fun `waitForReady shows a fallback message when companion-error is empty`() {
+    val manager = createManager()
+    manager.serverDir.mkdirs()
+    File(manager.serverDir, ".paperplane").mkdirs()
+
+    val proc = ProcessBuilder("sleep", "10").start()
+    val processField = PaperServerManager::class.java.getDeclaredField("process")
+    processField.isAccessible = true
+    processField.set(manager, proc)
+
+    try {
+      Thread {
+            Thread.sleep(100)
+            val errorFile = File(manager.serverDir, ".paperplane/companion-error")
+            errorFile.parentFile.mkdirs()
+            errorFile.writeText("   ")
+          }
+          .start()
+
+      val result = manager.waitForReady()
+
+      assertFalse(result)
+      assertTrue(
+          terminal.raw.contains("PaperPlane companion failed to start"),
+          "an empty error flag must still surface a fallback message, got: ${terminal.raw}",
+      )
+    } finally {
+      proc.destroyForcibly()
+    }
+  }
 }

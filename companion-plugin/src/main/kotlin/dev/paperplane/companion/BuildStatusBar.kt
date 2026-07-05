@@ -29,6 +29,7 @@ class BuildStatusBar(
   private var lastRequestId: String? = null
   private var inflightRequest = false
   private var hotSwapper: HotSwapper? = null
+  private var agentWarningLogged = false
 
   /**
    * True while the active server's world is no longer authoritative — either the save is in
@@ -128,6 +129,14 @@ class BuildStatusBar(
   }
 
   private fun handleRequest(request: HostLoadRequest) {
+    if (!agentWarningLogged && AgentAccess.instrumentation() == null) {
+      plugin.logger.warning(
+          "PaperPlane agent not loaded — hot-swap tier and NMS detection disabled; " +
+              "full reloads still work."
+      )
+    }
+    agentWarningLogged = true
+
     broadcast(Component.text("Reloading ${request.pluginName}...", NamedTextColor.GOLD))
 
     // Try in-place class redefinition first if HotSwapper is available and the change is

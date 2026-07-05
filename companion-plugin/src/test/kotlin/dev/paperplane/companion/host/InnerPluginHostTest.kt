@@ -19,9 +19,9 @@ import org.mockbukkit.mockbukkit.ServerMock
 /**
  * Unit tests for [InnerPluginHost]'s state machine and validation gates.
  *
- * The full load/reload pipeline runs against a real Paper server in the smoke-test phase (the
- * `JavaPlugin` instantiation path requires `JavaPluginPatcher` to be applied to the live class,
- * which is exercised separately in `JavaPluginBehaviorTest`).
+ * The full load/reload pipeline is exercised by `InnerPluginHostFullLoadTest` (which loads a real
+ * JavaPlugin fixture through `DevPluginClassLoader`'s `ConfiguredPluginClassLoader` init path) and
+ * end-to-end against a real Paper server in the smoke-test phase.
  */
 class InnerPluginHostTest {
 

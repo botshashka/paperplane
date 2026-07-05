@@ -1,5 +1,6 @@
 package dev.paperplane.companion.host
 
+import dev.paperplane.companion.DevPluginClassLoader
 import org.bukkit.Server
 import org.bukkit.command.CommandSender
 import org.bukkit.command.SimpleCommandMap
@@ -10,6 +11,7 @@ import org.bukkit.plugin.PluginManager
 import org.bukkit.plugin.SimplePluginManager
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -78,40 +80,43 @@ class ReflectionProbeTest {
     // SPM lookupNames is the load-bearing reflection point.
     assertNotNull(probe.spmLookupNamesField)
     assertEquals("lookupNames", probe.spmLookupNamesField.name)
+  }
 
-    // At least one of init / fields must resolve. JavaPlugin is on the classpath, so init exists.
-    assertNotNull(probe.javaPluginInit, "JavaPlugin.init(...) should resolve on stock paper-api")
-    assertNotNull(probe.javaPluginFields, "JavaPlugin private fields should resolve as fallback")
+  // ── CPCL integration guard ──────────────────────────────────────────
 
-    val fields = probe.javaPluginFields!!
-    assertEquals("server", fields.server.name)
-    assertEquals("description", fields.description.name)
-    assertEquals("dataFolder", fields.dataFolder.name)
-    assertEquals("file", fields.file.name)
-    assertEquals("classLoader", fields.classLoader.name)
+  @Test
+  fun `DevPluginClassLoader concretely implements every ConfiguredPluginClassLoader method`() {
+    // Guard (d): the probe rejects a runtime where DevPluginClassLoader doesn't override an
+    // interface method. Assert directly that, on the test classpath, every method of the runtime
+    // interface resolves to a non-abstract method on DevPluginClassLoader — the same check the
+    // probe runs. Simulating the interface's ABSENCE isn't feasible (it's on the classpath), so we
+    // pin the positive contract that makes the probe succeed here.
+    val cpcl =
+        Class.forName(
+            "io.papermc.paper.plugin.provider.classloader.ConfiguredPluginClassLoader",
+            false,
+            org.bukkit.plugin.java.JavaPlugin::class.java.classLoader,
+        )
+    for (m in cpcl.methods) {
+      val impl = DevPluginClassLoader::class.java.getMethod(m.name, *m.parameterTypes)
+      assertFalse(
+          java.lang.reflect.Modifier.isAbstract(impl.modifiers),
+          "DevPluginClassLoader.${m.name} must be concrete; got abstract",
+      )
+    }
+  }
+
+  @Test
+  fun `probe succeeds on this Paper version - CPCL guard passes`() {
+    // The full probe runs the CPCL guard first; on paper-api that supports the plugin-loader API
+    // (our test classpath) it must not add version-floor errors and the probe must complete.
+    val spm = SimplePluginManager(server, SimpleCommandMap(server, mutableMapOf()))
+    val probe = ReflectionProbe.probe(FakeServerWithSpm(server, spm))
+    assertNotNull(probe.spmLookupNamesField)
+    assertNotNull(probe.helpTopics)
   }
 
   // ── Field/method shape pinning ──────────────────────────────────────
-
-  @Test
-  fun `init method has the expected six-parameter signature`() {
-    // This test pins the contract: if Paper ever changes JavaPlugin.init's parameters, our
-    // resolution path silently returns null and we fall back to fields. This test fails when
-    // probe.javaPluginInit is unexpectedly null.
-    val spm = SimplePluginManager(server, SimpleCommandMap(server, mutableMapOf()))
-    val probe = ReflectionProbe.probe(FakeServerWithSpm(server, spm))
-
-    val init = probe.javaPluginInit!!
-    val params = init.parameterTypes
-    assertEquals(6, params.size, "init() must have 6 params; signature changed otherwise")
-    assertEquals("PluginLoader", params[0].simpleName)
-    assertEquals("Server", params[1].simpleName)
-    assertEquals("PluginDescriptionFile", params[2].simpleName)
-    assertEquals("File", params[3].simpleName)
-    assertEquals("File", params[4].simpleName)
-    assertEquals("ClassLoader", params[5].simpleName)
-    assertTrue(init.isAccessible, "init must be made accessible at probe time")
-  }
 
   @Test
   fun `lookupNames field is a Map`() {
@@ -155,32 +160,6 @@ class ReflectionProbeTest {
         ex.message!!.contains("github.com/botshashka/paperplane"),
         "Error must include issue tracker URL for debugging",
     )
-  }
-
-  @Test
-  fun `JavaPlugin private fields are not final-immutable - we must be able to set them`() {
-    // The fallback path mutates these fields. Verify they aren't `final` in a way that would block
-    // reflective set. `Field.set` works even for `private final` since JDK 9 if accessible, but if
-    // a future JavaPlugin moves to records or makes them deeply final-on-non-class, this catches
-    // it.
-    val spm = SimplePluginManager(server, SimpleCommandMap(server, mutableMapOf()))
-    val probe = ReflectionProbe.probe(FakeServerWithSpm(server, spm))
-    val fields = probe.javaPluginFields!!
-
-    // None should be static (they're per-instance).
-    for (f in
-        listOf(
-            fields.server,
-            fields.description,
-            fields.dataFolder,
-            fields.file,
-            fields.classLoader,
-        )) {
-      assertTrue(
-          !java.lang.reflect.Modifier.isStatic(f.modifiers),
-          "${f.name} must be instance field; got static",
-      )
-    }
   }
 
   // ── helpers ──────────────────────────────────────────────────────────

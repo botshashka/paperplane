@@ -16,10 +16,6 @@ class CompanionPlugin : JavaPlugin() {
 
   override fun onEnable() {
     try {
-      // Patch JavaPlugin's constructor to allow non-PluginClassLoader instantiation. Must run
-      // before the host loads any inner plugin via DevPluginClassLoader.
-      JavaPluginPatcher.patchIfNeeded()
-
       // Probe Paper internals once at startup. Fails fast on an unsupported Paper version with a
       // clear error rather than limping along.
       val probe = ReflectionProbe.probe(server)
@@ -51,16 +47,16 @@ class CompanionPlugin : JavaPlugin() {
       logger.info("PaperPlane companion enabled (host ready)")
     } catch (e: UnsupportedPaperVersionException) {
       logger.severe(e.message)
-      // Disable rather than throw — Bukkit catches throws here and prints stack noise.
-      server.pluginManager.disablePlugin(this)
-    } catch (e: AgentNotAvailableException) {
-      logger.severe(e.message)
+      // Surface the failure to the CLI so `ppl dev` reports it immediately instead of waiting out
+      // the server-ready timeout, then disable (Bukkit prints stack noise on a throw here).
+      writeCompanionError(e.message ?: "Unsupported Paper version")
       server.pluginManager.disablePlugin(this)
     } catch (
         @Suppress("TooGenericExceptionCaught") // Startup involves reflection, I/O, and server API
         e: Exception) {
       logger.severe("PaperPlane companion failed to enable: ${e.message}")
       logger.severe(e.stackTraceToString())
+      writeCompanionError("PaperPlane companion failed to enable: ${e.message}")
       server.pluginManager.disablePlugin(this)
     }
   }
@@ -70,6 +66,22 @@ class CompanionPlugin : JavaPlugin() {
    * `<serverRoot>/plugins/<plugin-name>`, so the root is two levels up.
    */
   private fun serverRoot(): File = dataFolder.absoluteFile.parentFile.parentFile
+
+  /**
+   * Writes a companion startup failure to `.paperplane/companion-error` so the CLI's `waitForReady`
+   * can report it and abort promptly. Best-effort — a failed write just falls back to the timeout.
+   */
+  private fun writeCompanionError(message: String) {
+    try {
+      val errFile = File(serverRoot(), ".paperplane/companion-error")
+      errFile.parentFile.mkdirs()
+      errFile.writeText(message)
+    } catch (
+        @Suppress("TooGenericExceptionCaught") // Diagnostic write must never mask the real failure.
+        e: Exception) {
+      logger.warning("Failed to write companion-error flag: ${e.message}")
+    }
+  }
 
   override fun onDisable() {
     // Tear down the inner plugin BEFORE companion's own teardown — otherwise the inner's

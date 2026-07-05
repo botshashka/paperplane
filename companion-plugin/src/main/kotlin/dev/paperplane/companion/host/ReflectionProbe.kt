@@ -1,8 +1,9 @@
 package dev.paperplane.companion.host
 
+import dev.paperplane.companion.DevPluginClassLoader
 import java.io.File
 import java.lang.reflect.Field
-import java.lang.reflect.Method
+import java.lang.reflect.Modifier
 import java.lang.reflect.ParameterizedType
 import org.bukkit.Server
 import org.bukkit.help.HelpTopic
@@ -12,67 +13,59 @@ import org.bukkit.plugin.SimplePluginManager
 import org.bukkit.plugin.java.JavaPlugin
 
 /**
- * Resolves and caches every reflection point the host needs.
+ * Resolves and caches every reflection point the host needs, and verifies the runtime supports the
+ * plugin-loader API that dev-mode loading is built on.
  *
- * Run once at companion `onEnable`. If any required field/method can't be found, throw
- * [UnsupportedPaperVersionException] and refuse to start — better a clear error than partial
- * functionality.
+ * Run once at first host use. If any required guard fails, throw [UnsupportedPaperVersionException]
+ * and refuse to load — better a clear, actionable error than partial functionality.
  *
- * **The host's entire reflection footprint lives here.** Three reflection points:
+ * **The host's entire reflection footprint lives here.** Two live reflection points plus a set of
+ * compatibility guards:
  *
- * 1. **JavaPlugin init** — try the package-private `JavaPlugin.init(PluginLoader, Server,
- *    PluginDescriptionFile, File, File, ClassLoader)` first; fall back to direct private-field
- *    injection (`server`, `description`, `dataFolder`, `file`, `classLoader`). The init method is
- *    the designated init path; field injection is the safety net for hypothetical future Paper
- *    versions that rename or remove init. Spigot/Paper source:
- *
- * <https://hub.spigotmc.org/stash/projects/SPIGOT/repos/bukkit/browse/src/main/java/org/bukkit/plugin/java/JavaPlugin.java>
+ * 1. **ConfiguredPluginClassLoader integration guard** — dev-mode loading relies on Paper's
+ *    `JavaPlugin` no-arg ctor calling back into a `ConfiguredPluginClassLoader` (implemented by
+ *    [DevPluginClassLoader]) to initialize the plugin. This interface exists only on Paper 1.19.3+.
+ *    The guard confirms the interface, the `PluginMeta` type, the 7-arg `JavaPlugin.init` the
+ *    loader invokes, and that [DevPluginClassLoader] concretely implements every interface method
+ *    (so a future Paper adding a method surfaces as a clear probe failure, not an
+ *    AbstractMethodError at load time).
  *
  * 2. **SimplePluginManager.lookupNames** — `Map<String, Plugin>` consulted by Paper's
  *    `PaperPluginManagerImpl.getPlugin(name)` for cross-plugin dependency lookups. Symmetric
- *    add/remove on every host load/unload. Bukkit source:
- *
- * <https://hub.spigotmc.org/stash/projects/SPIGOT/repos/bukkit/browse/src/main/java/org/bukkit/plugin/SimplePluginManager.java>
+ *    add/remove on every host load/unload.
  *
  * 3. **SimpleHelpMap.helpTopics** — `Map<String, HelpTopic>` consulted by `/help`. Paper's
  *    `HelpMap.initializeCommands()` runs once during `enablePlugins(POSTWORLD)`, strictly before
  *    the companion's first scheduler tick fires the host load, so inner-plugin commands miss the
  *    one-shot pass. Public `HelpMap.addTopic` skips existing keys and there is no `removeTopic`, so
  *    direct map mutation is the only way to keep `/help` in sync across hot-reload. Resolved by
- *    generic signature (`Map<String, HelpTopic>`), not field name — survives a rename. CraftBukkit
- *    source:
- *
- * <https://github.com/PaperMC/Paper/blob/main/paper-server/src/main/java/org/bukkit/craftbukkit/help/SimpleHelpMap.java>
+ *    generic signature (`Map<String, HelpTopic>`), not field name — survives a rename.
  */
 class ReflectionProbe
 private constructor(
-    val javaPluginInit: Method?,
-    val javaPluginFields: JavaPluginFields?,
     val spmLookupNamesField: Field,
     val helpTopics: MutableMap<String, HelpTopic>,
 ) {
-  init {
-    require(javaPluginInit != null || javaPluginFields != null) {
-      "Probe accepted with neither init method nor field-injection fallback resolved."
-    }
-  }
 
   companion object {
+    private const val CPCL_INTERFACE =
+        "io.papermc.paper.plugin.provider.classloader.ConfiguredPluginClassLoader"
+    private const val PLUGIN_META = "io.papermc.paper.plugin.configuration.PluginMeta"
+
+    private const val VERSION_FLOOR_MESSAGE =
+        "This Paper version predates the plugin-loader API (needs Paper 1.19.3+). Hot-reload is " +
+            "unavailable — set `dev.mode: restart` or `blue-green` in paperplane.yml."
+
     /**
-     * Resolves all reflection targets. Throws [UnsupportedPaperVersionException] if the host cannot
-     * proceed.
+     * Resolves all reflection targets and runs the compatibility guards. Throws
+     * [UnsupportedPaperVersionException] if the host cannot proceed.
      */
     fun probe(server: Server): ReflectionProbe {
       val errors = mutableListOf<String>()
 
-      val initMethod = resolveInitMethod()
-      val fields = resolveJavaPluginFields()
-      if (initMethod == null && fields == null) {
-        errors.add(
-            "Neither JavaPlugin.init(...) nor private fields (server, description, dataFolder, file, classLoader) were resolvable. " +
-                "Host cannot construct an inner plugin without one of these paths."
-        )
-      }
+      // CPCL guard runs FIRST — nothing may touch DevPluginClassLoader::class.java until (a) below
+      // confirms the interface exists on this runtime.
+      runCpclGuard(errors)
 
       val lookupField =
           resolveSpmLookupNamesField(server)
@@ -99,34 +92,78 @@ private constructor(
         throw UnsupportedPaperVersionException(buildMessage(server, errors))
       }
 
-      return ReflectionProbe(initMethod, fields, lookupField, helpTopics)
+      return ReflectionProbe(lookupField, helpTopics)
     }
 
-    private fun resolveInitMethod(): Method? =
-        try {
-          JavaPlugin::class
-              .java
-              .getDeclaredMethod(
-                  "init",
-                  org.bukkit.plugin.PluginLoader::class.java,
-                  Server::class.java,
-                  PluginDescriptionFile::class.java,
-                  File::class.java,
-                  File::class.java,
-                  ClassLoader::class.java,
-              )
-              .apply { isAccessible = true }
-        } catch (_: NoSuchMethodException) {
-          null
-        }
+    /**
+     * Verifies the ConfiguredPluginClassLoader integration this host is built on. Steps are
+     * ordered: (a) the interface, (b) the PluginMeta type, (c) the 7-arg `JavaPlugin.init` the
+     * loader calls, (d) that [DevPluginClassLoader] concretely implements every interface method.
+     * Steps (c)/(d) only run once (a)/(b) resolve, so [DevPluginClassLoader] is never touched on a
+     * pre-1.19.3 runtime where loading it would `NoClassDefFoundError`.
+     */
+    private fun runCpclGuard(errors: MutableList<String>) {
+      val loader = JavaPlugin::class.java.classLoader
 
-    private fun resolveJavaPluginFields(): JavaPluginFields? {
-      val server = field(JavaPlugin::class.java, "server") ?: return null
-      val description = field(JavaPlugin::class.java, "description") ?: return null
-      val dataFolder = field(JavaPlugin::class.java, "dataFolder") ?: return null
-      val file = field(JavaPlugin::class.java, "file") ?: return null
-      val classLoader = field(JavaPlugin::class.java, "classLoader") ?: return null
-      return JavaPluginFields(server, description, dataFolder, file, classLoader)
+      // (a) The ConfiguredPluginClassLoader interface itself. Catch Throwable — a missing
+      // transitive type surfaces as NoClassDefFoundError, not ClassNotFoundException.
+      val cpclInterface =
+          try {
+            Class.forName(CPCL_INTERFACE, false, loader)
+          } catch (@Suppress("TooGenericExceptionCaught") _: Throwable) {
+            errors.add(VERSION_FLOOR_MESSAGE)
+            return
+          }
+
+      // (b) The PluginMeta type the 7-arg init consumes.
+      val metaClass =
+          try {
+            Class.forName(PLUGIN_META, false, loader)
+          } catch (@Suppress("TooGenericExceptionCaught") _: Throwable) {
+            errors.add(VERSION_FLOOR_MESSAGE)
+            return
+          }
+
+      // (c) The exact JavaPlugin.init(...) overload the loader's init(plugin) invokes.
+      try {
+        JavaPlugin::class
+            .java
+            .getMethod(
+                "init",
+                Server::class.java,
+                PluginDescriptionFile::class.java,
+                File::class.java,
+                File::class.java,
+                ClassLoader::class.java,
+                metaClass,
+                java.util.logging.Logger::class.java,
+            )
+      } catch (_: NoSuchMethodException) {
+        errors.add(
+            "JavaPlugin.init(Server, PluginDescriptionFile, File, File, ClassLoader, PluginMeta, " +
+                "Logger) not found — the plugin-loader init contract changed. $VERSION_FLOOR_MESSAGE"
+        )
+        return
+      }
+
+      // (d) DevPluginClassLoader must concretely implement every method of the runtime interface.
+      // Guards against a future Paper adding an interface method we don't override (which would
+      // otherwise throw AbstractMethodError at load time — this turns it into a clear probe error).
+      for (m in cpclInterface.methods) {
+        val impl =
+            try {
+              DevPluginClassLoader::class.java.getMethod(m.name, *m.parameterTypes)
+            } catch (_: NoSuchMethodException) {
+              null
+            }
+        if (impl == null || Modifier.isAbstract(impl.modifiers)) {
+          errors.add(
+              "DevPluginClassLoader does not implement ConfiguredPluginClassLoader.${m.name}(...) " +
+                  "— the plugin-loader interface gained a method PaperPlane must override. " +
+                  "PaperPlane needs to be updated."
+          )
+        }
+      }
     }
 
     private fun resolveSpmLookupNamesField(server: Server): Field? {
@@ -212,14 +249,6 @@ private constructor(
       }
     }
   }
-
-  data class JavaPluginFields(
-      val server: Field,
-      val description: Field,
-      val dataFolder: Field,
-      val file: Field,
-      val classLoader: Field,
-  )
 }
 
 class UnsupportedPaperVersionException(message: String) : RuntimeException(message)
