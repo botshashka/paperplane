@@ -26,6 +26,13 @@ open class PaperServerManager(
     private const val OP_PERMISSION_LEVEL = 4
     private const val SERVER_READY_TIMEOUT_MS = 120_000L
     private const val READY_POLL_INTERVAL_MS = 100L
+
+    /**
+     * The flag the companion writes when it fails to enable. Read by [waitForReady]; cleared by the
+     * CLI's stale-flag hygiene before each server start.
+     */
+    internal fun companionErrorFlag(serverDir: File): File =
+        File(serverDir, ".paperplane/companion-error")
   }
 
   private var process: Process? = null
@@ -363,7 +370,7 @@ open class PaperServerManager(
   open fun waitForReady(): Boolean {
     val proc = process ?: return false
     val flagFile = File(serverDir, ".paperplane/server-ready")
-    val errorFile = File(serverDir, ".paperplane/companion-error")
+    val errorFile = companionErrorFlag(serverDir)
     flagFile.delete() // Clear stale flag
     val startTime = System.currentTimeMillis()
     val timeout = SERVER_READY_TIMEOUT_MS

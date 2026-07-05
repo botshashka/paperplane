@@ -2,6 +2,8 @@ package dev.paperplane.cli.testing
 
 import dev.paperplane.cli.config.PaperPlaneConfig
 import dev.paperplane.cli.devserver.DevSession
+import dev.paperplane.cli.devserver.LoadResultWaiter
+import dev.paperplane.cli.devserver.LoadWaitResult
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.plugins.PluginResolver
 import dev.paperplane.cli.server.PaperDownloader
@@ -42,6 +44,13 @@ class DevSessionFixture(
   val downloader: PaperDownloader = FakePaperDownloader(File(ppDir, "cache"))
   val gradle: FakeGradleBridge = FakeGradleBridge(projectDir, ui)
 
+  /**
+   * Scripted load-result waiter. The render fixtures don't run a real companion, so the real waiter
+   * would block until timeout on the initial-load await. Returns [LoadWaitResult.Ok] immediately.
+   * Tests that need a failed/timed-out load reassign this before driving the mode.
+   */
+  internal var loadWaitResult: LoadWaitResult = LoadWaitResult.Ok(null)
+
   internal val session: DevSession =
       DevSession(
           config = config,
@@ -50,6 +59,7 @@ class DevSessionFixture(
           downloader = downloader,
           projectDir = projectDir,
           ui = ui,
+          loadResultWaiter = LoadResultWaiter { _, _, _, _ -> loadWaitResult },
           pluginResolverFactory =
               pluginResolver?.let { { it } }
                   ?: {

@@ -7,6 +7,7 @@ import org.bukkit.command.SimpleCommandMap
 import org.bukkit.plugin.PluginManager
 import org.bukkit.plugin.SimplePluginManager
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -105,6 +106,32 @@ class InnerPluginHostTest {
   @Test
   fun `shouldForceBlueGreen is false initially`() {
     assertFalse(host.shouldForceBlueGreen)
+  }
+
+  // ── withDuration carry-forward ──────────────────────────────────────
+
+  @Test
+  fun `withDuration re-stamps duration but preserves leaks and action on Ok`() {
+    val leaks = LeakSummary(consecutive = 1, attribution = listOf(LeakAttribution("thread", "t")))
+    val restamped = HostLoadResult.Ok("P", 1, leaks, "restart").withDuration(99)
+
+    val ok = restamped as HostLoadResult.Ok
+    assertEquals(99, ok.durationMs)
+    assertEquals("P", ok.pluginName)
+    assertEquals(leaks, ok.leaks)
+    assertEquals("restart", ok.action)
+  }
+
+  @Test
+  fun `withDuration re-stamps duration but preserves leaks and action on Failed`() {
+    val leaks = LeakSummary(confirmedSurvivors = 5)
+    val restamped = HostLoadResult.Failed("boom", 1, leaks, "restart").withDuration(99)
+
+    val failed = restamped as HostLoadResult.Failed
+    assertEquals(99, failed.durationMs)
+    assertEquals("boom", failed.message)
+    assertEquals(leaks, failed.leaks)
+    assertEquals("restart", failed.action)
   }
 
   // ── helpers ─────────────────────────────────────────────────────────

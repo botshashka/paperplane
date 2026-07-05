@@ -36,6 +36,11 @@ internal class DevSession(
     private val pluginResolverFactory: () -> PluginResolver = {
       PluginResolver(ModrinthClient(), PluginCache(File(ppDir, "cache/plugins")))
     },
+    /**
+     * Waits for the host to answer a load request. Injected so tests can supply a scripted waiter
+     * (the render fixtures don't run a real companion, so a real waiter would block until timeout).
+     */
+    internal val loadResultWaiter: LoadResultWaiter = PollingLoadResultWaiter(ui),
 ) {
   /**
    * Holds the current config. This is `var` because the reverse-sync of `server.ops` on shutdown
@@ -47,6 +52,11 @@ internal class DevSession(
 
   companion object {
     private const val MAIN_LOOP_POLL_INTERVAL_MS = 1000L
+    /**
+     * How long to wait for the host to report the initial plugin load. Longer than a reload budget
+     * because the first load races the tail of server startup (worlds, datapacks) on a cold JVM.
+     */
+    private const val INITIAL_LOAD_TIMEOUT_MS = 30_000L
   }
 
   /**
@@ -393,31 +403,92 @@ internal class DevSession(
     serverManager.copyCompanion(depend = metadata.depend, softdepend = metadata.softdepend)
     syncDependencyPlugins(serverManager)
 
+    // Clear crashed-session leftovers so the fresh companion doesn't consume a stale request or the
+    // waiter a stale result. Must happen before start() launches the companion's poll loop.
+    clearProtocolFlags(serverManager.serverDir)
+
     val serverStart = System.currentTimeMillis()
     serverManager.start(paperJar, jvmArgs, hotReload = hotReload, javaBin = javaBin)
     val ready = ui.spin(spinLabel) { serverManager.waitForReady() }
     val serverDuration = formatDuration(System.currentTimeMillis() - serverStart)
-    return if (ready) {
-      // Companion is up and probed. Hand it the staged plugin to load.
-      LoadRequest.write(
-          serverManager.serverDir,
-          LoadRequest(
-              requestId = LoadRequest.newId(),
-              jarPath = stagedJarPath,
-              pluginName = metadata.pluginName,
-              classesDirs = metadata.effectiveClassesDirs,
-              resourcesDir = metadata.resourcesDir,
-              runtimeClasspath = metadata.runtimeClasspath,
-          ),
-      )
-      ui.success(readyMessage, serverDuration)
-      serverManager.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
-      RunningState(metadata, paperJar)
-    } else {
+    if (!ready) {
       ui.error("Server failed to start", serverDuration)
       serverManager.writeCompanionStatus("error", mapOf("message" to "Server failed to start"))
-      null
+      return null
     }
+
+    // Companion is up and probed. Hand it the staged plugin to load, then wait for and consume the
+    // result — this is what makes a rejected load (probe failure, unsupported plugin shape) visible
+    // at startup instead of silently limping on.
+    val requestId = writeInitialLoadRequest(serverManager, metadata, stagedJarPath)
+    val loadResult =
+        ui.spin("Loading ${metadata.pluginName}...") {
+          loadResultWaiter.await(
+              serverManager.serverDir,
+              requestId,
+              INITIAL_LOAD_TIMEOUT_MS,
+              serverManager::isRunning,
+          )
+        }
+    return when (loadResult) {
+      is LoadWaitResult.Ok -> {
+        ui.renderLeakWarnings(loadResult.report)
+        ui.success("Plugin loaded")
+        ui.success(readyMessage, serverDuration)
+        serverManager.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
+        RunningState(metadata, paperJar)
+      }
+      is LoadWaitResult.Failed -> {
+        ui.error("Plugin failed to load: ${loadResult.message}")
+        serverManager.writeCompanionStatus("error", mapOf("message" to "Plugin load failed"))
+        // Startup is declared failed — stop the server rather than leave it running unattended
+        // until the next rebuild reaps it with a hard kill.
+        serverManager.stop()
+        null
+      }
+      LoadWaitResult.TimedOut -> {
+        ui.error("Timed out waiting for the plugin to load")
+        serverManager.writeCompanionStatus("error", mapOf("message" to "Plugin load timed out"))
+        serverManager.stop()
+        null
+      }
+      LoadWaitResult.ServerExited -> {
+        ui.error("Server exited while loading the plugin")
+        null
+      }
+    }
+  }
+
+  /** Writes the initial [LoadRequest] and returns its requestId for result matching. */
+  private fun writeInitialLoadRequest(
+      serverManager: PaperServerManager,
+      metadata: ProjectMetadata,
+      stagedJarPath: String,
+  ): String {
+    val requestId = LoadRequest.newId()
+    LoadRequest.write(
+        serverManager.serverDir,
+        LoadRequest(
+            requestId = requestId,
+            jarPath = stagedJarPath,
+            pluginName = metadata.pluginName,
+            classesDirs = metadata.effectiveClassesDirs,
+            resourcesDir = metadata.resourcesDir,
+            runtimeClasspath = metadata.runtimeClasspath,
+        ),
+    )
+    return requestId
+  }
+
+  /**
+   * Deletes the file-protocol flags in `.paperplane/` so a crashed prior session's leftovers can't
+   * be consumed by a fresh companion or the load-result waiter.
+   */
+  private fun clearProtocolFlags(serverDir: File) {
+    LoadRequest.requestPath(serverDir).delete()
+    LoadRequest.completeFlag(serverDir).delete()
+    LoadRequest.failedFlag(serverDir).delete()
+    PaperServerManager.companionErrorFlag(serverDir).delete()
   }
 
   /**

@@ -17,7 +17,6 @@ internal open class HotReloadMode(
 ) {
   internal companion object {
     private const val RELOAD_TIMEOUT_MS = 10_000L
-    private const val RELOAD_POLL_INTERVAL_MS = 100L
 
     /**
      * Pure helper: build a [LoadRequest] from a rebuild's inputs. Extracted so the strategy
@@ -193,8 +192,8 @@ internal open class HotReloadMode(
     lastPostBuildSnapshot = postBuildSnapshot
     val changes = BuildSnapshot.diff(preBuildSnapshot, postBuildSnapshot)
 
-    triggerReload(metadata, changes)
-    return waitAndReport(metadata, totalStart)
+    val requestId = triggerReload(metadata, changes)
+    return waitAndReport(metadata, totalStart, requestId)
   }
 
   private fun snapshotBeforeBuild(metadata: ProjectMetadata): Map<String, Long> {
@@ -213,7 +212,10 @@ internal open class HotReloadMode(
     return lastPostBuildSnapshot ?: buildSnapshot!!.take()
   }
 
-  private fun triggerReload(metadata: ProjectMetadata, changes: ClassChanges) {
+  /**
+   * Writes the reload request and returns its requestId so [waitAndReport] can match the result.
+   */
+  private fun triggerReload(metadata: ProjectMetadata, changes: ClassChanges): String {
     val ppDir = File(serverManager.serverDir, ".paperplane")
     ppDir.mkdirs()
     LoadRequest.completeFlag(serverManager.serverDir).delete()
@@ -232,46 +234,53 @@ internal open class HotReloadMode(
       else -> session.ui.info("Strategy:", "directory reload")
     }
     LoadRequest.write(serverManager.serverDir, request)
+    return request.requestId
   }
 
-  private fun waitAndReport(metadata: ProjectMetadata, totalStart: Long): PhaseEnd {
+  /** Internal for tests: the reload-result rendering branches are driven directly. */
+  internal fun waitAndReport(
+      metadata: ProjectMetadata,
+      totalStart: Long,
+      requestId: String,
+  ): PhaseEnd {
     val reloadStart = System.currentTimeMillis()
-    val success =
+    val result =
         session.ui.spin("Reloading ${metadata.pluginName}...") {
-          waitForReloadResult(serverManager.serverDir, timeoutMs = RELOAD_TIMEOUT_MS)
+          session.loadResultWaiter.await(
+              serverManager.serverDir,
+              requestId,
+              timeoutMs = RELOAD_TIMEOUT_MS,
+              isAlive = serverManager::isRunning,
+          )
         }
     val reloadDuration = session.formatDuration(System.currentTimeMillis() - reloadStart)
 
-    return if (success) {
-      val totalDuration = session.formatDuration(System.currentTimeMillis() - totalStart)
-      session.ui.success("Plugin reloaded", reloadDuration)
-      session.ui.totalTime(totalDuration)
-      serverManager.writeCompanionStatus("ready", mapOf("duration" to totalDuration))
-      PhaseEnd.Watching
-    } else {
-      session.ui.error("Hot-reload failed (server still running with old plugin)", reloadDuration)
-      serverManager.writeCompanionStatus("error", mapOf("message" to "Hot-reload failed"))
-      PhaseEnd.Watching
-    }
-  }
-
-  private fun waitForReloadResult(serverDir: File, timeoutMs: Long): Boolean {
-    val completeFlag = LoadRequest.completeFlag(serverDir)
-    val failedFlag = LoadRequest.failedFlag(serverDir)
-    val start = System.currentTimeMillis()
-    while (System.currentTimeMillis() - start < timeoutMs) {
-      if (completeFlag.exists()) {
-        completeFlag.delete()
-        return true
+    return when (result) {
+      is LoadWaitResult.Ok -> {
+        session.ui.renderLeakWarnings(result.report)
+        val totalDuration = session.formatDuration(System.currentTimeMillis() - totalStart)
+        session.ui.success("Plugin reloaded", reloadDuration)
+        session.ui.totalTime(totalDuration)
+        serverManager.writeCompanionStatus("ready", mapOf("duration" to totalDuration))
+        PhaseEnd.Watching
       }
-      if (failedFlag.exists()) {
-        val reason = failedFlag.readText()
-        failedFlag.delete()
-        session.ui.error("Reload failed: $reason")
-        return false
+      is LoadWaitResult.Failed -> {
+        session.ui.error("Reload failed: ${result.message}", reloadDuration)
+        serverManager.writeCompanionStatus("error", mapOf("message" to "Hot-reload failed"))
+        PhaseEnd.Watching
       }
-      Thread.sleep(RELOAD_POLL_INTERVAL_MS)
+      LoadWaitResult.TimedOut -> {
+        session.ui.error(
+            "Hot-reload failed (server still running with old plugin)",
+            reloadDuration,
+        )
+        serverManager.writeCompanionStatus("error", mapOf("message" to "Hot-reload failed"))
+        PhaseEnd.Watching
+      }
+      LoadWaitResult.ServerExited -> {
+        session.ui.error("Server process exited during reload", reloadDuration)
+        PhaseEnd.Waiting
+      }
     }
-    return false
   }
 }

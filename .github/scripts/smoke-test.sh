@@ -87,12 +87,19 @@ if [[ ! -f "$WORK_DIR/smoketest/.paperplane/server/.paperplane/staged/smoketest-
   exit 1
 fi
 
-# 4. load-complete flag was written.
-if [[ ! -f "$WORK_DIR/smoketest/.paperplane/server/.paperplane/load-complete" ]]; then
-  echo "FAIL: Host did not write load-complete flag."
-  tail -50 "$LOG_FILE"
-  exit 1
-fi
+# 4. CLI consumed the load result and reported success. The CLI consumes (reads + deletes) the
+#    load-complete flag, so assert its success ribbon in the dev log rather than the flag's
+#    on-disk presence. The ribbon is buffered in non-TTY mode and flushes shortly AFTER the
+#    server-side enable line the main wait loop keys on, so poll briefly instead of grepping once.
+ribbon_deadline=$(( $(date +%s) + 30 ))
+until grep -qF "Plugin loaded" "$LOG_FILE"; do
+  if [[ $(date +%s) -ge $ribbon_deadline ]]; then
+    echo "FAIL: CLI never reported 'Plugin loaded' — initial load result was not consumed."
+    tail -50 "$LOG_FILE"
+    exit 1
+  fi
+  sleep 1
+done
 
 echo "==> All checks passed."
 exit 0

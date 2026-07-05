@@ -90,13 +90,7 @@ open class InnerPluginHost(
           } else {
             reload(request)
           }
-          .let { result ->
-            val ms = System.currentTimeMillis() - start
-            when (result) {
-              is HostLoadResult.Ok -> HostLoadResult.Ok(result.pluginName, ms)
-              is HostLoadResult.Failed -> HostLoadResult.Failed(result.message, ms)
-            }
-          }
+          .withDuration(System.currentTimeMillis() - start)
     } catch (
         @Suppress("TooGenericExceptionCaught") // Last-resort safety net for the whole pipeline.
         e: Exception) {
@@ -497,10 +491,73 @@ data class HostLoadRequest(
     val changedClasses: List<String> = emptyList(),
 )
 
+/**
+ * One attributed source of a surviving classloader leak. `kind` ∈ thread|scheduler|command|unknown.
+ */
+data class LeakAttribution(val kind: String = "unknown", val detail: String = "")
+
+/**
+ * Leak accounting attached to a load result. `consecutive` counts back-to-back leaking reloads;
+ * `confirmedSurvivors` is the absolute count of loaders still alive after double-GC. Populated by
+ * the host's leak-detection path; absent (null) on a clean reload.
+ */
+data class LeakSummary(
+    val consecutive: Int = 0,
+    val confirmedSurvivors: Int = 0,
+    val attribution: List<LeakAttribution> = emptyList(),
+)
+
+/**
+ * Structured result the host reports back to the CLI (serialized to `.paperplane/load-complete` or
+ * `load-failed`). Mirror of the CLI's `LoadReport`. `requestId` echoes the request so the CLI can
+ * discard stale/torn results; `strategy` ∈ hotswap|fresh|reload.
+ */
+data class HostLoadReport(
+    val requestId: String,
+    val status: String,
+    val strategy: String,
+    val durationMs: Long,
+    val pluginName: String,
+    val message: String? = null,
+    val leaks: LeakSummary? = null,
+    val action: String? = null,
+) {
+  companion object {
+    const val STATUS_OK = "ok"
+    const val STATUS_FAILED = "failed"
+    const val STRATEGY_HOTSWAP = "hotswap"
+    const val STRATEGY_FRESH = "fresh"
+    const val STRATEGY_RELOAD = "reload"
+  }
+}
+
 sealed class HostLoadResult {
   abstract val durationMs: Long
+  abstract val leaks: LeakSummary?
+  abstract val action: String?
 
-  data class Ok(val pluginName: String, override val durationMs: Long) : HostLoadResult()
+  /**
+   * Re-stamps [durationMs], preserving every other field — [InnerPluginHost.handleRequest] uses
+   * this to replace the inner paths' partial timings with the full end-to-end duration without
+   * dropping what the leak-detection path attached to the result.
+   */
+  fun withDuration(durationMs: Long): HostLoadResult =
+      when (this) {
+        is Ok -> copy(durationMs = durationMs)
+        is Failed -> copy(durationMs = durationMs)
+      }
 
-  data class Failed(val message: String, override val durationMs: Long) : HostLoadResult()
+  data class Ok(
+      val pluginName: String,
+      override val durationMs: Long,
+      override val leaks: LeakSummary? = null,
+      override val action: String? = null,
+  ) : HostLoadResult()
+
+  data class Failed(
+      val message: String,
+      override val durationMs: Long,
+      override val leaks: LeakSummary? = null,
+      override val action: String? = null,
+  ) : HostLoadResult()
 }
