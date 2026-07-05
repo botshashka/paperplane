@@ -47,6 +47,7 @@ class InnerPluginHostFullLoadTest {
 
   private lateinit var server: ServerMock
   private lateinit var spm: SimplePluginManager
+  private lateinit var paperManager: MinimalEnableManager
   private lateinit var fakeServer: Server
   private lateinit var host: InnerPluginHost
 
@@ -56,9 +57,10 @@ class InnerPluginHostFullLoadTest {
     spm = SimplePluginManager(server, SimpleCommandMap(server, mutableMapOf()))
     // Modern Paper's SPM delegates enablePlugin/disablePlugin to a separate manager. Plant a tiny
     // manager that does the minimum work — call setEnabled — so our test path doesn't NPE.
+    paperManager = MinimalEnableManager(spm)
     val pmField = SimplePluginManager::class.java.getDeclaredField("paperPluginManager")
     pmField.isAccessible = true
-    pmField.set(spm, MinimalEnableManager(spm))
+    pmField.set(spm, paperManager)
 
     fakeServer = FakeServerWithSpm(server, spm)
     val probe = ReflectionProbe.probe(fakeServer)
@@ -119,6 +121,19 @@ class InnerPluginHostFullLoadTest {
         lookup["fullloadone"],
         "lookupNames must contain inner under lowercase name",
     )
+
+    // The Paper-side map is the one getPlugin(name) actually reads on real Paper — it must have
+    // been written too, and getPlugin must resolve through it end-to-end.
+    assertSame(
+        inner,
+        paperManager.lookupNames["fullloadone"],
+        "Paper manager's own lookupNames must contain the inner plugin",
+    )
+    assertSame(
+        inner,
+        fakeServer.pluginManager.getPlugin("FullLoadOne"),
+        "cross-plugin getPlugin(name) must resolve the inner plugin",
+    )
   }
 
   // ── Shutdown: symmetric removal + onDisable ─────────────────────────
@@ -139,6 +154,10 @@ class InnerPluginHostFullLoadTest {
 
     val after = readLookupNames()
     assertNull(after["shutdownone"], "lookupNames must be symmetrically pruned on shutdown")
+    assertNull(
+        paperManager.lookupNames["shutdownone"],
+        "Paper manager's lookupNames must be symmetrically pruned on shutdown",
+    )
   }
 
   // ── Reload: old disabled + new instance ─────────────────────────────
@@ -288,8 +307,16 @@ class InnerPluginHostFullLoadTest {
    * to whatever lives in `paperPluginManager`. We satisfy that contract by calling
    * `JavaPlugin.setEnabled` directly — that's what real Paper does under the hood, minus the
    * datapack/event plumbing we don't need here.
+   *
+   * Like real Paper's `PaperPluginInstanceManager`, it keeps its OWN `lookupNames` map and resolves
+   * `getPlugin(name)` from it — NOT from SPM's map. This models the empirically-verified 1.21.11
+   * behavior that the host's dual-write exists for: an SPM-only registration must make these tests
+   * fail the cross-plugin lookup, exactly as it does on a real server.
    */
-  private class MinimalEnableManager(private val spm: SimplePluginManager) : PluginManager by spm {
+  private class MinimalEnableManager(spm: SimplePluginManager) : PluginManager by spm {
+    /** Resolved by the probe via generic signature — same shape as Paper's instance manager. */
+    val lookupNames: MutableMap<String, org.bukkit.plugin.Plugin> = HashMap()
+
     // JavaPlugin.setEnabled internally calls onEnable / onDisable on transition. We only need to
     // flip the flag — Paper's manager would also fire PluginEnable/DisableEvent, but the host
     // tests don't observe events.
@@ -301,15 +328,7 @@ class InnerPluginHostFullLoadTest {
       if (plugin is JavaPlugin && plugin.isEnabled) plugin.isEnabled = false
     }
 
-    // Real Paper's manager resolves getPlugin(name) from SPM's lookupNames map. The default
-    // `by spm` delegation would call back into spm.getPlugin, which re-delegates here → infinite
-    // recursion. Read lookupNames directly, exactly as PaperPluginManagerImpl does.
-    override fun getPlugin(name: String): org.bukkit.plugin.Plugin? {
-      val field = SimplePluginManager::class.java.getDeclaredField("lookupNames")
-      field.isAccessible = true
-      @Suppress("UNCHECKED_CAST") val map = field.get(spm) as Map<String, org.bukkit.plugin.Plugin>
-      return map[name.lowercase()]
-    }
+    override fun getPlugin(name: String): org.bukkit.plugin.Plugin? = lookupNames[name.lowercase()]
   }
 }
 

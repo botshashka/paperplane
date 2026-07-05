@@ -239,17 +239,23 @@ open class InnerPluginHost(
   }
 
   private fun addToLookupNames(name: String, plugin: JavaPlugin) {
+    val key = name.lowercase()
+    // Paper's modern manager consults its OWN map for getPlugin(name) — the SPM write below is
+    // invisible to it. Write both: the Paper map for lookups, SPM's for legacy reflection compat.
+    probe.paperLookupNames?.put(key, plugin)
     val spm = ReflectionProbe.unwrapSpm(server.pluginManager) ?: return
     @Suppress("UNCHECKED_CAST")
     val map = probe.spmLookupNamesField.get(spm) as MutableMap<String, org.bukkit.plugin.Plugin>
-    map[name.lowercase()] = plugin
+    map[key] = plugin
   }
 
   private fun removeFromLookupNames(name: String) {
+    val key = name.lowercase()
+    probe.paperLookupNames?.remove(key)
     val spm = ReflectionProbe.unwrapSpm(server.pluginManager) ?: return
     @Suppress("UNCHECKED_CAST")
     val map = probe.spmLookupNamesField.get(spm) as MutableMap<String, org.bukkit.plugin.Plugin>
-    map.remove(name.lowercase())
+    map.remove(key)
   }
 
   // ── plugin.yml resolution ───────────────────────────────────────────

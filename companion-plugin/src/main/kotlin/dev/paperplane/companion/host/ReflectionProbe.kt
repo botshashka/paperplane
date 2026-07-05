@@ -7,6 +7,7 @@ import java.lang.reflect.Modifier
 import java.lang.reflect.ParameterizedType
 import org.bukkit.Server
 import org.bukkit.help.HelpTopic
+import org.bukkit.plugin.Plugin
 import org.bukkit.plugin.PluginDescriptionFile
 import org.bukkit.plugin.PluginManager
 import org.bukkit.plugin.SimplePluginManager
@@ -44,6 +45,14 @@ import org.bukkit.plugin.java.JavaPlugin
 class ReflectionProbe
 private constructor(
     val spmLookupNamesField: Field,
+    /**
+     * The lookup map Paper's modern plugin manager ACTUALLY consults for `getPlugin(name)`, or
+     * `null` when no Paper manager is present (unit tests, legacy runtimes) and SPM's own map is
+     * authoritative. Verified empirically on Paper 1.21.11: writing only SPM's `lookupNames` leaves
+     * cross-plugin `getPlugin(name)` returning null, because `PaperPluginManagerImpl`'s instance
+     * manager keeps its own map.
+     */
+    val paperLookupNames: MutableMap<String, Plugin>?,
     val helpTopics: MutableMap<String, HelpTopic>,
 ) {
 
@@ -77,6 +86,8 @@ private constructor(
                 null
               }
 
+      val paperLookupNames = resolvePaperLookupNames(server, errors)
+
       val helpTopics =
           resolveHelpTopicsMap(server)
               ?: run {
@@ -92,7 +103,91 @@ private constructor(
         throw UnsupportedPaperVersionException(buildMessage(server, errors))
       }
 
-      return ReflectionProbe(lookupField, helpTopics)
+      return ReflectionProbe(lookupField, paperLookupNames, helpTopics)
+    }
+
+    /**
+     * Locates the lookup map Paper's modern plugin manager consults for `getPlugin(name)`.
+     *
+     * On modern Paper, `SimplePluginManager` delegates to the object in its `paperPluginManager`
+     * field (`PaperPluginManagerImpl`), whose instance manager keeps its OWN `lookupNames` map —
+     * writes to SPM's map are invisible to `getPlugin(name)`. The map is resolved by generic
+     * signature (`Map<String, Plugin>`), first on the Paper manager itself, then one field level
+     * deeper (it lives on `PaperPluginInstanceManager` on 1.21.x).
+     *
+     * Returns `null` without error when no Paper manager exists (unit tests, legacy runtimes) —
+     * SPM's map is authoritative there. Adds an error when a Paper manager IS present but its map
+     * can't be found: that means Paper's internals changed and silent SPM-only registration would
+     * break cross-plugin lookups.
+     */
+    internal fun resolvePaperLookupNames(
+        server: Server,
+        errors: MutableList<String>,
+    ): MutableMap<String, Plugin>? {
+      // Without an SPM the probe fails hard on the lookupNames point anyway — nothing to resolve.
+      val spm = unwrapSpm(server.pluginManager) ?: return null
+      val paperManager: Any? =
+          try {
+            SimplePluginManager::class
+                .java
+                .getDeclaredField("paperPluginManager")
+                .apply { isAccessible = true }
+                .get(spm)
+          } catch (_: NoSuchFieldException) {
+            null
+          }
+      if (paperManager == null) return null
+
+      findStringPluginMap(paperManager)?.let {
+        return it
+      }
+      // One level deeper: PaperPluginManagerImpl keeps the map on its instance manager. Skip any
+      // SimplePluginManager reference — finding SPM's own map here would silently restore the
+      // exact bug this resolver exists to fix.
+      var clazz: Class<*>? = paperManager.javaClass
+      while (clazz != null && clazz != Any::class.java) {
+        for (f in clazz.declaredFields) {
+          if (f.type.isPrimitive) continue
+          val value =
+              try {
+                f.isAccessible = true
+                f.get(paperManager)
+              } catch (_: ReflectiveOperationException) {
+                null
+              } ?: continue
+          if (value is SimplePluginManager) continue
+          findStringPluginMap(value)?.let {
+            return it
+          }
+        }
+        clazz = clazz.superclass
+      }
+
+      errors.add(
+          "Paper's plugin manager (${paperManager.javaClass.name}) exposes no Map<String, Plugin> " +
+              "lookup field. Host cannot register the inner plugin for cross-plugin getPlugin(name)."
+      )
+      return null
+    }
+
+    /** Finds the first `Map<String, Plugin>`-typed field on [owner] by generic signature. */
+    private fun findStringPluginMap(owner: Any): MutableMap<String, Plugin>? {
+      var clazz: Class<*>? = owner.javaClass
+      while (clazz != null && clazz != Any::class.java) {
+        for (f in clazz.declaredFields) {
+          val generic = f.genericType as? ParameterizedType ?: continue
+          val raw = generic.rawType as? Class<*> ?: continue
+          if (!Map::class.java.isAssignableFrom(raw)) continue
+          val args = generic.actualTypeArguments
+          if (args.size == 2 && args[0] == String::class.java && args[1] == Plugin::class.java) {
+            f.isAccessible = true
+            @Suppress("UNCHECKED_CAST")
+            return f.get(owner) as? MutableMap<String, Plugin>
+          }
+        }
+        clazz = clazz.superclass
+      }
+      return null
     }
 
     /**

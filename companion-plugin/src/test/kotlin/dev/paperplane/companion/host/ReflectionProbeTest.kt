@@ -116,6 +116,60 @@ class ReflectionProbeTest {
     assertNotNull(probe.helpTopics)
   }
 
+  // ── Paper lookupNames resolution ────────────────────────────────────
+
+  @Test
+  fun `paperLookupNames resolves the Paper manager's own map`() {
+    val spm = SimplePluginManager(server, SimpleCommandMap(server, mutableMapOf()))
+    val paperManager = FakePaperManagerWithMap(spm)
+    plantPaperManager(spm, paperManager)
+
+    val probe = ReflectionProbe.probe(FakeServerWithSpm(server, spm))
+
+    assertSame(
+        paperManager.lookupNames,
+        probe.paperLookupNames,
+        "probe must resolve the Paper manager's OWN lookup map — not SPM's",
+    )
+  }
+
+  @Test
+  fun `paperLookupNames resolves a map nested one level deep`() {
+    // Real Paper keeps the map on PaperPluginManagerImpl's instance manager, one field level down.
+    val spm = SimplePluginManager(server, SimpleCommandMap(server, mutableMapOf()))
+    val paperManager = FakePaperManagerNested(spm)
+    plantPaperManager(spm, paperManager)
+
+    val probe = ReflectionProbe.probe(FakeServerWithSpm(server, spm))
+
+    assertSame(paperManager.instanceManager.lookupNames, probe.paperLookupNames)
+  }
+
+  @Test
+  fun `paperLookupNames is null when no Paper manager is planted`() {
+    // Unit tests and legacy runtimes: SPM's own map is authoritative; no error, no Paper map.
+    val spm = SimplePluginManager(server, SimpleCommandMap(server, mutableMapOf()))
+    val probe = ReflectionProbe.probe(FakeServerWithSpm(server, spm))
+    assertTrue(probe.paperLookupNames == null, "no paperPluginManager planted → null")
+  }
+
+  @Test
+  fun `probe fails when the Paper manager exposes no lookup map`() {
+    // A Paper manager IS present but its shape changed — silent SPM-only registration would break
+    // cross-plugin getPlugin(name), so the probe must refuse loudly.
+    val spm = SimplePluginManager(server, SimpleCommandMap(server, mutableMapOf()))
+    plantPaperManager(spm, FakePaperManagerWithoutMap(spm))
+
+    val ex =
+        assertThrows(UnsupportedPaperVersionException::class.java) {
+          ReflectionProbe.probe(FakeServerWithSpm(server, spm))
+        }
+    assertTrue(
+        ex.message!!.contains("no Map<String, Plugin>"),
+        "Error must point at the missing lookup map, got: ${ex.message}",
+    )
+  }
+
   // ── Field/method shape pinning ──────────────────────────────────────
 
   @Test
@@ -167,6 +221,31 @@ class ReflectionProbeTest {
   /** A wrapper PluginManager that holds an SPM in a private field. */
   private class WrapperPluginManager(@Suppress("unused") private val delegate: PluginManager) :
       PluginManager by delegate
+
+  private fun plantPaperManager(spm: SimplePluginManager, manager: PluginManager) {
+    val f = SimplePluginManager::class.java.getDeclaredField("paperPluginManager")
+    f.isAccessible = true
+    f.set(spm, manager)
+  }
+
+  /** Models Paper's manager shape: a `Map<String, Plugin>` lookup field of its own. */
+  private class FakePaperManagerWithMap(delegate: PluginManager) : PluginManager by delegate {
+    val lookupNames: MutableMap<String, org.bukkit.plugin.Plugin> = HashMap()
+  }
+
+  /** Map lives one level down, like Paper's `PaperPluginManagerImpl.instanceManager`. */
+  private class FakePaperManagerNested(delegate: PluginManager) : PluginManager by delegate {
+    val instanceManager = FakeInstanceManager()
+  }
+
+  private class FakeInstanceManager {
+    val lookupNames: MutableMap<String, org.bukkit.plugin.Plugin> = HashMap()
+  }
+
+  /** A Paper-manager stand-in with NO lookup map anywhere — drives the probe error path. */
+  private class FakePaperManagerWithoutMap(delegate: PluginManager) : PluginManager by delegate {
+    @Suppress("unused") private val unrelated: MutableList<String> = mutableListOf()
+  }
 
   /** Server that returns a real SPM for `pluginManager` so the probe completes end-to-end. */
   private class FakeServerWithSpm(
