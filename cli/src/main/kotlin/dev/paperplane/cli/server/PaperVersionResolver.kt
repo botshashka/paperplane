@@ -13,7 +13,7 @@ import java.time.Duration
 
 class PaperVersionResolver(
     private val client: HttpClient = HttpClient.newHttpClient(),
-    private val baseUrl: String = "https://api.papermc.io/v2/projects/paper",
+    private val baseUrl: String = "https://fill.papermc.io/v3/projects/paper",
 ) {
   companion object {
     private const val TIMEOUT_SECONDS = 5L
@@ -45,10 +45,18 @@ class PaperVersionResolver(
     val result =
         try {
           val json = gson.fromJson(fetch(baseUrl), JsonObject::class.java)
-          val versions = json.getAsJsonArray("versions").map { it.asString }
-          versions.filter {
-            Versions.apiVersion(it) in Versions.SUPPORTED_API_VERSIONS && !it.contains("-")
-          }
+          // Fill v3 groups versions in a map keyed by minor line, each list ordered newest-first:
+          // {"versions":{"1.21":["1.21.11","1.21.10",...],"1.20":[...]}}. Flatten, filter to
+          // supported stable versions, and sort ascending (latest last) since the API order is
+          // both grouped and descending.
+          json
+              .getAsJsonObject("versions")
+              .entrySet()
+              .flatMap { (_, list) -> list.asJsonArray.map { it.asString } }
+              .filter {
+                Versions.apiVersion(it) in Versions.SUPPORTED_API_VERSIONS && !it.contains("-")
+              }
+              .sortedWith(Versions::compareVersions)
         } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
           emptyList()
         }
@@ -60,6 +68,7 @@ class PaperVersionResolver(
     val request =
         HttpRequest.newBuilder()
             .uri(URI.create(url))
+            .header("User-Agent", Versions.userAgent())
             .timeout(Duration.ofSeconds(TIMEOUT_SECONDS))
             .build()
     val response = client.send(request, HttpResponse.BodyHandlers.ofString())
