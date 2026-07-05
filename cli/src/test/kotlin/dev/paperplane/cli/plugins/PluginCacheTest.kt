@@ -127,8 +127,7 @@ class PluginCacheTest {
     assertTrue(msg.contains("1.0.0"), "message should include the version: $msg")
     assertTrue(msg.contains("192.0.2.1"), "message should include the URL: $msg")
     assertTrue(
-        msg.contains("Check your network connection") ||
-            msg.contains("`ppl plugin update ghost`"),
+        msg.contains("Check your network connection") || msg.contains("`ppl plugin update ghost`"),
         "message should suggest a recovery action: $msg",
     )
   }

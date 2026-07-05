@@ -143,7 +143,8 @@ class FileWatcherTest {
     val allChanged = changes.flatten()
     assertTrue(
         allChanged.any { it.endsWith("build.gradle.kts") },
-        "build.gradle.kts should appear in changes")
+        "build.gradle.kts should appear in changes",
+    )
   }
 
   @Test

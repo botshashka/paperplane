@@ -163,9 +163,7 @@ class BlueGreenModeRenderTest {
   @Test
   fun `metadata task failure routes to BuildFailed without touching the proxy`() {
     val (mode, fixture, proxy) =
-        newMode().also {
-          it.second.gradle.nextMetadataResult = MetadataResult.TaskFailed
-        }
+        newMode().also { it.second.gradle.nextMetadataResult = MetadataResult.TaskFailed }
     val outcome = mode.runStartup()
 
     assertEquals(DevSession.StartupOutcome.BuildFailed, outcome)

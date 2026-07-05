@@ -40,8 +40,8 @@ class FakeGradleBridge(
 ) : GradleBridge(projectDir, ui) {
 
   /**
-   * Explicit override for [metadata]. When null, falls back to [nextMetadata] (non-null →
-   * Success, null → PluginNotApplied). Set this directly to script [MetadataResult.TaskFailed].
+   * Explicit override for [metadata]. When null, falls back to [nextMetadata] (non-null → Success,
+   * null → PluginNotApplied). Set this directly to script [MetadataResult.TaskFailed].
    */
   var nextMetadataResult: MetadataResult? = null
 

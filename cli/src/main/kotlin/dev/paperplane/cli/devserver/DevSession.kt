@@ -69,10 +69,11 @@ internal class DevSession(
    * If any of [changedFiles] is one of our [buildConfigFiles], drop the cached Tooling API
    * connection so the next build/compile reconnects with a freshly-evaluated script.
    *
-   * The Tooling API caches build-script evaluation on the [ProjectConnection][org.gradle.tooling.ProjectConnection],
-   * so an in-session edit to `build.gradle.kts` (e.g. removing a `commands { create("ping") }`
-   * block) doesn't propagate until the connection is torn down — without this we'd keep regenerating
-   * stale `plugin.yml`s and re-registering removed commands until the user restarts `ppl dev`.
+   * The Tooling API caches build-script evaluation on the
+   * [ProjectConnection][org.gradle.tooling.ProjectConnection], so an in-session edit to
+   * `build.gradle.kts` (e.g. removing a `commands { create("ping") }` block) doesn't propagate
+   * until the connection is torn down — without this we'd keep regenerating stale `plugin.yml`s and
+   * re-registering removed commands until the user restarts `ppl dev`.
    *
    * Source-only edits skip this entirely, so the fast path is unchanged.
    */

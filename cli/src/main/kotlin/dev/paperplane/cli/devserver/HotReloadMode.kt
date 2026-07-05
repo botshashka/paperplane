@@ -27,7 +27,8 @@ internal open class HotReloadMode(
      * Strategy selection rules:
      * - No fastMeta or no classesDir → JAR fallback (empty classesDirs, empty changedClasses).
      * - Have fastMeta + only modified classes (no add/remove) → HOTSWAP (changedClasses populated).
-     * - Have fastMeta + structural change → DIRECTORY (classesDirs populated, changedClasses empty).
+     * - Have fastMeta + structural change → DIRECTORY (classesDirs populated, changedClasses
+     *   empty).
      */
     internal fun buildLoadRequest(
         metadata: ProjectMetadata,
@@ -225,8 +226,7 @@ internal open class HotReloadMode(
 
     val request = buildLoadRequest(metadata, cachedFastMeta, changes, stagedJarPath)
     when {
-      request.classesDirs.isEmpty() ->
-          session.ui.info("Strategy:", "jar (fallback)")
+      request.classesDirs.isEmpty() -> session.ui.info("Strategy:", "jar (fallback)")
       request.changedClasses.isNotEmpty() ->
           session.ui.info("Strategy:", "hotswap (${changes.modified.size} modified)")
       else -> session.ui.info("Strategy:", "directory reload")

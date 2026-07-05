@@ -5,18 +5,15 @@ import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.types.file
 import dev.paperplane.cli.gradle.GradleBridge
-import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.ui.TerminalUI
 import dev.paperplane.cli.util.formatDurationMs
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
-open class BuildCommand(private val ui: TerminalUI) :
-    CliktCommand(name = "build") {
+open class BuildCommand(private val ui: TerminalUI) : CliktCommand(name = "build") {
 
-  private val cleanFirst by
-      option("--clean", help = "Run gradle clean before building").flag()
+  private val cleanFirst by option("--clean", help = "Run gradle clean before building").flag()
 
   private val output by
       option(
@@ -69,11 +66,11 @@ open class BuildCommand(private val ui: TerminalUI) :
 
     val outputDir = output
     if (outputDir != null) {
-      copyToOutput(jar, outputDir, metadata)
+      copyToOutput(jar, outputDir)
     }
   }
 
-  private fun copyToOutput(jar: File, outputDir: File, metadata: ProjectMetadata) {
+  private fun copyToOutput(jar: File, outputDir: File) {
     if (!outputDir.exists() && !outputDir.mkdirs()) {
       ui.error("Could not create output directory: ${outputDir.path}")
       return

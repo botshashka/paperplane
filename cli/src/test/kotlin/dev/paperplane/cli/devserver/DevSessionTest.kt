@@ -4,11 +4,11 @@ import dev.paperplane.cli.Versions
 import dev.paperplane.cli.config.PaperPlaneConfig
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.gradle.ProjectMetadata
-import dev.paperplane.cli.watcher.FileWatcher
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.RecordingTerminal
 import dev.paperplane.cli.ui.TerminalUI
+import dev.paperplane.cli.watcher.FileWatcher
 import java.io.File
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -249,7 +249,8 @@ class DevSessionTest {
 
   // ── maybeInvalidateGradleConnection ─────────────────────────────────
 
-  private class CountingGradleBridge(projectDir: File, ui: TerminalUI) : GradleBridge(projectDir, ui) {
+  private class CountingGradleBridge(projectDir: File, ui: TerminalUI) :
+      GradleBridge(projectDir, ui) {
     var closeCount = 0
       private set
 
@@ -285,8 +286,7 @@ class DevSessionTest {
   fun `maybeInvalidateGradleConnection closes when build-gradle-kts changes`() {
     val bridge = CountingGradleBridge(tempDir, ui)
     val session = invalidationSession(bridge)
-    val buildPath =
-        FileWatcher.normalizePath(File(tempDir, "build.gradle.kts").absolutePath)
+    val buildPath = FileWatcher.normalizePath(File(tempDir, "build.gradle.kts").absolutePath)
 
     session.maybeInvalidateGradleConnection(listOf(buildPath))
 
@@ -297,10 +297,8 @@ class DevSessionTest {
   fun `maybeInvalidateGradleConnection closes when settings or properties change`() {
     val bridge = CountingGradleBridge(tempDir, ui)
     val session = invalidationSession(bridge)
-    val settingsPath =
-        FileWatcher.normalizePath(File(tempDir, "settings.gradle.kts").absolutePath)
-    val propsPath =
-        FileWatcher.normalizePath(File(tempDir, "gradle.properties").absolutePath)
+    val settingsPath = FileWatcher.normalizePath(File(tempDir, "settings.gradle.kts").absolutePath)
+    val propsPath = FileWatcher.normalizePath(File(tempDir, "gradle.properties").absolutePath)
 
     session.maybeInvalidateGradleConnection(listOf(settingsPath))
     session.maybeInvalidateGradleConnection(listOf(propsPath))
@@ -313,8 +311,7 @@ class DevSessionTest {
     val bridge = CountingGradleBridge(tempDir, ui)
     val session = invalidationSession(bridge)
     val srcPath = FileWatcher.normalizePath(File(tempDir, "src/main/java/Foo.java").absolutePath)
-    val buildPath =
-        FileWatcher.normalizePath(File(tempDir, "build.gradle.kts").absolutePath)
+    val buildPath = FileWatcher.normalizePath(File(tempDir, "build.gradle.kts").absolutePath)
 
     session.maybeInvalidateGradleConnection(listOf(srcPath, buildPath))
 
@@ -341,8 +338,7 @@ class DevSessionTest {
   fun `maybeInvalidateGradleConnection ignores non-matching paths in the changed list`() {
     val bridge = CountingGradleBridge(tempDir, ui)
     val session = invalidationSession(bridge)
-    val unrelated =
-        FileWatcher.normalizePath(File(tempDir, "build.gradle.unrelated").absolutePath)
+    val unrelated = FileWatcher.normalizePath(File(tempDir, "build.gradle.unrelated").absolutePath)
 
     session.maybeInvalidateGradleConnection(listOf(unrelated))
 

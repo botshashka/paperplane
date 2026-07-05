@@ -10,16 +10,15 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 
 /**
- * End-to-end integration tests that drive the real Gradle Tooling API against tiny scratch
- * projects to verify [GradleBridge.metadata]'s exception classification.
+ * End-to-end integration tests that drive the real Gradle Tooling API against tiny scratch projects
+ * to verify [GradleBridge.metadata]'s exception classification.
  *
- * These tests close the gap left by `GradleBridgeTest` (which only exercises message-string
- * helpers in isolation) and the mode render tests (which fake the bridge entirely). The scenario
- * they protect against is concrete: a future Gradle version drifts its error wording in a way
- * that makes [GradleBridge.isTaskNotFoundMessage] return false for a real "task not found"
- * exception, or true for a real compile-error exception. Either drift would silently regress the
- * `ppl dev` UX (compile errors falsely routed to "ppl init / ppl create" hints, or vice versa)
- * with no unit-test failure.
+ * These tests close the gap left by `GradleBridgeTest` (which only exercises message-string helpers
+ * in isolation) and the mode render tests (which fake the bridge entirely). The scenario they
+ * protect against is concrete: a future Gradle version drifts its error wording in a way that makes
+ * [GradleBridge.isTaskNotFoundMessage] return false for a real "task not found" exception, or true
+ * for a real compile-error exception. Either drift would silently regress the `ppl dev` UX (compile
+ * errors falsely routed to "ppl init / ppl create" hints, or vice versa) with no unit-test failure.
  *
  * Tagged `slow` because each test spins up a Gradle daemon and configures a fresh project — first
  * run on a machine can take ~30s. The Tooling API client version (`libs.versions.toml`:
@@ -46,11 +45,11 @@ class GradleBridgeMetadataIntegrationTest {
   }
 
   /**
-   * Java project that declares `ppMetadata` (transitively depending on `compileJava`, mirroring
-   * the production gradle plugin) plus a deliberate syntax error in source. Verifies that a real
+   * Java project that declares `ppMetadata` (transitively depending on `compileJava`, mirroring the
+   * production gradle plugin) plus a deliberate syntax error in source. Verifies that a real
    * compile-error exception chain does **not** match [GradleBridge.isTaskNotFoundMessage] and is
-   * therefore routed to [MetadataResult.TaskFailed], not [MetadataResult.PluginNotApplied]. This
-   * is the regression guard for the "ppl dev on a project with a typo bypasses fix-recovery" bug.
+   * therefore routed to [MetadataResult.TaskFailed], not [MetadataResult.PluginNotApplied]. This is
+   * the regression guard for the "ppl dev on a project with a typo bypasses fix-recovery" bug.
    */
   @Test
   fun `metadata returns TaskFailed when ppMetadata exists but compile fails`() {
@@ -88,8 +87,8 @@ class GradleBridgeMetadataIntegrationTest {
    * `plugin.yml` (or here, a marker file written from the script) holding the pre-edit value.
    *
    * `close()` drops the connection so the next `compileOnly()` lazily reconnects and re-evaluates
-   * the script. This test pins that contract end-to-end: after `close()`, the new script value
-   * IS observed.
+   * the script. This test pins that contract end-to-end: after `close()`, the new script value IS
+   * observed.
    */
   @Test
   fun `close lets the next compileOnly observe edits to the build script`() {

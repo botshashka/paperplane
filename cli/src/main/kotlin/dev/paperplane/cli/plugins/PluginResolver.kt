@@ -122,11 +122,11 @@ class PluginResolver(
       // from Modrinth" rather than "skip on update". The user's only recovery path when a local
       // jar's bytes change is `ppl plugin update <slug>`, so honoring the lockfile pin here
       // would create a circular failure with PluginCache.verifyLocal.
-      if (existing != null &&
-          existing.pinned &&
-          !force &&
-          existing.source != PluginDependency.Source.LOCAL.key)
-          continue
+      val pinnedRemote =
+          existing != null &&
+              existing.pinned &&
+              existing.source != PluginDependency.Source.LOCAL.key
+      if (pinnedRemote && !force) continue
       val resolved = resolve(dep, mcVersion)
       working = working.upsert(resolved)
     }

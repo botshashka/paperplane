@@ -16,8 +16,8 @@ open class FileWatcher(
     /**
      * Normalize a file path the same way the watcher does when emitting changed-file paths. Callers
      * comparing paths against the watcher's output (e.g. DevSession deciding whether a build-config
-     * file changed) must run their candidate paths through this — on Windows the watcher lowercases,
-     * so a case-mismatched check would silently miss changes.
+     * file changed) must run their candidate paths through this — on Windows the watcher
+     * lowercases, so a case-mismatched check would silently miss changes.
      */
     fun normalizePath(path: String): String = if (Platform.isWindows) path.lowercase() else path
   }

@@ -22,6 +22,8 @@ open class PaperServerManager(
     private const val SIGTERM_TIMEOUT_SECONDS = 5L
     private const val FORCE_STOP_TIMEOUT_SECONDS = 2L
     private const val SAVE_POLL_INTERVAL_MS = 200L
+    /** Highest vanilla op permission level — full command access on the dev server. */
+    private const val OP_PERMISSION_LEVEL = 4
     private const val SERVER_READY_TIMEOUT_MS = 120_000L
     private const val READY_POLL_INTERVAL_MS = 100L
   }
@@ -120,7 +122,7 @@ open class PaperServerManager(
       mapOf(
           "uuid" to offlineUuid(name).toString(),
           "name" to name,
-          "level" to 4,
+          "level" to OP_PERMISSION_LEVEL,
           "bypassesPlayerLimit" to false,
       )
     }

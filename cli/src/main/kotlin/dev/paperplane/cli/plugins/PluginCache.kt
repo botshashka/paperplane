@@ -25,6 +25,11 @@ import java.security.MessageDigest
 open class PluginCache(private val cacheDir: File) {
   private val client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()
 
+  private companion object {
+    /** Read-buffer size for SHA512 hashing. */
+    private const val SHA_BUFFER_BYTES = 64 * 1024
+  }
+
   /**
    * Returns the path a locked plugin *would* occupy in the cache. Does not create it and does not
    * check existence — used by [PluginResolver] to decide whether a download is needed and by [get]
@@ -91,6 +96,22 @@ open class PluginCache(private val cacheDir: File) {
     val tmp = File(cacheDir, ".${target.name}.tmp")
     tmp.delete() // clear any leftover partial download from a prior crash
 
+    fetchToTemp(locked, tmp)
+
+    if (!verifySha(tmp, locked.sha512)) {
+      tmp.delete()
+      throw IOException(
+          "SHA512 mismatch after downloading ${locked.slug} ${locked.version} — " +
+              "refusing to install."
+      )
+    }
+
+    atomicMoveOrFallback(tmp.toPath(), target.toPath())
+    return target
+  }
+
+  /** Downloads [locked]'s URL into [tmp], deleting [tmp] and throwing [IOException] on failure. */
+  private fun fetchToTemp(locked: LockedPlugin, tmp: File) {
     val request = HttpRequest.newBuilder().uri(URI.create(locked.url)).build()
     val response =
         try {
@@ -115,24 +136,13 @@ open class PluginCache(private val cacheDir: File) {
               "HTTP ${response.statusCode()} for ${locked.url}"
       )
     }
-
-    if (!verifySha(tmp, locked.sha512)) {
-      tmp.delete()
-      throw IOException(
-          "SHA512 mismatch after downloading ${locked.slug} ${locked.version} — " +
-              "refusing to install."
-      )
-    }
-
-    atomicMoveOrFallback(tmp.toPath(), target.toPath())
-    return target
   }
 
   /** Computes SHA512 of [file] as a 128-char lowercase hex string. */
   open fun sha512(file: File): String {
     val digest = MessageDigest.getInstance("SHA-512")
     file.inputStream().use { input ->
-      val buf = ByteArray(64 * 1024)
+      val buf = ByteArray(SHA_BUFFER_BYTES)
       while (true) {
         val read = input.read(buf)
         if (read <= 0) break

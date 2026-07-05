@@ -294,7 +294,8 @@ class PluginCommandTest : RenderTestBase() {
 
   @Test
   fun `add upgrade replaces existing YAML version pin with latest`() {
-    // The ergonomic counterpart to "YAML @version is authoritative". Without --upgrade the duplicate
+    // The ergonomic counterpart to "YAML @version is authoritative". Without --upgrade the
+    // duplicate
     // check fires; with --upgrade the entry is re-resolved and the @version is dropped from the
     // YAML so the user can keep getting fresh latests on subsequent updates.
     writeBaseConfig()
@@ -310,7 +311,9 @@ class PluginCommandTest : RenderTestBase() {
 
     val configAfter = File(canonicalTempDir, "paperplane.yml").readText()
     assertFalse(
-        configAfter.contains("version: \"5.5.0\""), "the @version pin should be dropped: $configAfter")
+        configAfter.contains("version: \"5.5.0\""),
+        "the @version pin should be dropped: $configAfter",
+    )
     val locked = PluginLockfile.load(canonicalTempDir).find("luckperms")!!
     assertEquals("5.5.17", locked.version)
     assertFalse(locked.pinned, "after upgrade without explicit @version, pinned should be false")
@@ -381,9 +384,10 @@ class PluginCommandTest : RenderTestBase() {
 
     // The lockfile entry should now reflect the new bytes.
     val locked = PluginLockfile.load(canonicalTempDir).find("my")!!
-    val expected = java.security.MessageDigest.getInstance("SHA-512")
-        .digest("v2-tampered".toByteArray())
-        .joinToString("") { "%02x".format(it) }
+    val expected =
+        java.security.MessageDigest.getInstance("SHA-512")
+            .digest("v2-tampered".toByteArray())
+            .joinToString("") { "%02x".format(it) }
     assertEquals(expected, locked.sha512)
     assertTrue(
         t.writes.any { it.contains("my:") && it.contains("refreshed checksum") } ||
@@ -438,8 +442,7 @@ class PluginCommandTest : RenderTestBase() {
         .parse(emptyList())
 
     // SHA was rewritten back to the resolver's value.
-    assertEquals(
-        "sha-vault-1.7.3", PluginLockfile.load(canonicalTempDir).find("vault")!!.sha512)
+    assertEquals("sha-vault-1.7.3", PluginLockfile.load(canonicalTempDir).find("vault")!!.sha512)
     assertTrue(
         t.writes.any { it.contains("vault: refreshed checksum") },
         "expected refreshed-checksum line",
@@ -543,7 +546,10 @@ class PluginCommandTest : RenderTestBase() {
         locked.sha512,
     )
     assertTrue(locked.pinned, "local entries remain pinned after upgrade (auto-pin semantic)")
-    assertTrue(t.writes.any { it.contains("Upgraded plug") }, "expected Upgraded message: ${t.writes}")
+    assertTrue(
+        t.writes.any { it.contains("Upgraded plug") },
+        "expected Upgraded message: ${t.writes}",
+    )
   }
 
   @Test

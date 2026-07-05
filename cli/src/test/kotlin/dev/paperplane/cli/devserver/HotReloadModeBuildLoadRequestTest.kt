@@ -46,7 +46,8 @@ class HotReloadModeBuildLoadRequestTest {
         HotReloadMode.buildLoadRequest(
             metadata = baseMetadata,
             fastMeta = null,
-            changes = ClassChanges(modified = listOf("X"), added = emptyList(), removed = emptyList()),
+            changes =
+                ClassChanges(modified = listOf("X"), added = emptyList(), removed = emptyList()),
             stagedJarPath = "/staged/sample.jar",
         )
     assertTrue(request.classesDirs.isEmpty(), "JAR fallback must have empty classesDirs")
@@ -59,8 +60,7 @@ class HotReloadModeBuildLoadRequestTest {
 
   @Test
   fun `fastMeta with empty classesDir yields JAR fallback`() {
-    val emptyFast =
-        baseMetadata.copy(classesDir = "", classesDirs = emptyList(), resourcesDir = "")
+    val emptyFast = baseMetadata.copy(classesDir = "", classesDirs = emptyList(), resourcesDir = "")
     val request =
         HotReloadMode.buildLoadRequest(
             metadata = baseMetadata,
@@ -153,10 +153,18 @@ class HotReloadModeBuildLoadRequestTest {
   fun `each call generates a unique requestId`() {
     val a =
         HotReloadMode.buildLoadRequest(
-            baseMetadata, null, ClassChanges(emptyList(), emptyList(), emptyList()), "/x.jar")
+            baseMetadata,
+            null,
+            ClassChanges(emptyList(), emptyList(), emptyList()),
+            "/x.jar",
+        )
     val b =
         HotReloadMode.buildLoadRequest(
-            baseMetadata, null, ClassChanges(emptyList(), emptyList(), emptyList()), "/x.jar")
+            baseMetadata,
+            null,
+            ClassChanges(emptyList(), emptyList(), emptyList()),
+            "/x.jar",
+        )
     assertTrue(a.requestId != b.requestId, "Each rebuild must mint a fresh requestId for dedup")
     assertTrue(a.requestId.isNotBlank())
   }

@@ -15,7 +15,8 @@ import java.util.UUID
  * - `classesDirs` non-empty → DIRECTORY reload (Level 1).
  * - Otherwise → JAR reload (Level 0).
  *
- * Strategy was previously sent via `companion-status.json reloadStrategy=...`; that channel is gone.
+ * Strategy was previously sent via `companion-status.json reloadStrategy=...`; that channel is
+ * gone.
  */
 data class LoadRequest(
     val requestId: String,

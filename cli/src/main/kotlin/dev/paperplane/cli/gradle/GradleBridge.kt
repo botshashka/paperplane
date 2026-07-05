@@ -39,8 +39,8 @@ sealed class MetadataResult {
   object PluginNotApplied : MetadataResult()
 
   /**
-   * `ppMetadata` exists but its task chain failed (e.g., a compile error in user source).
-   * Per-error detail has already been surfaced via [GradleBridge.parseBuildErrors].
+   * `ppMetadata` exists but its task chain failed (e.g., a compile error in user source). Per-error
+   * detail has already been surfaced via [GradleBridge.parseBuildErrors].
    */
   object TaskFailed : MetadataResult()
 
@@ -223,23 +223,28 @@ open class GradleBridge(private val projectDir: File, private val ui: TerminalUI
     val map: Map<String, Any> = Gson().fromJson(metadataFile.readText(), type)
     return ProjectMetadata(
         jarPath = map["jarPath"] as? String ?: return null,
-        paperApiVersion = map["paperApiVersion"] as? String ?: "unknown",
-        mainClass = map["mainClass"] as? String ?: "unknown",
-        pluginName = map["pluginName"] as? String ?: "unknown",
-        projectDir = map["projectDir"] as? String ?: this.projectDir.absolutePath,
-        version = map["version"] as? String ?: "unknown",
-        classesDir = map["classesDir"] as? String ?: "",
-        classesDirs = (map["classesDirs"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
-        resourcesDir = map["resourcesDir"] as? String ?: "",
-        runtimeClasspath =
-            (map["runtimeClasspath"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
-        depend = (map["depend"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
-        softdepend = (map["softdepend"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
-        loadbefore = (map["loadbefore"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
-        load = map["load"] as? String ?: "POSTWORLD",
-        apiVersion = map["apiVersion"] as? String ?: "",
+        paperApiVersion = map.str("paperApiVersion", "unknown"),
+        mainClass = map.str("mainClass", "unknown"),
+        pluginName = map.str("pluginName", "unknown"),
+        projectDir = map.str("projectDir", this.projectDir.absolutePath),
+        version = map.str("version", "unknown"),
+        classesDir = map.str("classesDir", ""),
+        classesDirs = map.strList("classesDirs"),
+        resourcesDir = map.str("resourcesDir", ""),
+        runtimeClasspath = map.strList("runtimeClasspath"),
+        depend = map.strList("depend"),
+        softdepend = map.strList("softdepend"),
+        loadbefore = map.strList("loadbefore"),
+        load = map.str("load", "POSTWORLD"),
+        apiVersion = map.str("apiVersion", ""),
     )
   }
+
+  private fun Map<String, Any>.str(key: String, default: String): String =
+      this[key] as? String ?: default
+
+  private fun Map<String, Any>.strList(key: String): List<String> =
+      (this[key] as? List<*>)?.filterIsInstance<String>() ?: emptyList()
 
   private fun parseBuildErrors(output: String) {
     // Dedupe by (file, line, message) — Gradle prints the same compile error twice (once in the

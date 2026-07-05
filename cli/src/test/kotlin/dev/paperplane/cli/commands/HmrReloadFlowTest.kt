@@ -6,9 +6,9 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * Sanity checks for [ClassChanges.noNewOrRemovedClasses] — `HotReloadMode.triggerReload` reads
- * this flag to decide whether HOTSWAP is eligible. End-to-end coverage of the LoadRequest write
- * path lives in `HotReloadModeReloadRequestTest`.
+ * Sanity checks for [ClassChanges.noNewOrRemovedClasses] — `HotReloadMode.triggerReload` reads this
+ * flag to decide whether HOTSWAP is eligible. End-to-end coverage of the LoadRequest write path
+ * lives in `HotReloadModeReloadRequestTest`.
  */
 class HmrReloadFlowTest {
 

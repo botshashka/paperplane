@@ -68,8 +68,7 @@ class LoadRequestTest {
         )
     LoadRequest.write(serverDir, original)
     val parsed =
-        Gson()
-            .fromJson(LoadRequest.requestPath(serverDir).readText(), LoadRequest::class.java)
+        Gson().fromJson(LoadRequest.requestPath(serverDir).readText(), LoadRequest::class.java)
     assertEquals(original, parsed)
   }
 

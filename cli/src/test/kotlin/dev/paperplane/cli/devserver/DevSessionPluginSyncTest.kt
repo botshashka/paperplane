@@ -158,7 +158,10 @@ class DevSessionPluginSyncTest {
     assertEquals("2.11.6", lock.find("placeholderapi")!!.version)
     // Jar deployed and manifest updated with the installed filename.
     val deployed = File(manager.serverDir, "plugins").listFiles()?.map { it.name } ?: emptyList()
-    assertTrue(deployed.any { it.contains("placeholderapi") }, "expected placeholderapi jar in plugins/")
+    assertTrue(
+        deployed.any { it.contains("placeholderapi") },
+        "expected placeholderapi jar in plugins/",
+    )
     assertTrue(ManagedPlugins.load(manager.serverDir).isNotEmpty())
     assertTrue(
         terminal.writes.any { it.contains("Resolving plugins") },

@@ -40,8 +40,7 @@ class CompanionJarRewriterTest {
   @Test
   fun `injectDepends appends softdepend list when none existed`() {
     val original = "name: PaperPlane\nmain: x\nversion: 1.0\nload: POSTWORLD"
-    val result =
-        CompanionJarRewriter.injectDepends(original, emptyList(), listOf("PlaceholderAPI"))
+    val result = CompanionJarRewriter.injectDepends(original, emptyList(), listOf("PlaceholderAPI"))
     assertTrue(result.contains("softdepend: [PlaceholderAPI]"))
     assertFalse(result.contains("\ndepend:"))
   }
@@ -88,8 +87,7 @@ class CompanionJarRewriterTest {
         load: POSTWORLD
         """
             .trimIndent()
-    val result =
-        CompanionJarRewriter.injectDepends(original, listOf("X"), emptyList())
+    val result = CompanionJarRewriter.injectDepends(original, listOf("X"), emptyList())
     assertTrue(result.contains("name: PaperPlane"))
     assertTrue(result.contains("main: dev.paperplane.companion.CompanionPlugin"))
     assertTrue(result.contains("api-version: '1.18'"))
@@ -139,7 +137,10 @@ class CompanionJarRewriterTest {
         listOf("WorldGuard"),
         emptyList(),
     )
-    val first = JarFile(output).use { it.getInputStream(it.getJarEntry("plugin.yml"))!!.bufferedReader().readText() }
+    val first =
+        JarFile(output).use {
+          it.getInputStream(it.getJarEntry("plugin.yml"))!!.bufferedReader().readText()
+        }
 
     // Second write to the SAME output, using the OUTPUT as input → simulate re-running ppl dev.
     CompanionJarRewriter.rewrite(
@@ -148,17 +149,28 @@ class CompanionJarRewriterTest {
         listOf("WorldGuard"),
         emptyList(),
     )
-    val second = JarFile(output).use { it.getInputStream(it.getJarEntry("plugin.yml"))!!.bufferedReader().readText() }
+    val second =
+        JarFile(output).use {
+          it.getInputStream(it.getJarEntry("plugin.yml"))!!.bufferedReader().readText()
+        }
 
-    assertEquals(first, second, "Re-running rewrite with same depends must produce identical plugin.yml")
+    assertEquals(
+        first,
+        second,
+        "Re-running rewrite with same depends must produce identical plugin.yml",
+    )
   }
 
   @Test
   fun `rewrite with empty depends drops any prior depend lines`() {
-    val sourceJar = makeFixtureJar(plugin_yml = "name: PaperPlane\nmain: x\nversion: 1.0\ndepend: [Stale]\n")
+    val sourceJar =
+        makeFixtureJar(pluginYml = "name: PaperPlane\nmain: x\nversion: 1.0\ndepend: [Stale]\n")
     val output = File(tempDir, "out.jar")
     CompanionJarRewriter.rewrite({ sourceJar.inputStream() }, output, emptyList(), emptyList())
-    val text = JarFile(output).use { it.getInputStream(it.getJarEntry("plugin.yml"))!!.bufferedReader().readText() }
+    val text =
+        JarFile(output).use {
+          it.getInputStream(it.getJarEntry("plugin.yml"))!!.bufferedReader().readText()
+        }
     assertFalse(text.contains("depend"))
     assertFalse(text.contains("Stale"))
   }
@@ -166,20 +178,20 @@ class CompanionJarRewriterTest {
   // ── helpers ─────────────────────────────────────────────────────────
 
   private fun makeFixtureJar(
-      plugin_yml: String =
+      pluginYml: String =
           """
-            name: PaperPlane
-            main: dev.paperplane.companion.CompanionPlugin
-            version: 1.0
-            api-version: '1.18'
-            load: POSTWORLD
-            """
+          name: PaperPlane
+          main: dev.paperplane.companion.CompanionPlugin
+          version: 1.0
+          api-version: '1.18'
+          load: POSTWORLD
+          """
               .trimIndent(),
   ): File {
     val jar = File(tempDir, "fixture.jar")
     JarOutputStream(jar.outputStream()).use { jos ->
       jos.putNextEntry(JarEntry("plugin.yml"))
-      jos.write(plugin_yml.toByteArray())
+      jos.write(pluginYml.toByteArray())
       jos.closeEntry()
       jos.putNextEntry(JarEntry("dev/paperplane/companion/CompanionPlugin.class"))
       jos.write("hello".toByteArray())

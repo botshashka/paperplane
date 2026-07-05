@@ -129,7 +129,9 @@ open class ModrinthClient(
       return client.send(request, HttpResponse.BodyHandlers.ofString())
     } catch (e: IOException) {
       throw ModrinthNetworkError(
-          "Could not reach Modrinth: ${e.message ?: e.javaClass.simpleName}", e)
+          "Could not reach Modrinth: ${e.message ?: e.javaClass.simpleName}",
+          e,
+      )
     }
   }
 
