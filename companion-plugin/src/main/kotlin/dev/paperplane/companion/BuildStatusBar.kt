@@ -235,7 +235,14 @@ class BuildStatusBar(
 
     // Try in-place class redefinition first if HotSwapper is available and the change is
     // method-body-only. Skips the full host reload entirely.
-    if (wasLoaded && request.changedClasses.isNotEmpty() && request.classesDirs.isNotEmpty()) {
+    if (
+        hotSwapEligible(
+            wasLoaded,
+            host.leakLimitReached,
+            request.changedClasses,
+            request.classesDirs,
+        )
+    ) {
       if (tryHotSwap(host, request)) {
         writeReport(
             HostLoadReport(
@@ -261,23 +268,37 @@ class BuildStatusBar(
         broadcast(Component.text(msg, NamedTextColor.GREEN))
         maybeDeferLeakDump(host, result)
       }
-      is HostLoadResult.Failed -> {
-        broadcast(Component.text("Reload failed: ${result.message}", NamedTextColor.RED))
-        // A restart action rides out on the result (the host attaches it to the leak-limit
-        // refusal),
-        // so the in-game notice keys on the result, not host state. The CLI does the actual
-        // restart.
-        if (result.action == HostLoadReport.ACTION_RESTART) {
-          broadcast(
-              Component.text(
-                  "Restarting dev server to clear leaked memory...",
-                  NamedTextColor.YELLOW,
-              )
-          )
-        }
-      }
+      is HostLoadResult.Failed ->
+          broadcast(Component.text("Reload failed: ${result.message}", NamedTextColor.RED))
+    }
+
+    // The leak-limit restart signal rides out on the result's `action`: on the tripping
+    // Ok (reload succeeded but leaks piled up past the limit) or, belt-and-braces, on the
+    // refusal Failed sent if a prior tripping Ok was missed. Warn players before the CLI
+    // pulls the server down — the CLI does the actual restart. Keying on the result, not
+    // host state, means a missed Ok can't wedge the notice.
+    if (result.action == HostLoadReport.ACTION_RESTART) {
+      broadcast(
+          Component.text("Restarting dev server to clear leaked memory...", NamedTextColor.YELLOW)
+      )
     }
   }
+
+  /**
+   * Hot-swap fast-path eligibility. A method-body-only edit (changed classes, no structural change)
+   * on an already-loaded plugin can be redefined in place, skipping the full host reload — but only
+   * while the host hasn't tripped its leak limit. Once it has, the fast path would report Ok with
+   * no `action`, deferring the leak-restart indefinitely (the CLI may have missed the tripping Ok);
+   * falling through to the full reload lets the host's refusal carry the restart action. Pure so it
+   * can be unit-tested without instrumentation, which [tryHotSwap] requires.
+   */
+  internal fun hotSwapEligible(
+      wasLoaded: Boolean,
+      leakLimitReached: Boolean,
+      changedClasses: List<String>,
+      classesDirs: List<String>,
+  ): Boolean =
+      wasLoaded && !leakLimitReached && changedClasses.isNotEmpty() && classesDirs.isNotEmpty()
 
   /**
    * Schedules the deferred leak dumps — but only in [LeakDiagnosticsMode.FULL] and only when the

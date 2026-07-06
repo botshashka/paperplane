@@ -419,10 +419,12 @@ class HotReloadModeRenderTest {
 
     // The restart is what matters: stop + start with the hot-reload wiring. The scripted waiter
     // returns this same Failed for the restarted server's own initial load, so the restart reports
-    // LoadFailed → PhaseEnd.Waiting (the stopped server makes the main loop exit on the next tick).
+    // LoadFailed → PhaseEnd.Waiting and latches serverDownAwaitingFix: the main loop keeps watching
+    // (its health check treats the deliberate downtime as healthy) until the next rebuild recovers.
     assertEquals(PhaseEnd.Waiting, end)
     assertTrue(server.calls.contains("stop"))
     assertTrue(server.calls.any { it.startsWith("start(") && it.contains("hotReload=true") })
+    assertTrue(mode.serverDownAwaitingFix, "a failed restart must latch the awaiting-fix state")
   }
 
   @Test
@@ -443,6 +445,99 @@ class HotReloadModeRenderTest {
     assertTrue(
         fixture.terminal.writes.any { it.contains("blue-green") },
         "the second leak-restart nudges toward blue-green mode",
+    )
+  }
+
+  // ── Failed leak-restart keeps the loop alive (serverDownAwaitingFix) ─
+  // A leak-restart whose own server start fails must NOT exit `ppl dev`. The server is left
+  // stopped,
+  // the awaiting-fix latch is set, the health check stays healthy, and the next successful rebuild
+  // cold-starts the server.
+
+  @Test
+  fun `a failed leak-restart latches serverDownAwaitingFix and keeps waiting`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    // The reload trips the leak limit (Ok carrying action=restart); the restart's own server never
+    // comes ready, so startServerAndReport yields Aborted.
+    fixture.loadWaitResult = LoadWaitResult.Ok(restartReport())
+    val server =
+        FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui, readyResult = false)
+    val mode = TestableHotReloadMode(fixture.session, server)
+    seedRunningState(mode, fixture)
+
+    val end = mode.waitAndReport(fixture.gradle.nextMetadata!!, System.currentTimeMillis(), "r1")
+
+    assertEquals(PhaseEnd.Waiting, end)
+    assertTrue(
+        mode.serverDownAwaitingFix,
+        "a failed restart must latch the awaiting-fix state so the loop keeps watching",
+    )
+    assertTrue(
+        server.calls.contains("stop"),
+        "the server must be stopped before the (failing) restart; calls were ${server.calls}",
+    )
+  }
+
+  @Test
+  fun `with the server awaiting a fix, a successful rebuild cold-starts it and clears the latch`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
+    val mode = TestableHotReloadMode(fixture.session, server)
+    seedRunningState(mode, fixture)
+    mode.serverDownAwaitingFix = true
+
+    val end = mode.rebuild(fixture.gradle.nextMetadata!!)
+
+    assertEquals(PhaseEnd.Watching, end)
+    assertFalse(
+        mode.serverDownAwaitingFix,
+        "a successful cold-start clears the awaiting-fix latch",
+    )
+    assertTrue(
+        server.calls.any { it.startsWith("start(") && it.contains("hotReload=true") },
+        "the cold-start must keep the hot-reload agent wiring; calls were ${server.calls}",
+    )
+    // The reload path is skipped — there's no live server to answer a reload request — so
+    // triggerReload must not run. Its absence is asserted via the "Strategy:" line it always
+    // emits right before writing its request; the request FILE can't discriminate, because the
+    // cold-start legitimately writes its own initial load-request for the host to pick up.
+    assertFalse(
+        fixture.terminal.writes.any { it.contains("Strategy:") },
+        "the awaiting-fix rebuild must skip triggerReload; got: ${fixture.terminal.writes}",
+    )
+    assertFalse(
+        fixture.terminal.writes.any { it.contains("Plugin reloaded") },
+        "the awaiting-fix rebuild must skip waitAndReport; got: ${fixture.terminal.writes}",
+    )
+    assertTrue(fixture.terminal.writes.any { it.contains("Plugin loaded") })
+    // The diff baseline must still be refreshed even though the reload path was skipped —
+    // otherwise the first reload after recovery diffs against the pre-failure build.
+    assertNotNull(
+        mode.lastPostBuildSnapshot,
+        "the awaiting-fix rebuild must record the post-build snapshot",
+    )
+  }
+
+  @Test
+  fun `the health check reports healthy while the server is deliberately down awaiting a fix`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    // runningResult=false would surface as a crash if the flag didn't short-circuit the probe.
+    val server =
+        FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui, runningResult = false)
+    val mode = TestableHotReloadMode(fixture.session, server)
+    mode.serverDownAwaitingFix = true
+
+    assertTrue(
+        mode.healthCheck(),
+        "a deliberately-stopped server must not be treated as a crash",
+    )
+    assertFalse(
+        server.calls.contains("isRunning"),
+        "the awaiting-fix short-circuit must not even probe the stopped server",
+    )
+    assertTrue(
+        fixture.terminal.writes.isEmpty(),
+        "the healthy short-circuit must emit nothing; got: ${fixture.terminal.writes}",
     )
   }
 

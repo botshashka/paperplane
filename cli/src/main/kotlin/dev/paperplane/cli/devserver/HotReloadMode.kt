@@ -71,7 +71,8 @@ internal open class HotReloadMode(
 
   private var buildSnapshot: BuildSnapshot? = null
   private var cachedFastMeta: ProjectMetadata? = null
-  private var lastPostBuildSnapshot: Map<String, Long>? = null
+  // Baseline for the next rebuild's class diff. Internal so tests can verify it stays current.
+  internal var lastPostBuildSnapshot: Map<String, Long>? = null
   private val javaRuntime by lazy { session.resolveJava() }
 
   // The live server state, set once startup succeeds and refreshed on each leak-restart. Held in a
@@ -81,6 +82,11 @@ internal open class HotReloadMode(
 
   // Leak-triggered restarts this session — after the second one we nudge toward blue-green mode.
   private var leakRestartCount = 0
+
+  // Set when a leak-restart fails to bring the server back up: the server is then deliberately
+  // stopped, so the main loop's health check must not read that as a crash. The next successful
+  // rebuild cold-starts the server and clears this. Internal so tests can seed/read it.
+  internal var serverDownAwaitingFix = false
 
   fun run() {
     Runtime.getRuntime()
@@ -103,18 +109,28 @@ internal open class HotReloadMode(
 
     session.runMainWatchLoop(
         onChanged = { _ -> rebuild(runningState!!.metadata) },
-        healthCheck = {
-          if (!serverManager.isRunning()) {
-            session.ui.error("Server process exited unexpectedly")
-            false
-          } else true
-        },
+        healthCheck = { healthCheck() },
         cleanup = {
           serverManager.stop()
           session.syncOpsBackToConfig(serverManager)
           session.gradle.close()
         },
     )
+  }
+
+  /**
+   * Main-loop health check. A stopped server normally means the process died and the loop exits —
+   * except when [serverDownAwaitingFix] is set, in which case a failed leak-restart stopped the
+   * server on purpose. Report healthy then and keep watching; the next successful rebuild brings it
+   * back up. Internal so tests can drive it directly.
+   */
+  internal fun healthCheck(): Boolean {
+    if (serverDownAwaitingFix) return true
+    if (!serverManager.isRunning()) {
+      session.ui.error("Server process exited unexpectedly")
+      return false
+    }
+    return true
   }
 
   internal fun runStartup(): StartupOutcome {
@@ -209,7 +225,8 @@ internal open class HotReloadMode(
 
   // ── Rebuild ──────────────────────────────────────────────────────────
 
-  private fun rebuild(metadata: ProjectMetadata): PhaseEnd {
+  /** Internal for tests: the awaiting-fix cold-start branch is driven directly. */
+  internal fun rebuild(metadata: ProjectMetadata): PhaseEnd {
     val totalStart = System.currentTimeMillis()
     val preBuildSnapshot = snapshotBeforeBuild(metadata)
 
@@ -229,6 +246,13 @@ internal open class HotReloadMode(
 
     val postBuildSnapshot = buildSnapshot!!.take()
     lastPostBuildSnapshot = postBuildSnapshot
+
+    // A failed leak-restart left the server deliberately down. There's no host to answer a reload
+    // request, so skip the hot-reload dance (triggerReload/waitAndReport) and cold-start the server
+    // instead — this successful build is the fix that lets it come back up. The snapshot above is
+    // still recorded so the next rebuild diffs against this build, not the pre-failure one.
+    if (serverDownAwaitingFix) return restartAfterAwaitingFix(metadata)
+
     val changes = BuildSnapshot.diff(preBuildSnapshot, postBuildSnapshot)
 
     val requestId = triggerReload(metadata, changes)
@@ -323,14 +347,11 @@ internal open class HotReloadMode(
           }
         }
 
-    // Leaks accumulated past the host's limit: the signal rides out on the report's `action`,
-    // either
-    // on the tripping Ok (this reload succeeded but leaks piled up) or, belt-and-braces, on the
-    // refusal Failed the host sends if a prior tripping Ok was missed. Either way, restart the
-    // server
-    // to reclaim the leaked memory. Runs inline in the serialized watcher callback, so no
-    // concurrent
-    // rebuild can interleave.
+    // Leaks accumulated past the host's limit: the signal rides out on the report's
+    // `action` — on the tripping Ok (this reload succeeded but leaks piled up) or,
+    // belt-and-braces, on the refusal Failed sent if a prior tripping Ok was missed.
+    // Either way, restart the server to reclaim the leaked memory. Runs inline in the
+    // serialized watcher callback, so no concurrent rebuild can interleave.
     return if (reportAction(result) == RESTART_ACTION) restartForLeaks(metadata) else phaseEnd
   }
 
@@ -345,14 +366,15 @@ internal open class HotReloadMode(
 
   /**
    * Restarts the server to reclaim leaked classloader memory, then keeps the hot-reload loop alive.
-   * Mirrors [startAfterFix]'s startup args so the restarted server keeps the agent/JBR wiring. A
-   * failed restart falls back to the "Waiting for changes" footer — the stopped server makes the
-   * main loop's health check exit cleanly on the next tick.
+   * Mirrors [startAfterFix]'s startup args so the restarted server keeps the agent/JBR wiring. If
+   * the restart itself fails to come back up the server is left stopped and [serverDownAwaitingFix]
+   * is latched: the main loop keeps watching (its health check treats the deliberate downtime as
+   * healthy) and the next successful rebuild cold-starts the server. It does NOT exit `ppl dev`.
    */
   private fun restartForLeaks(metadata: ProjectMetadata): PhaseEnd {
     leakRestartCount++
     session.ui.change(
-        "3 consecutive reloads leaked memory — restarting the server to reclaim it " +
+        "Reloads leaked memory past the limit — restarting the server to reclaim it " +
             "(hot-reload continues after restart)"
     )
     if (leakRestartCount >= 2) {
@@ -361,22 +383,49 @@ internal open class HotReloadMode(
       )
     }
     serverManager.stop()
-    val restarted =
-        session.startServerAndReport(
-            serverManager = serverManager,
-            metadata = metadata,
-            paperJar = runningState!!.paperJar,
-            jvmArgs = hotReloadJvmArgs(),
-            hotReload = true,
-            javaBin = javaRuntime.bin,
-        )
-    return when (restarted) {
+    return when (val restarted = startHotReloadServer(metadata)) {
       is DevSession.ServerStartResult.Running -> {
         runningState = restarted.state
         PhaseEnd.Watching
       }
       DevSession.ServerStartResult.LoadFailed,
-      DevSession.ServerStartResult.Aborted -> PhaseEnd.Waiting
+      DevSession.ServerStartResult.Aborted -> {
+        serverDownAwaitingFix = true
+        PhaseEnd.Waiting
+      }
     }
   }
+
+  /**
+   * Cold-starts the server after a fresh build clears a failed leak-restart. Mirrors
+   * [restartForLeaks]'s start so the recovered server keeps the agent/JBR wiring. On success the
+   * [serverDownAwaitingFix] latch is cleared and normal reloads resume; a still-failing start keeps
+   * the latch so the next edit retries.
+   */
+  private fun restartAfterAwaitingFix(metadata: ProjectMetadata): PhaseEnd =
+      when (val restarted = startHotReloadServer(metadata)) {
+        is DevSession.ServerStartResult.Running -> {
+          serverDownAwaitingFix = false
+          runningState = restarted.state
+          PhaseEnd.Watching
+        }
+        DevSession.ServerStartResult.LoadFailed,
+        DevSession.ServerStartResult.Aborted -> PhaseEnd.Waiting
+      }
+
+  /**
+   * Starts (or restarts) the server with the same hot-reload wiring initial startup uses —
+   * `hotReload = true`, the JBR-aware [hotReloadJvmArgs], and the JBR [javaBin] — reusing the last
+   * good [runningState]'s paperJar. Shared by the leak-restart and awaiting-fix cold-start paths so
+   * neither can silently drop the redefinition agent.
+   */
+  private fun startHotReloadServer(metadata: ProjectMetadata): DevSession.ServerStartResult =
+      session.startServerAndReport(
+          serverManager = serverManager,
+          metadata = metadata,
+          paperJar = runningState!!.paperJar,
+          jvmArgs = hotReloadJvmArgs(),
+          hotReload = true,
+          javaBin = javaRuntime.bin,
+      )
 }

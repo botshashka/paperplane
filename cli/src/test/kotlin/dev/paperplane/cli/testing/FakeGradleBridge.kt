@@ -56,6 +56,11 @@ class FakeGradleBridge(
     return nextBuildResult
   }
 
+  override fun compileOnly(): Boolean {
+    calls += "compileOnly"
+    return nextBuildResult
+  }
+
   override fun clean(): Boolean {
     calls += "clean"
     return nextCleanResult

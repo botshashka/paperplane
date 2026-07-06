@@ -13,6 +13,7 @@ import dev.paperplane.companion.host.UnsupportedPaperVersionException
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.logging.Logger
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer
 import org.bukkit.Server
 import org.bukkit.command.SimpleCommandMap
 import org.bukkit.plugin.PluginManager
@@ -417,6 +418,43 @@ class BuildStatusBarLoadRequestTest {
   }
 
   @Test
+  fun `a restart-action Ok broadcasts the restart notice`() {
+    // The tripping Ok is the PRIMARY restart trigger: the reload succeeded but leaks piled up past
+    // the limit, so the host attaches action=restart to the Ok. Players must be warned before the
+    // CLI pulls the server down, exactly as on the belt-and-braces refusal Failed.
+    val player = server.addPlayer()
+    // The leak limit trips on a reload of an already-loaded plugin, so the Ok reports "reloaded!".
+    fakeHost.isLoadedResult = true
+    fakeHost.nextResult = HostLoadResult.Ok("Sample", 5, action = HostLoadReport.ACTION_RESTART)
+    writeRequest(HostLoadRequest(requestId = "r1", jarPath = "/x.jar", pluginName = "Sample"))
+    bar.pollLoadRequestForTest()
+
+    val messages = drainMessages(player)
+    assertTrue(
+        messages.any { it.contains("Sample reloaded!") },
+        "the successful reload is still announced; saw: $messages",
+    )
+    assertTrue(
+        messages.any { it.contains("Restarting dev server to clear leaked memory") },
+        "the tripping Ok must warn players before the CLI restarts; saw: $messages",
+    )
+  }
+
+  @Test
+  fun `an ordinary Ok broadcasts no restart notice`() {
+    val player = server.addPlayer()
+    fakeHost.nextResult = HostLoadResult.Ok("Sample", 5)
+    writeRequest(HostLoadRequest(requestId = "r1", jarPath = "/x.jar", pluginName = "Sample"))
+    bar.pollLoadRequestForTest()
+
+    val messages = drainMessages(player)
+    assertFalse(
+        messages.any { it.contains("Restarting dev server") },
+        "an Ok with no restart action must not announce a restart; saw: $messages",
+    )
+  }
+
+  @Test
   fun `an ordinary failure broadcasts no restart notice`() {
     val player = server.addPlayer()
     fakeHost.nextResult = HostLoadResult.Failed("onEnable threw", 0)
@@ -549,6 +587,53 @@ class BuildStatusBarLoadRequestTest {
     assertTrue(report.message!!.contains("helpMap resolution blew up"))
   }
 
+  // ── Hot-swap fast-path eligibility ──────────────────────────────────
+  // tryHotSwap needs live instrumentation that isn't available in tests, so drive the pure
+  // eligibility predicate directly.
+
+  @Test
+  fun `hot-swap is eligible for a method-body edit on a loaded plugin below the leak limit`() {
+    assertTrue(
+        bar.hotSwapEligible(
+            wasLoaded = true,
+            leakLimitReached = false,
+            changedClasses = listOf("com.example.Plugin"),
+            classesDirs = listOf("/build/classes"),
+        )
+    )
+  }
+
+  @Test
+  fun `hot-swap is ineligible once the leak limit is reached`() {
+    // The regression: a method-body edit while leakLimitReached would take the fast path
+    // and report Ok with no action, deferring the leak-restart forever. It must fall
+    // through to the full reload so the host's refusal carries action=restart.
+    assertFalse(
+        bar.hotSwapEligible(
+            wasLoaded = true,
+            leakLimitReached = true,
+            changedClasses = listOf("com.example.Plugin"),
+            classesDirs = listOf("/build/classes"),
+        )
+    )
+  }
+
+  @Test
+  fun `hot-swap is ineligible on a fresh load, a structural change, or a jar-only reload`() {
+    assertFalse(
+        bar.hotSwapEligible(false, false, listOf("com.example.Plugin"), listOf("/build/classes")),
+        "not yet loaded → fresh load, not a swap",
+    )
+    assertFalse(
+        bar.hotSwapEligible(true, false, emptyList(), listOf("/build/classes")),
+        "no changed classes → structural change, needs a full reload",
+    )
+    assertFalse(
+        bar.hotSwapEligible(true, false, listOf("com.example.Plugin"), emptyList()),
+        "no classes dir → jar fallback, nothing to redefine from",
+    )
+  }
+
   // ── helpers ─────────────────────────────────────────────────────────
 
   private fun writeRequest(request: HostLoadRequest) {
@@ -559,12 +644,9 @@ class BuildStatusBarLoadRequestTest {
    * Drains a mock player's queued messages to plain text so broadcasts can be asserted by content.
    */
   private fun drainMessages(player: org.mockbukkit.mockbukkit.entity.PlayerMock): List<String> =
-      generateSequence { player.nextComponentMessage() }.map { it.plainText() }.toList()
-
-  /** Recursively flattens an Adventure component tree to its concatenated text content. */
-  private fun net.kyori.adventure.text.Component.plainText(): String =
-      (if (this is net.kyori.adventure.text.TextComponent) content() else "") +
-          children().joinToString("") { it.plainText() }
+      generateSequence { player.nextComponentMessage() }
+          .map { PlainTextComponentSerializer.plainText().serialize(it) }
+          .toList()
 
   private fun readReport(name: String): HostLoadReport =
       Gson().fromJson(File(ppDir, name).readText(), HostLoadReport::class.java)
