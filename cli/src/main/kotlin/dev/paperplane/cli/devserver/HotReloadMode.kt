@@ -18,6 +18,9 @@ internal open class HotReloadMode(
   internal companion object {
     private const val RELOAD_TIMEOUT_MS = 10_000L
 
+    /** Host-attached `action` that tells the CLI to restart the server to reclaim leaked memory. */
+    private const val RESTART_ACTION = "restart"
+
     /**
      * Pure helper: build a [LoadRequest] from a rebuild's inputs. Extracted so the strategy
      * selection (HOTSWAP vs DIRECTORY vs JAR) can be tested without standing up a full
@@ -71,6 +74,14 @@ internal open class HotReloadMode(
   private var lastPostBuildSnapshot: Map<String, Long>? = null
   private val javaRuntime by lazy { session.resolveJava() }
 
+  // The live server state, set once startup succeeds and refreshed on each leak-restart. Held in a
+  // field (not just a run() local) so waitAndReport can restart the server with the same paperJar.
+  // Internal so tests can seed it before driving waitAndReport directly.
+  internal var runningState: RunningState? = null
+
+  // Leak-triggered restarts this session — after the second one we nudge toward blue-green mode.
+  private var leakRestartCount = 0
+
   fun run() {
     Runtime.getRuntime()
         .addShutdownHook(
@@ -82,7 +93,7 @@ internal open class HotReloadMode(
             }
         )
 
-    val state: RunningState =
+    runningState =
         when (val outcome = runStartup()) {
           is StartupOutcome.Running -> outcome.state
           StartupOutcome.BuildFailed,
@@ -91,7 +102,7 @@ internal open class HotReloadMode(
         }
 
     session.runMainWatchLoop(
-        onChanged = { _ -> rebuild(state.metadata) },
+        onChanged = { _ -> rebuild(runningState!!.metadata) },
         healthCheck = {
           if (!serverManager.isRunning()) {
             session.ui.error("Server process exited unexpectedly")
@@ -283,32 +294,89 @@ internal open class HotReloadMode(
         }
     val reloadDuration = session.formatDuration(System.currentTimeMillis() - reloadStart)
 
-    return when (result) {
-      is LoadWaitResult.Ok -> {
-        session.ui.renderLeakWarnings(result.report)
-        val totalDuration = session.formatDuration(System.currentTimeMillis() - totalStart)
-        session.ui.success("Plugin reloaded", reloadDuration)
-        session.ui.totalTime(totalDuration)
-        serverManager.writeCompanionStatus("ready", mapOf("duration" to totalDuration))
-        PhaseEnd.Watching
+    val phaseEnd =
+        when (result) {
+          is LoadWaitResult.Ok -> {
+            session.ui.renderLeakWarnings(result.report)
+            val totalDuration = session.formatDuration(System.currentTimeMillis() - totalStart)
+            session.ui.success("Plugin reloaded", reloadDuration)
+            session.ui.totalTime(totalDuration)
+            serverManager.writeCompanionStatus("ready", mapOf("duration" to totalDuration))
+            PhaseEnd.Watching
+          }
+          is LoadWaitResult.Failed -> {
+            session.ui.error("Reload failed: ${result.message}", reloadDuration)
+            serverManager.writeCompanionStatus("error", mapOf("message" to "Hot-reload failed"))
+            PhaseEnd.Watching
+          }
+          LoadWaitResult.TimedOut -> {
+            session.ui.error(
+                "Hot-reload failed (server still running with old plugin)",
+                reloadDuration,
+            )
+            serverManager.writeCompanionStatus("error", mapOf("message" to "Hot-reload failed"))
+            PhaseEnd.Watching
+          }
+          LoadWaitResult.ServerExited -> {
+            session.ui.error("Server process exited during reload", reloadDuration)
+            PhaseEnd.Waiting
+          }
+        }
+
+    // Leaks accumulated past the host's limit: the signal rides out on the report's `action`,
+    // either
+    // on the tripping Ok (this reload succeeded but leaks piled up) or, belt-and-braces, on the
+    // refusal Failed the host sends if a prior tripping Ok was missed. Either way, restart the
+    // server
+    // to reclaim the leaked memory. Runs inline in the serialized watcher callback, so no
+    // concurrent
+    // rebuild can interleave.
+    return if (reportAction(result) == RESTART_ACTION) restartForLeaks(metadata) else phaseEnd
+  }
+
+  /** The host-attached `action` on the result's report, if any (Ok and Failed both carry one). */
+  private fun reportAction(result: LoadWaitResult): String? =
+      when (result) {
+        is LoadWaitResult.Ok -> result.report?.action
+        is LoadWaitResult.Failed -> result.report?.action
+        LoadWaitResult.TimedOut,
+        LoadWaitResult.ServerExited -> null
       }
-      is LoadWaitResult.Failed -> {
-        session.ui.error("Reload failed: ${result.message}", reloadDuration)
-        serverManager.writeCompanionStatus("error", mapOf("message" to "Hot-reload failed"))
-        PhaseEnd.Watching
-      }
-      LoadWaitResult.TimedOut -> {
-        session.ui.error(
-            "Hot-reload failed (server still running with old plugin)",
-            reloadDuration,
+
+  /**
+   * Restarts the server to reclaim leaked classloader memory, then keeps the hot-reload loop alive.
+   * Mirrors [startAfterFix]'s startup args so the restarted server keeps the agent/JBR wiring. A
+   * failed restart falls back to the "Waiting for changes" footer — the stopped server makes the
+   * main loop's health check exit cleanly on the next tick.
+   */
+  private fun restartForLeaks(metadata: ProjectMetadata): PhaseEnd {
+    leakRestartCount++
+    session.ui.change(
+        "3 consecutive reloads leaked memory — restarting the server to reclaim it " +
+            "(hot-reload continues after restart)"
+    )
+    if (leakRestartCount >= 2) {
+      session.ui.status(
+          "Leaks recur — consider `dev.mode: blue-green` in paperplane.yml for zero-downtime rebuilds."
+      )
+    }
+    serverManager.stop()
+    val restarted =
+        session.startServerAndReport(
+            serverManager = serverManager,
+            metadata = metadata,
+            paperJar = runningState!!.paperJar,
+            jvmArgs = hotReloadJvmArgs(),
+            hotReload = true,
+            javaBin = javaRuntime.bin,
         )
-        serverManager.writeCompanionStatus("error", mapOf("message" to "Hot-reload failed"))
+    return when (restarted) {
+      is DevSession.ServerStartResult.Running -> {
+        runningState = restarted.state
         PhaseEnd.Watching
       }
-      LoadWaitResult.ServerExited -> {
-        session.ui.error("Server process exited during reload", reloadDuration)
-        PhaseEnd.Waiting
-      }
+      DevSession.ServerStartResult.LoadFailed,
+      DevSession.ServerStartResult.Aborted -> PhaseEnd.Waiting
     }
   }
 }

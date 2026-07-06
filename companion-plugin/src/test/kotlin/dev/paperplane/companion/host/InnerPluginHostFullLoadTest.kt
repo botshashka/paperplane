@@ -226,6 +226,64 @@ class InnerPluginHostFullLoadTest {
     nmsHost.shutdown()
   }
 
+  // ── Leak-limit auto-restart signalling ──────────────────────────────
+
+  @Test
+  fun `reload refused past the leak limit reports Failed with a restart action`() {
+    host.handleRequest(makeLoadRequest("LimitRefuse", classSuffix = "V1"))
+    // Force the absolute survivor cap so the next reload is refused at the top of reload().
+    host.recordLeakOutcome(5)
+
+    val result = host.handleRequest(makeLoadRequest("LimitRefuse", classSuffix = "V2"))
+
+    assertTrue(
+        result is HostLoadResult.Failed,
+        "reload must be refused once the leak limit is reached, got: $result",
+    )
+    val failed = result as HostLoadResult.Failed
+    assertEquals(
+        HostLoadReport.ACTION_RESTART,
+        failed.action,
+        "the refusal must carry the restart action (belt-and-braces if the CLI missed the tripping Ok)",
+    )
+    assertTrue(
+        failed.message.contains("restart", ignoreCase = true),
+        "the refusal message should explain the restart, got: ${failed.message}",
+    )
+    // The old instance stays live — the refusal happens before any teardown.
+    assertTrue(host.isLoaded())
+  }
+
+  @Test
+  fun `a reload that trips the leak limit reports Ok with a restart action`() {
+    // The GC-driven survivor count is non-deterministic, so inject a tripping count via the
+    // (protected) checkForLeaks seam. reload() still runs for real end-to-end; only the leak scan
+    // is
+    // scripted, which is exactly the production wiring under test: Ok + action when
+    // leakLimitReached.
+    val trippingHost =
+        object :
+            InnerPluginHost(
+                fakeServer,
+                javaClass.classLoader,
+                ReflectionProbe.probe(fakeServer),
+                Logger.getLogger("InnerPluginHostFullLoadTest.trip"),
+            ) {
+          override fun checkForLeaks(): LeakSummary? = recordLeakOutcome(5)
+        }
+
+    trippingHost.handleRequest(makeLoadRequest("LimitTrip", classSuffix = "V1"))
+    val result = trippingHost.handleRequest(makeLoadRequest("LimitTrip", classSuffix = "V2"))
+
+    assertTrue(
+        result is HostLoadResult.Ok,
+        "the reload itself succeeds — the leak limit trips ON that Ok, got: $result",
+    )
+    assertEquals(HostLoadReport.ACTION_RESTART, (result as HostLoadResult.Ok).action)
+
+    trippingHost.shutdown()
+  }
+
   // ── Failed load leaves no residue ───────────────────────────────────
 
   @Test

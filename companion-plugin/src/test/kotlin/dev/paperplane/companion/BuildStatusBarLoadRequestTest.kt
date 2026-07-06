@@ -391,6 +391,46 @@ class BuildStatusBarLoadRequestTest {
     assertEquals("plugin.yml not found", report.message)
   }
 
+  // ── Failed branch: restart broadcast, not the old blue/green dead-end ─
+
+  @Test
+  fun `a restart-action failure broadcasts the restart notice, not the blue-green dead-end`() {
+    val player = server.addPlayer()
+    fakeHost.nextResult =
+        HostLoadResult.Failed(
+            "Hot-reload paused: accumulated classloader leaks — restarting server clears them",
+            0,
+            action = HostLoadReport.ACTION_RESTART,
+        )
+    writeRequest(HostLoadRequest(requestId = "r1", jarPath = "/x.jar", pluginName = "Sample"))
+    bar.pollLoadRequestForTest()
+
+    val messages = drainMessages(player)
+    assertTrue(
+        messages.any { it.contains("Restarting dev server to clear leaked memory") },
+        "the leak restart must be announced in-game; saw: $messages",
+    )
+    assertFalse(
+        messages.any { it.contains("blue/green") || it.contains("Switching") },
+        "the dead-end blue/green broadcast must be gone; saw: $messages",
+    )
+  }
+
+  @Test
+  fun `an ordinary failure broadcasts no restart notice`() {
+    val player = server.addPlayer()
+    fakeHost.nextResult = HostLoadResult.Failed("onEnable threw", 0)
+    writeRequest(HostLoadRequest(requestId = "r1", jarPath = "/x.jar", pluginName = "Sample"))
+    bar.pollLoadRequestForTest()
+
+    val messages = drainMessages(player)
+    assertTrue(messages.any { it.contains("Reload failed: onEnable threw") })
+    assertFalse(
+        messages.any { it.contains("Restarting dev server") },
+        "a non-restart failure must not announce a restart; saw: $messages",
+    )
+  }
+
   // ── Lazy host provider ──────────────────────────────────────────────
 
   @Test
@@ -515,6 +555,17 @@ class BuildStatusBarLoadRequestTest {
     File(ppDir, "load-request.json").writeText(Gson().toJson(request))
   }
 
+  /**
+   * Drains a mock player's queued messages to plain text so broadcasts can be asserted by content.
+   */
+  private fun drainMessages(player: org.mockbukkit.mockbukkit.entity.PlayerMock): List<String> =
+      generateSequence { player.nextComponentMessage() }.map { it.plainText() }.toList()
+
+  /** Recursively flattens an Adventure component tree to its concatenated text content. */
+  private fun net.kyori.adventure.text.Component.plainText(): String =
+      (if (this is net.kyori.adventure.text.TextComponent) content() else "") +
+          children().joinToString("") { it.plainText() }
+
   private fun readReport(name: String): HostLoadReport =
       Gson().fromJson(File(ppDir, name).readText(), HostLoadReport::class.java)
 
@@ -547,7 +598,7 @@ class BuildStatusBarLoadRequestTest {
 
     override fun current() = null
 
-    override val shouldForceBlueGreen: Boolean = false
+    override val leakLimitReached: Boolean = false
   }
 
   private class FakeServerWithSpm(

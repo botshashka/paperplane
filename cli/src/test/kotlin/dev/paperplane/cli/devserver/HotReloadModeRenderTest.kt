@@ -356,6 +356,96 @@ class HotReloadModeRenderTest {
     assertTrue(fixture.terminal.writes.any { it.contains("Server process exited during reload") })
   }
 
+  // ── Leak-limit auto-restart (waitAndReport) ────────────────────────
+  // A reload whose report carries action="restart" (the host tripped its leak limit) must stop the
+  // server and restart it with the SAME hot-reload wiring, then keep watching.
+
+  private fun restartReport() =
+      LoadReport(requestId = "r1", status = "ok", strategy = "reload", action = "restart")
+
+  private fun seedRunningState(mode: HotReloadMode, fixture: DevSessionFixture) {
+    mode.runningState =
+        DevSession.RunningState(
+            fixture.gradle.nextMetadata!!,
+            File(fixture.ppDir, "paper.jar").apply { writeText("fake") },
+        )
+  }
+
+  @Test
+  fun `a reload that trips the leak limit stops and restarts the server, then keeps watching`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    fixture.loadWaitResult = LoadWaitResult.Ok(restartReport())
+    val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
+    val mode = TestableHotReloadMode(fixture.session, server)
+    seedRunningState(mode, fixture)
+
+    val end = mode.waitAndReport(fixture.gradle.nextMetadata!!, System.currentTimeMillis(), "r1")
+
+    assertEquals(PhaseEnd.Watching, end)
+    assertTrue(
+        fixture.terminal.writes.any { it.contains("restarting the server to reclaim it") },
+        "the leak restart must be announced, got: ${fixture.terminal.writes}",
+    )
+    assertTrue(
+        server.calls.contains("stop"),
+        "the server must be stopped before restarting; calls were ${server.calls}",
+    )
+    assertTrue(
+        server.calls.any { it.startsWith("start(") && it.contains("hotReload=true") },
+        "the restart must keep the hot-reload agent wiring; calls were ${server.calls}",
+    )
+  }
+
+  @Test
+  fun `the refusal Failed also carries action=restart and drives a restart`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    // Belt-and-braces: even when the host answers with a Failed refusal, the restart action drives
+    // the same restart so a missed tripping Ok can't wedge the loop.
+    fixture.loadWaitResult =
+        LoadWaitResult.Failed(
+            "Hot-reload paused: accumulated classloader leaks — restarting server clears them",
+            LoadReport(
+                requestId = "r1",
+                status = "failed",
+                strategy = "reload",
+                action = "restart",
+            ),
+        )
+    val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
+    val mode = TestableHotReloadMode(fixture.session, server)
+    seedRunningState(mode, fixture)
+
+    val end = mode.waitAndReport(fixture.gradle.nextMetadata!!, System.currentTimeMillis(), "r1")
+
+    // The restart is what matters: stop + start with the hot-reload wiring. The scripted waiter
+    // returns this same Failed for the restarted server's own initial load, so the restart reports
+    // LoadFailed → PhaseEnd.Waiting (the stopped server makes the main loop exit on the next tick).
+    assertEquals(PhaseEnd.Waiting, end)
+    assertTrue(server.calls.contains("stop"))
+    assertTrue(server.calls.any { it.startsWith("start(") && it.contains("hotReload=true") })
+  }
+
+  @Test
+  fun `the blue-green suggestion appears only after the second leak-restart`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    fixture.loadWaitResult = LoadWaitResult.Ok(restartReport())
+    val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
+    val mode = TestableHotReloadMode(fixture.session, server)
+    seedRunningState(mode, fixture)
+
+    mode.waitAndReport(fixture.gradle.nextMetadata!!, System.currentTimeMillis(), "r1")
+    assertFalse(
+        fixture.terminal.writes.any { it.contains("blue-green") },
+        "no blue-green nudge after the first leak-restart",
+    )
+
+    mode.waitAndReport(fixture.gradle.nextMetadata!!, System.currentTimeMillis(), "r1")
+    assertTrue(
+        fixture.terminal.writes.any { it.contains("blue-green") },
+        "the second leak-restart nudges toward blue-green mode",
+    )
+  }
+
   // ── Server log interleaving ────────────────────────────────────────
 
   @Test

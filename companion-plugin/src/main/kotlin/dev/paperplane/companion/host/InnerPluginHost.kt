@@ -53,6 +53,7 @@ open class InnerPluginHost(
     private const val THREAD_JOIN_TIMEOUT_MS = 2000L
     private const val MAX_THREAD_STACK_FRAMES = 5
     private const val MAX_CONSECUTIVE_LEAKS = 3
+    private const val MAX_ABSOLUTE_SURVIVORS = 5
 
     /**
      * Returns true when [inst]'s view of loaded classes shows any NMS or CraftBukkit class defined
@@ -71,12 +72,25 @@ open class InnerPluginHost(
   private val permissionRegistrar = PermissionRegistrar(server)
   private val leakedClassLoaders = mutableListOf<WeakReference<ClassLoader>>()
   private var consecutiveLeaks = 0
+  // The confirmed-survivor count from the most recent leaking reload. Deliberately NOT reset when a
+  // clean reload zeroes [consecutiveLeaks] — the absolute cap below exists precisely for the
+  // alternating leak/clean pattern where the streak never reaches its limit but survivors pile up.
+  private var lastConfirmedSurvivors = 0
 
   private var active: Active? = null
 
-  /** True when too many classloader leaks accumulated; CLI should fall back to blue/green. */
-  open val shouldForceBlueGreen: Boolean
-    get() = consecutiveLeaks >= MAX_CONSECUTIVE_LEAKS
+  /**
+   * True once accumulated classloader leaks warrant a server restart to reclaim memory. Trips on
+   * either a run of [MAX_CONSECUTIVE_LEAKS] back-to-back leaking reloads OR an absolute
+   * [MAX_ABSOLUTE_SURVIVORS] surviving loaders (the alternating leak/clean case, where the
+   * consecutive streak keeps resetting but survivors accumulate regardless). The CLI restarts the
+   * server on this signal — hot-reload resumes afterwards — and the host also refuses further
+   * reloads while it holds, as belt-and-braces.
+   */
+  open val leakLimitReached: Boolean
+    get() =
+        consecutiveLeaks >= MAX_CONSECUTIVE_LEAKS ||
+            lastConfirmedSurvivors >= MAX_ABSOLUTE_SURVIVORS
 
   /** The currently-loaded inner plugin, or `null` before first load / after shutdown. */
   open fun current(): JavaPlugin? = active?.plugin
@@ -135,10 +149,14 @@ open class InnerPluginHost(
   private fun reload(request: HostLoadRequest): HostLoadResult {
     val a = active!!
 
-    if (shouldForceBlueGreen) {
+    if (leakLimitReached) {
+      // Belt-and-braces: the tripping Ok below normally drives the restart, but if the CLI missed
+      // it, this refusal on the next reload carries the same action so the server still gets
+      // restarted instead of the loop silently wedging.
       return HostLoadResult.Failed(
-          "Hot-reload disabled: $consecutiveLeaks consecutive classloader leaks",
+          "Hot-reload paused: accumulated classloader leaks — restarting server clears them",
           0,
+          action = HostLoadReport.ACTION_RESTART,
       )
     }
 
@@ -167,7 +185,11 @@ open class InnerPluginHost(
       return HostLoadResult.Failed("Plugin '${description.name}' is not enabled after reload", 0)
     }
     val leaks = checkForLeaks()
-    return HostLoadResult.Ok(description.name, 0, leaks = leaks)
+    // checkForLeaks() runs at the end of a SUCCESSFUL reload, so the leak limit trips on an Ok. In
+    // OFF mode `leaks` is null (output is gated) but the restart action keys on the host property,
+    // never the summary — so `off` never silently restores the old dead-end.
+    val action = if (leakLimitReached) HostLoadReport.ACTION_RESTART else null
+    return HostLoadResult.Ok(description.name, 0, leaks = leaks, action = action)
   }
 
   // ── teardown ────────────────────────────────────────────────────────
@@ -330,36 +352,46 @@ open class InnerPluginHost(
    * disk, so nothing delays the CLI's result. The one-line log is suppressed in
    * [LeakDiagnosticsMode.OFF] (output only — counting still happens).
    */
-  private fun checkForLeaks(): LeakSummary? {
+  protected open fun checkForLeaks(): LeakSummary? {
     if (leakedClassLoaders.size <= 1) return null
     System.gc()
     Thread.sleep(100L)
     val stillLeaking = leakedClassLoaders.dropLast(1).count { it.get() != null }
     leakedClassLoaders.removeAll { it != leakedClassLoaders.last() && it.get() == null }
-    if (stillLeaking > 0) {
-      System.gc()
-      Thread.sleep(100L)
-      val confirmed = leakedClassLoaders.dropLast(1).count { it.get() != null }
-      leakedClassLoaders.removeAll { it != leakedClassLoaders.last() && it.get() == null }
-      if (confirmed > 0) {
-        consecutiveLeaks++
-        // `off` keeps counting active (consecutiveLeaks is updated above, and the leak-limit action
-        // still trips) but emits no output — no one-line log, and no leak summary rides out on the
-        // load report for the CLI to render. Returning null here suppresses both at once.
-        if (leakDiagnostics == LeakDiagnosticsMode.OFF) return null
-        logger.warning("$confirmed classloader(s) leaked (#$consecutiveLeaks)")
-        return LeakSummary(
-            consecutive = consecutiveLeaks,
-            confirmedSurvivors = confirmed,
-            attribution = buildAttribution(),
-        )
-      } else {
-        consecutiveLeaks = 0
-      }
-    } else {
+    if (stillLeaking == 0) return recordLeakOutcome(0)
+    System.gc()
+    Thread.sleep(100L)
+    val confirmed = leakedClassLoaders.dropLast(1).count { it.get() != null }
+    leakedClassLoaders.removeAll { it != leakedClassLoaders.last() && it.get() == null }
+    return recordLeakOutcome(confirmed)
+  }
+
+  /**
+   * Folds a confirmed-survivor count into the leak state machine and returns the [LeakSummary] to
+   * ride out on the load report — or null when there is nothing to report. Split out of
+   * [checkForLeaks] so the deterministic accounting (streak, absolute cap, output gating) can be
+   * unit-tested apart from the GC-dependent survivor count that feeds it.
+   *
+   * [lastConfirmedSurvivors] is assigned BEFORE the [LeakDiagnosticsMode.OFF] early return: `off`
+   * gates OUTPUT only, so the absolute-cap accounting — and thus the auto-restart — must keep
+   * working in every mode. A clean reload (confirmed == 0) resets the consecutive streak but
+   * deliberately leaves [lastConfirmedSurvivors] untouched (the absolute cap exists exactly for the
+   * alternating leak/clean case).
+   */
+  internal fun recordLeakOutcome(confirmed: Int): LeakSummary? {
+    if (confirmed <= 0) {
       consecutiveLeaks = 0
+      return null
     }
-    return null
+    consecutiveLeaks++
+    lastConfirmedSurvivors = confirmed
+    if (leakDiagnostics == LeakDiagnosticsMode.OFF) return null
+    logger.warning("$confirmed classloader(s) leaked (#$consecutiveLeaks)")
+    return LeakSummary(
+        consecutive = consecutiveLeaks,
+        confirmedSurvivors = confirmed,
+        attribution = buildAttribution(),
+    )
   }
 
   /**
@@ -597,6 +629,9 @@ data class HostLoadReport(
     const val STRATEGY_HOTSWAP = "hotswap"
     const val STRATEGY_FRESH = "fresh"
     const val STRATEGY_RELOAD = "reload"
+
+    /** `action` value telling the CLI to restart the server to reclaim leaked memory. */
+    const val ACTION_RESTART = "restart"
   }
 }
 

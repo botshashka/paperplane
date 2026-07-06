@@ -29,14 +29,16 @@ class InnerPluginHostTest {
   @TempDir lateinit var tempDir: File
 
   private lateinit var server: ServerMock
+  private lateinit var fakeServer: FakeServerWithSpm
+  private lateinit var probe: ReflectionProbe
   private lateinit var host: InnerPluginHost
 
   @BeforeEach
   fun setUp() {
     server = MockBukkit.mock()
     val spm = SimplePluginManager(server, SimpleCommandMap(server, mutableMapOf()))
-    val fakeServer = FakeServerWithSpm(server, spm)
-    val probe = ReflectionProbe.probe(fakeServer)
+    fakeServer = FakeServerWithSpm(server, spm)
+    probe = ReflectionProbe.probe(fakeServer)
     host =
         InnerPluginHost(
             fakeServer,
@@ -101,11 +103,61 @@ class InnerPluginHostTest {
     assertTrue(result is HostLoadResult.Failed)
   }
 
-  // ── leak detection initial state ────────────────────────────────────
+  // ── leak-limit state machine ────────────────────────────────────────
 
   @Test
-  fun `shouldForceBlueGreen is false initially`() {
-    assertFalse(host.shouldForceBlueGreen)
+  fun `leakLimitReached is false initially`() {
+    assertFalse(host.leakLimitReached)
+  }
+
+  @Test
+  fun `leakLimitReached trips after three consecutive leaks`() {
+    host.recordLeakOutcome(1)
+    host.recordLeakOutcome(1)
+    assertFalse(host.leakLimitReached, "two consecutive leaks must not trip the limit yet")
+    host.recordLeakOutcome(1)
+    assertTrue(host.leakLimitReached, "three consecutive leaks must trip the limit")
+  }
+
+  @Test
+  fun `a clean reload resets the consecutive-leak streak`() {
+    host.recordLeakOutcome(1)
+    host.recordLeakOutcome(1)
+    host.recordLeakOutcome(0) // clean reload
+    host.recordLeakOutcome(1)
+    host.recordLeakOutcome(1)
+    assertFalse(
+        host.leakLimitReached,
+        "only two leaks since the clean reload — the streak must have reset",
+    )
+  }
+
+  @Test
+  fun `the absolute survivor cap persists across a clean reload`() {
+    host.recordLeakOutcome(5) // five survivors confirmed at once
+    assertTrue(host.leakLimitReached, "five confirmed survivors must trip the absolute cap")
+    host.recordLeakOutcome(0) // clean reload zeroes the streak but NOT the survivor count
+    assertTrue(
+        host.leakLimitReached,
+        "the absolute cap must survive a clean reload — that's what catches the alternating leak case",
+    )
+  }
+
+  @Test
+  fun `off mode keeps counting toward the cap while suppressing output`() {
+    val offHost =
+        InnerPluginHost(
+            fakeServer,
+            javaClass.classLoader,
+            probe,
+            Logger.getLogger("InnerPluginHostTest.off"),
+            leakDiagnostics = LeakDiagnosticsMode.OFF,
+        )
+    assertNull(offHost.recordLeakOutcome(5), "off mode must emit no leak summary")
+    assertTrue(
+        offHost.leakLimitReached,
+        "off gates output only — the cap still trips so the auto-restart still fires",
+    )
   }
 
   // ── withDuration carry-forward ──────────────────────────────────────

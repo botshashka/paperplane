@@ -263,8 +263,17 @@ class BuildStatusBar(
       }
       is HostLoadResult.Failed -> {
         broadcast(Component.text("Reload failed: ${result.message}", NamedTextColor.RED))
-        if (host.shouldForceBlueGreen) {
-          broadcast(Component.text("Switching to blue/green mode", NamedTextColor.YELLOW))
+        // A restart action rides out on the result (the host attaches it to the leak-limit
+        // refusal),
+        // so the in-game notice keys on the result, not host state. The CLI does the actual
+        // restart.
+        if (result.action == HostLoadReport.ACTION_RESTART) {
+          broadcast(
+              Component.text(
+                  "Restarting dev server to clear leaked memory...",
+                  NamedTextColor.YELLOW,
+              )
+          )
         }
       }
     }
