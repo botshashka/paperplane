@@ -1,6 +1,7 @@
 package dev.paperplane.cli.server
 
 import com.charleskorn.kaml.YamlMap
+import dev.paperplane.cli.config.DevConfig
 import dev.paperplane.cli.config.ServerConfig
 import dev.paperplane.cli.plugins.atomicMoveOrFallback
 import dev.paperplane.cli.ui.TerminalUI
@@ -26,6 +27,8 @@ open class PaperServerManager(
     private const val OP_PERMISSION_LEVEL = 4
     private const val SERVER_READY_TIMEOUT_MS = 120_000L
     private const val READY_POLL_INTERVAL_MS = 100L
+    /** Schema version of `.paperplane/companion-config.json`; bumped if its shape changes. */
+    private const val COMPANION_CONFIG_VERSION = 1
 
     /**
      * The flag the companion writes when it fails to enable. Read by [waitForReady]; cleared by the
@@ -149,6 +152,26 @@ open class PaperServerManager(
       return
     }
     file.writeText(gson.toJson(names))
+  }
+
+  /**
+   * Writes the companion's runtime config to `.paperplane/companion-config.json` — currently just
+   * the leak-diagnostics mode, with a `protocolVersion` so the companion can reject shapes it
+   * doesn't understand. Called on every start (harmless in restart/blue-green: the natively-loaded
+   * companion simply doesn't act on it, but shipping it unconditionally means the companion never
+   * has to guess). Written atomically (tmp + move) so the companion never reads a torn document.
+   */
+  open fun writeCompanionConfig(dev: DevConfig) {
+    val statusDir = File(serverDir, ".paperplane").apply { mkdirs() }
+    val payload =
+        mapOf(
+            "protocolVersion" to COMPANION_CONFIG_VERSION,
+            "leakDiagnostics" to dev.leakDiagnostics.name.lowercase(),
+        )
+    val target = File(statusDir, "companion-config.json")
+    val temp = File(statusDir, ".companion-config.json.tmp")
+    temp.writeText(gson.toJson(payload))
+    atomicMoveOrFallback(temp.toPath(), target.toPath())
   }
 
   /** Deterministic UUID that Minecraft uses for offline-mode players. */

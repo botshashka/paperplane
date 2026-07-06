@@ -6,6 +6,7 @@ import dev.paperplane.companion.host.HostLoadReport
 import dev.paperplane.companion.host.HostLoadRequest
 import dev.paperplane.companion.host.HostLoadResult
 import dev.paperplane.companion.host.InnerPluginHost
+import dev.paperplane.companion.host.LeakDiagnosticsMode
 import dev.paperplane.companion.host.UnsupportedPaperVersionException
 import java.io.File
 import java.io.IOException
@@ -258,6 +259,7 @@ class BuildStatusBar(
         val msg =
             if (wasLoaded) "${result.pluginName} reloaded!" else "${result.pluginName} loaded!"
         broadcast(Component.text(msg, NamedTextColor.GREEN))
+        maybeDeferLeakDump(host, result)
       }
       is HostLoadResult.Failed -> {
         broadcast(Component.text("Reload failed: ${result.message}", NamedTextColor.RED))
@@ -266,6 +268,23 @@ class BuildStatusBar(
         }
       }
     }
+  }
+
+  /**
+   * Schedules the deferred leak dumps — but only in [LeakDiagnosticsMode.FULL] and only when the
+   * reload actually confirmed a leak ([HostLoadResult.Ok.leaks] non-null). This runs AFTER
+   * [writeReport] in [handleRequest], so the load report is already on disk: the CLI's waiter is
+   * unblocked before any dump work starts, which is the whole point of deferring. The verbose
+   * per-loader diagnostics run on a normal (next-tick) task; the heap dump — the slowest step —
+   * runs async so it can't stall the server thread. `off`/`summary` skip both (their output already
+   * happened: `summary` logged the one-line warning and rode attribution out on the report).
+   */
+  private fun maybeDeferLeakDump(host: InnerPluginHost, result: HostLoadResult.Ok) {
+    if (host.leakDiagnostics != LeakDiagnosticsMode.FULL) return
+    if (result.leaks == null) return
+    plugin.server.scheduler.runTask(plugin, Runnable { host.dumpVerboseDiagnostics() })
+    val heapTarget = File(serverRoot, ".paperplane/leak.hprof")
+    plugin.server.scheduler.runTaskAsynchronously(plugin, Runnable { host.tryDumpHeap(heapTarget) })
   }
 
   /**

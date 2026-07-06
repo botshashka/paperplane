@@ -1,5 +1,6 @@
 package dev.paperplane.cli.testing
 
+import dev.paperplane.cli.config.DevConfig
 import dev.paperplane.cli.config.ServerConfig
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.server.PaperServerManager
@@ -32,6 +33,10 @@ class FakePaperServerManager(
 
   override fun configure(serverConfig: ServerConfig) {
     calls += "configure"
+  }
+
+  override fun writeCompanionConfig(dev: DevConfig) {
+    calls += "writeCompanionConfig(${dev.leakDiagnostics.name.lowercase()})"
   }
 
   override fun configureVelocityForwarding(secret: String) {

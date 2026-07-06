@@ -40,6 +40,13 @@ open class InnerPluginHost(
     private val probe: ReflectionProbe,
     private val logger: Logger,
     private val hostPlugin: org.bukkit.plugin.Plugin? = null,
+    /**
+     * How much leak diagnostics to emit. Gates output only — leak counting and attribution always
+     * run so the load report and the auto-restart action work in every mode. Read by
+     * [BuildStatusBar] to decide whether to schedule the deferred verbose + heap dumps. See
+     * [LeakDiagnosticsMode].
+     */
+    val leakDiagnostics: LeakDiagnosticsMode = LeakDiagnosticsMode.SUMMARY,
 ) {
 
   companion object {
@@ -159,8 +166,8 @@ open class InnerPluginHost(
     if (!plugin.isEnabled) {
       return HostLoadResult.Failed("Plugin '${description.name}' is not enabled after reload", 0)
     }
-    checkForLeaks()
-    return HostLoadResult.Ok(description.name, 0)
+    val leaks = checkForLeaks()
+    return HostLoadResult.Ok(description.name, 0, leaks = leaks)
   }
 
   // ── teardown ────────────────────────────────────────────────────────
@@ -314,8 +321,17 @@ open class InnerPluginHost(
     }
   }
 
-  private fun checkForLeaks() {
-    if (leakedClassLoaders.size <= 1) return
+  /**
+   * Runs the cheap, synchronous leak scan at the end of a successful reload: a double-GC survivor
+   * count plus a thread/scheduler attribution scan. Returns a [LeakSummary] when a leak is
+   * confirmed (so it rides out on the load report's JSON), or `null` on a clean reload. The
+   * heavyweight, heap-walking diagnostics ([dumpVerboseDiagnostics]) and the heap snapshot
+   * ([tryDumpHeap]) are NOT run here — [BuildStatusBar] defers them until after the report is on
+   * disk, so nothing delays the CLI's result. The one-line log is suppressed in
+   * [LeakDiagnosticsMode.OFF] (output only — counting still happens).
+   */
+  private fun checkForLeaks(): LeakSummary? {
+    if (leakedClassLoaders.size <= 1) return null
     System.gc()
     Thread.sleep(100L)
     val stillLeaking = leakedClassLoaders.dropLast(1).count { it.get() != null }
@@ -327,22 +343,72 @@ open class InnerPluginHost(
       leakedClassLoaders.removeAll { it != leakedClassLoaders.last() && it.get() == null }
       if (confirmed > 0) {
         consecutiveLeaks++
+        // `off` keeps counting active (consecutiveLeaks is updated above, and the leak-limit action
+        // still trips) but emits no output — no one-line log, and no leak summary rides out on the
+        // load report for the CLI to render. Returning null here suppresses both at once.
+        if (leakDiagnostics == LeakDiagnosticsMode.OFF) return null
         logger.warning("$confirmed classloader(s) leaked (#$consecutiveLeaks)")
-        dumpLeakDiagnostics()
+        return LeakSummary(
+            consecutive = consecutiveLeaks,
+            confirmedSurvivors = confirmed,
+            attribution = buildAttribution(),
+        )
       } else {
         consecutiveLeaks = 0
       }
     } else {
       consecutiveLeaks = 0
     }
+    return null
   }
 
   /**
-   * Diagnostic: when a leak is confirmed, dump what's keeping each surviving leaked classloader
-   * alive — class count, sample class names, and any threads still rooted in it. Helps identify the
-   * actual pinner instead of guessing at Paper subsystems one-by-one.
+   * Cheap, synchronous attribution of what is pinning each still-surviving leaked classloader:
+   * threads whose contextClassLoader is the dead loader, and async scheduler workers still owned by
+   * the torn-down plugin. Kept out of the heap-walking [dumpVerboseDiagnostics] so it can run
+   * inline during the reload and its findings can ride out on the result JSON for the CLI to
+   * render.
    */
-  private fun dumpLeakDiagnostics() {
+  private fun buildAttribution(): List<LeakAttribution> {
+    val survivors = leakedClassLoaders.dropLast(1).mapNotNull { it.get() }.toSet()
+    if (survivors.isEmpty()) return emptyList()
+    val attribution = mutableListOf<LeakAttribution>()
+    // Threads still rooted in a dead loader keep it — and its plugin — alive.
+    for (thread in Thread.getAllStackTraces().keys) {
+      if (thread.contextClassLoader in survivors) {
+        attribution.add(
+            LeakAttribution(
+                kind = "thread",
+                detail = "thread '${thread.name}' still running (stop it in onDisable())",
+            )
+        )
+      }
+    }
+    // Async tasks whose owner plugin came from a dead loader hold it until they finish.
+    val workers = runCatching { server.scheduler.activeWorkers }.getOrDefault(emptyList())
+    for (worker in workers) {
+      if (worker.owner.javaClass.classLoader in survivors) {
+        attribution.add(
+            LeakAttribution(
+                kind = "scheduler",
+                detail =
+                    "async task from '${worker.owner.name}' still running — " +
+                        "it holds the old plugin until it finishes",
+            )
+        )
+      }
+    }
+    return attribution
+  }
+
+  /**
+   * Diagnostic: dump what's keeping each surviving leaked classloader alive — class count, sample
+   * class names, and any threads still rooted in it. Helps identify the actual pinner instead of
+   * guessing at Paper subsystems one-by-one. Heavyweight (walks
+   * [Instrumentation.allLoadedClasses]), so [BuildStatusBar] runs it on a deferred task AFTER the
+   * load report is written, and only in [LeakDiagnosticsMode.FULL].
+   */
+  open fun dumpVerboseDiagnostics() {
     val survivors = leakedClassLoaders.dropLast(1).mapNotNull { it.get() }
     if (survivors.isEmpty()) return
     val inst = AgentAccess.instrumentation()
@@ -380,13 +446,6 @@ open class InnerPluginHost(
 
       val initiated = if (inst != null) inst.getInitiatedClasses(cl).size else -1
       logger.warning("  $tag — Instrumentation.getInitiatedClasses count: $initiated")
-
-      // Dump heap on the first leak (most actionable). Subsequent leaks are redundant —
-      // same root, same dump.
-      if (!heapDumped) {
-        heapDumped = true
-        tryDumpHeap()
-      }
     }
     if (inst == null) {
       logger.warning("  (Instrumentation unavailable — class enumeration skipped)")
@@ -452,7 +511,16 @@ open class InnerPluginHost(
 
   private var heapDumped = false
 
-  private fun tryDumpHeap() {
+  /**
+   * Writes a one-shot live heap dump to [target] (the CLI reads `.paperplane/leak.hprof` under the
+   * server root, not `user.dir`). Guarded to once per session — the first leak is the most
+   * actionable and subsequent leaks share the same root. [BuildStatusBar] schedules this on an
+   * async task in [LeakDiagnosticsMode.FULL], after the load report is written, since the dump is
+   * the slowest step and must never delay the CLI's result.
+   */
+  open fun tryDumpHeap(target: File) {
+    if (heapDumped) return
+    heapDumped = true
     try {
       val mxBeanClass = Class.forName("com.sun.management.HotSpotDiagnosticMXBean")
       val mbeanServer = java.lang.management.ManagementFactory.getPlatformMBeanServer()
@@ -462,8 +530,9 @@ open class InnerPluginHost(
               "com.sun.management:type=HotSpotDiagnostic",
               mxBeanClass,
           )
-      val path = File(System.getProperty("user.dir"), "paperplane-leak.hprof").absolutePath
-      File(path).delete()
+      target.parentFile?.mkdirs()
+      target.delete()
+      val path = target.absolutePath
       mxBeanClass
           .getMethod("dumpHeap", String::class.java, Boolean::class.javaPrimitiveType)
           .invoke(bean, path, true /* live only */)

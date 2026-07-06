@@ -115,4 +115,31 @@ data class DevConfig(
     @SerialName("debounce-ms") val debounceMs: Long = 2000,
     val mode: DevMode = DevMode.HOT_RELOAD,
     val jbr: String = "auto",
+    /**
+     * How much classloader-leak diagnostics the hot-reload host emits. Transported to the companion
+     * via `.paperplane/companion-config.json`. See [LeakDiagnosticsMode] for the per-mode
+     * semantics.
+     */
+    @SerialName("leak-diagnostics")
+    val leakDiagnostics: LeakDiagnosticsMode = LeakDiagnosticsMode.SUMMARY,
 )
+
+/**
+ * Controls how much classloader-leak diagnostics the hot-reload host emits when a reload leaves a
+ * plugin classloader alive. The mode gates diagnostic **output only** — leak counting, the cheap
+ * attribution scan, and the leak-limit auto-restart action stay active in every mode.
+ *
+ * - [OFF] — no diagnostic output at all: no one-line leak log, no verbose per-loader dump, no heap
+ *   dump. Leak counting and the auto-restart action still run, so `off` silences the noise without
+ *   silently restoring the old do-nothing dead-end.
+ * - [SUMMARY] — the default: the leak attribution rides out on the load report (so the CLI can name
+ *   the likely cause) and a single one-line warning is logged. No verbose dump, no heap dump.
+ * - [FULL] — everything [SUMMARY] does, plus the verbose per-loader diagnostics and a one-shot heap
+ *   dump to `.paperplane/leak.hprof`.
+ */
+@Serializable
+enum class LeakDiagnosticsMode {
+  @SerialName("summary") SUMMARY,
+  @SerialName("full") FULL,
+  @SerialName("off") OFF,
+}

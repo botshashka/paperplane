@@ -6,10 +6,12 @@ import dev.paperplane.companion.host.HostLoadRequest
 import dev.paperplane.companion.host.HostLoadResult
 import dev.paperplane.companion.host.InnerPluginHost
 import dev.paperplane.companion.host.LeakAttribution
+import dev.paperplane.companion.host.LeakDiagnosticsMode
 import dev.paperplane.companion.host.LeakSummary
 import dev.paperplane.companion.host.ReflectionProbe
 import dev.paperplane.companion.host.UnsupportedPaperVersionException
 import java.io.File
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.logging.Logger
 import org.bukkit.Server
 import org.bukkit.command.SimpleCommandMap
@@ -149,6 +151,129 @@ class BuildStatusBarLoadRequestTest {
     assertEquals(3, report.leaks!!.confirmedSurvivors)
     assertEquals("timer still running", report.leaks!!.attribution.single().detail)
     assertEquals("restart", report.action)
+  }
+
+  // ── deferred leak dumps (full mode) ─────────────────────────────────
+
+  /**
+   * A leaking Ok result. [maybeDeferLeakDump] keys off [HostLoadResult.Ok.leaks] being non-null, so
+   * this is the shape the host produces when a reload confirms a surviving classloader.
+   */
+  private fun okWithLeak() =
+      HostLoadResult.Ok(
+          "Sample",
+          5,
+          leaks =
+              LeakSummary(
+                  consecutive = 1,
+                  confirmedSurvivors = 1,
+                  attribution = listOf(LeakAttribution("thread", "MyPlugin-Timer still running")),
+              ),
+      )
+
+  /** RecordingHost whose dump methods record the report-file state at the moment they run. */
+  private fun dumpRecordingHost(mode: LeakDiagnosticsMode, log: MutableList<String>) =
+      object : RecordingHost(fakeServer, javaClass.classLoader, probe, mode) {
+        override fun dumpVerboseDiagnostics() {
+          log += if (File(ppDir, "load-complete").exists()) "verbose:present" else "verbose:missing"
+        }
+
+        override fun tryDumpHeap(target: File) {
+          log += if (File(ppDir, "load-complete").exists()) "heap:present" else "heap:missing"
+          // The heap dump must target the server root, never user.dir.
+          log += "heap-target:${target.path}"
+        }
+      }
+
+  @Test
+  fun `full mode defers verbose and heap dumps until after the report is on disk`() {
+    val log = CopyOnWriteArrayList<String>()
+    val host = dumpRecordingHost(LeakDiagnosticsMode.FULL, log).apply { nextResult = okWithLeak() }
+    val deferBar = BuildStatusBar(hostingPlugin, { host }, serverRoot)
+
+    writeRequest(HostLoadRequest(requestId = "r1", jarPath = "/x.jar", pluginName = "Sample"))
+    deferBar.pollLoadRequestForTest()
+
+    // The report is written synchronously; the verbose (sync) dump is queued for a later tick, so
+    // it
+    // must not have run yet. This is the deferral guarantee: the CLI's waiter is unblocked first.
+    assertTrue(File(ppDir, "load-complete").exists(), "report must be written synchronously")
+    assertFalse(log.any { it.startsWith("verbose") }, "verbose dump must be deferred, not inline")
+
+    server.scheduler.performTicks(1)
+    server.scheduler.waitAsyncTasksFinished()
+
+    assertTrue(
+        log.contains("verbose:present"),
+        "verbose dump ran and saw the report already on disk",
+    )
+    assertTrue(log.contains("heap:present"), "heap dump ran and saw the report already on disk")
+    assertFalse(log.any { it.endsWith(":missing") }, "no dump may run before the report is written")
+  }
+
+  @Test
+  fun `full mode heap dump targets the server root not user dir`() {
+    val log = CopyOnWriteArrayList<String>()
+    val host = dumpRecordingHost(LeakDiagnosticsMode.FULL, log).apply { nextResult = okWithLeak() }
+    val deferBar = BuildStatusBar(hostingPlugin, { host }, serverRoot)
+
+    writeRequest(HostLoadRequest(requestId = "r1", jarPath = "/x.jar", pluginName = "Sample"))
+    deferBar.pollLoadRequestForTest()
+    server.scheduler.performTicks(1)
+    server.scheduler.waitAsyncTasksFinished()
+
+    val expected = File(serverRoot, ".paperplane/leak.hprof").path
+    assertTrue(
+        log.contains("heap-target:$expected"),
+        "heap dump must target .paperplane/leak.hprof under the server root; log=$log",
+    )
+  }
+
+  @Test
+  fun `summary mode schedules no dumps even when a leak is confirmed`() {
+    val log = CopyOnWriteArrayList<String>()
+    val host =
+        dumpRecordingHost(LeakDiagnosticsMode.SUMMARY, log).apply { nextResult = okWithLeak() }
+    val bar = BuildStatusBar(hostingPlugin, { host }, serverRoot)
+
+    writeRequest(HostLoadRequest(requestId = "r1", jarPath = "/x.jar", pluginName = "Sample"))
+    bar.pollLoadRequestForTest()
+    server.scheduler.performTicks(1)
+    server.scheduler.waitAsyncTasksFinished()
+
+    assertTrue(log.isEmpty(), "summary mode logs + reports attribution but never dumps; log=$log")
+  }
+
+  @Test
+  fun `off mode schedules no dumps even when a leak is confirmed`() {
+    val log = CopyOnWriteArrayList<String>()
+    val host = dumpRecordingHost(LeakDiagnosticsMode.OFF, log).apply { nextResult = okWithLeak() }
+    val bar = BuildStatusBar(hostingPlugin, { host }, serverRoot)
+
+    writeRequest(HostLoadRequest(requestId = "r1", jarPath = "/x.jar", pluginName = "Sample"))
+    bar.pollLoadRequestForTest()
+    server.scheduler.performTicks(1)
+    server.scheduler.waitAsyncTasksFinished()
+
+    assertTrue(log.isEmpty(), "off disables dump output; log=$log")
+  }
+
+  @Test
+  fun `full mode without a confirmed leak schedules no dumps`() {
+    val log = CopyOnWriteArrayList<String>()
+    // A clean reload: Ok with leaks == null. Nothing to dump.
+    val host =
+        dumpRecordingHost(LeakDiagnosticsMode.FULL, log).apply {
+          nextResult = HostLoadResult.Ok("Sample", 5)
+        }
+    val bar = BuildStatusBar(hostingPlugin, { host }, serverRoot)
+
+    writeRequest(HostLoadRequest(requestId = "r1", jarPath = "/x.jar", pluginName = "Sample"))
+    bar.pollLoadRequestForTest()
+    server.scheduler.performTicks(1)
+    server.scheduler.waitAsyncTasksFinished()
+
+    assertTrue(log.isEmpty(), "no leak → no dump, even in full mode; log=$log")
   }
 
   // ── claim → handle ordering ─────────────────────────────────────────
@@ -398,7 +523,15 @@ class BuildStatusBarLoadRequestTest {
       server: Server,
       cl: ClassLoader,
       probe: ReflectionProbe,
-  ) : InnerPluginHost(server, cl, probe, Logger.getLogger("RecordingHost")) {
+      mode: LeakDiagnosticsMode = LeakDiagnosticsMode.SUMMARY,
+  ) :
+      InnerPluginHost(
+          server,
+          cl,
+          probe,
+          Logger.getLogger("RecordingHost"),
+          leakDiagnostics = mode,
+      ) {
     var dispatches: Int = 0
     var lastRequest: HostLoadRequest? = null
     var nextResult: HostLoadResult = HostLoadResult.Ok("Sample", 5)

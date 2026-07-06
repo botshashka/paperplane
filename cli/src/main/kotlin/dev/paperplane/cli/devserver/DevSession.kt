@@ -470,6 +470,10 @@ internal class DevSession(
   ): ServerStartResult {
     serverManager.cleanupStale()
     serverManager.configure(config.server)
+    // Hand the companion its runtime config (leak-diagnostics mode). Written for every mode —
+    // native modes don't act on it, but the companion shouldn't have to guess. Independent of
+    // configure() so its signature stays put.
+    serverManager.writeCompanionConfig(config.dev)
     extraConfigure(serverManager)
     val builtJar = File(projectDir, metadata.jarPath)
     // Deploy differs by mode. Hot-reload stages the jar out of Paper's sight and lets the companion

@@ -1,6 +1,7 @@
 package dev.paperplane.companion
 
 import dev.paperplane.companion.host.InnerPluginHost
+import dev.paperplane.companion.host.LeakDiagnosticsMode
 import dev.paperplane.companion.host.ReflectionProbe
 import java.io.File
 import org.bukkit.event.EventHandler
@@ -20,12 +21,24 @@ class CompanionPlugin : JavaPlugin() {
       // status bar / save protection / auto-op below. The probe happens inside this provider the
       // first time a load request arrives; BuildStatusBar reports a probe failure as `load-failed`.
       errorCatcher = ErrorCatcher(this)
+      // Read the CLI-written diagnostics mode once here and close over it in the host provider —
+      // the host reads no files itself, and native-mode companions (which never build a host) don't
+      // pay for it. Missing/malformed config falls back to SUMMARY and never throws.
+      val leakDiagnostics =
+          LeakDiagnosticsMode.readFrom(File(serverRoot(), ".paperplane/companion-config.json"))
       buildStatusBar =
           BuildStatusBar(
               this,
               hostProvider = {
                 val probe = ReflectionProbe.probe(server)
-                InnerPluginHost(server, javaClass.classLoader, probe, logger, hostPlugin = this)
+                InnerPluginHost(
+                    server,
+                    javaClass.classLoader,
+                    probe,
+                    logger,
+                    hostPlugin = this,
+                    leakDiagnostics = leakDiagnostics,
+                )
               },
           )
 
