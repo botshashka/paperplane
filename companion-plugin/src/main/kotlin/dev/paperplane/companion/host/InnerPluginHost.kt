@@ -207,6 +207,14 @@ open class InnerPluginHost(
     server.servicesManager.unregisterAll(a.plugin)
     server.messenger.unregisterIncomingPluginChannel(a.plugin)
     server.messenger.unregisterOutgoingPluginChannel(a.plugin)
+    // Chunk tickets and keyed boss bars survive disablePlugin — release them explicitly or they
+    // keep chunks force-loaded / linger in the registry (and pin the old loader) across reloads.
+    for (world in server.worlds) world.removePluginChunkTickets(a.plugin)
+    val ns = a.name.lowercase()
+    // Bukkit namespaces plugin-created keys by lowercased plugin name. Collect before removing —
+    // removeBossBar mutates the registry backing the iterator.
+    val staleBars = server.bossBars.asSequence().map { it.key }.filter { it.namespace == ns }
+    for (key in staleBars.toList()) server.removeBossBar(key)
     commandRegistrar.clear()
     permissionRegistrar.clear()
     interruptPluginThreads(a.classLoader)

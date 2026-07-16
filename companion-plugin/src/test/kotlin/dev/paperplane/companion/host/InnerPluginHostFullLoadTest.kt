@@ -5,7 +5,10 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.jar.JarEntry
 import java.util.jar.JarOutputStream
 import java.util.logging.Logger
+import org.bukkit.NamespacedKey
 import org.bukkit.Server
+import org.bukkit.boss.BarColor
+import org.bukkit.boss.BarStyle
 import org.bukkit.command.SimpleCommandMap
 import org.bukkit.plugin.PluginManager
 import org.bukkit.plugin.SimplePluginManager
@@ -157,6 +160,33 @@ class InnerPluginHostFullLoadTest {
     assertNull(
         paperManager.lookupNames["shutdownone"],
         "Paper manager's lookupNames must be symmetrically pruned on shutdown",
+    )
+  }
+
+  @Test
+  fun `teardown releases chunk tickets and the plugin's keyed boss bars`() {
+    host.handleRequest(makeLoadRequest("TicketBar"))
+    val inner = host.current()!!
+    val world = server.addSimpleWorld("ticketbar-world")
+    world.addPluginChunkTicket(0, 0, inner)
+    val innerKey = NamespacedKey(inner, "progress")
+    server.createBossBar(innerKey, "Progress", BarColor.BLUE, BarStyle.SOLID)
+    val foreignKey = NamespacedKey.minecraft("foreign-bar")
+    server.createBossBar(foreignKey, "Foreign", BarColor.RED, BarStyle.SOLID)
+
+    host.shutdown()
+
+    assertTrue(
+        world.getPluginChunkTickets(0, 0).isEmpty(),
+        "chunk tickets keep chunks force-loaded — teardown must release them",
+    )
+    assertNull(
+        server.getBossBar(innerKey),
+        "the inner plugin's keyed boss bars must be removed on teardown",
+    )
+    assertNotNull(
+        server.getBossBar(foreignKey),
+        "boss bars from other namespaces must be untouched",
     )
   }
 
