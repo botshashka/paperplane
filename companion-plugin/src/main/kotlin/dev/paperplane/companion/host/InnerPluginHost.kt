@@ -65,6 +65,11 @@ open class InnerPluginHost(
           c.classLoader === classLoader &&
               (c.name.startsWith("net.minecraft.") || c.name.startsWith("org.bukkit.craftbukkit."))
         }
+
+    /** Rendered to the CLI when a load request points at a Paper plugin (`paper-plugin.yml`). */
+    internal const val PAPER_PLUGIN_MESSAGE =
+        "This is a Paper plugin (paper-plugin.yml), which hot-reload doesn't support yet. " +
+            "Use `dev.mode: restart` or `blue-green` — both load Paper plugins natively."
   }
 
   private val helpMapWriter = HelpMapWriter(server.helpMap, probe.helpTopics)
@@ -132,7 +137,12 @@ open class InnerPluginHost(
 
   private fun loadFresh(request: HostLoadRequest): HostLoadResult {
     val description =
-        readDescription(request) ?: return HostLoadResult.Failed("plugin.yml not found", 0)
+        when (val lookup = readDescription(request)) {
+          is DescriptionLookup.Found -> lookup.description
+          DescriptionLookup.NotFound -> return HostLoadResult.Failed("plugin.yml not found", 0)
+          DescriptionLookup.PaperPluginDetected ->
+              return HostLoadResult.Failed(PAPER_PLUGIN_MESSAGE, 0)
+        }
     when (val v = PluginYmlValidator.validate(description, server, logger)) {
       is PluginYmlValidator.Result.Reject -> return HostLoadResult.Failed(v.message, 0)
       PluginYmlValidator.Result.Ok -> {}
@@ -168,7 +178,12 @@ open class InnerPluginHost(
     }
 
     val description =
-        readDescription(request) ?: return HostLoadResult.Failed("plugin.yml not found", 0)
+        when (val lookup = readDescription(request)) {
+          is DescriptionLookup.Found -> lookup.description
+          DescriptionLookup.NotFound -> return HostLoadResult.Failed("plugin.yml not found", 0)
+          DescriptionLookup.PaperPluginDetected ->
+              return HostLoadResult.Failed(PAPER_PLUGIN_MESSAGE, 0)
+        }
     when (val v = PluginYmlValidator.validate(description, server, logger)) {
       is PluginYmlValidator.Result.Reject -> return HostLoadResult.Failed(v.message, 0)
       PluginYmlValidator.Result.Ok -> {}
@@ -291,17 +306,47 @@ open class InnerPluginHost(
 
   // ── plugin.yml resolution ───────────────────────────────────────────
 
-  private fun readDescription(request: HostLoadRequest): PluginDescriptionFile? {
+  /** Outcome of resolving the plugin's descriptor from the staged build outputs. */
+  internal sealed interface DescriptionLookup {
+    class Found(val description: PluginDescriptionFile) : DescriptionLookup
+
+    data object NotFound : DescriptionLookup
+
+    /** No `plugin.yml`, but a `paper-plugin.yml` is present — an unsupported Paper plugin. */
+    data object PaperPluginDetected : DescriptionLookup
+  }
+
+  private fun readDescription(request: HostLoadRequest): DescriptionLookup {
     if (request.resourcesDir.isNotEmpty()) {
       val ymlFile = File(request.resourcesDir, "plugin.yml")
-      if (ymlFile.exists()) return PluginDescriptionFile(ymlFile.inputStream())
+      if (ymlFile.exists()) {
+        return DescriptionLookup.Found(ymlFile.inputStream().use(::readDescriptionFromStream))
+      }
     }
     val jar = File(request.jarPath)
-    if (!jar.exists()) return null
-    return JarFile(jar).use { jf ->
-      val entry = jf.getJarEntry("plugin.yml") ?: return null
-      jf.getInputStream(entry).use(::readDescriptionFromStream)
+    if (jar.exists()) {
+      val fromJar =
+          JarFile(jar).use { jf ->
+            jf.getJarEntry("plugin.yml")?.let { entry ->
+              jf.getInputStream(entry).use(::readDescriptionFromStream)
+            }
+          }
+      if (fromJar != null) return DescriptionLookup.Found(fromJar)
     }
+    return if (hasPaperPluginYml(request)) DescriptionLookup.PaperPluginDetected
+    else DescriptionLookup.NotFound
+  }
+
+  /** Checks the same two locations as [readDescription], but for `paper-plugin.yml`. */
+  private fun hasPaperPluginYml(request: HostLoadRequest): Boolean {
+    if (
+        request.resourcesDir.isNotEmpty() && File(request.resourcesDir, "paper-plugin.yml").exists()
+    ) {
+      return true
+    }
+    val jar = File(request.jarPath)
+    if (!jar.exists()) return false
+    return JarFile(jar).use { it.getJarEntry("paper-plugin.yml") != null }
   }
 
   private fun readDescriptionFromStream(stream: InputStream): PluginDescriptionFile =

@@ -107,6 +107,64 @@ class InnerPluginHostTest {
     assertTrue(result is HostLoadResult.Failed)
   }
 
+  @Test
+  fun `handleRequest explains that paper-plugin-yml jars can't hot-reload`() {
+    val paperJar = File(tempDir, "paperplugin.jar")
+    java.util.jar.JarOutputStream(paperJar.outputStream()).use { jos ->
+      jos.putNextEntry(java.util.jar.JarEntry("paper-plugin.yml"))
+      jos.write("name: MyPlugin\nversion: 1.0\nmain: com.example.Main\n".toByteArray())
+      jos.closeEntry()
+    }
+    val request =
+        HostLoadRequest(requestId = "r1", jarPath = paperJar.absolutePath, pluginName = "MyPlugin")
+    val result = host.handleRequest(request)
+    assertTrue(result is HostLoadResult.Failed)
+    assertEquals(InnerPluginHost.PAPER_PLUGIN_MESSAGE, (result as HostLoadResult.Failed).message)
+    assertFalse(host.isLoaded())
+  }
+
+  @Test
+  fun `handleRequest detects paper-plugin-yml in the resources dir`() {
+    val resourcesDir = File(tempDir, "resources").apply { mkdirs() }
+    File(resourcesDir, "paper-plugin.yml")
+        .writeText("name: MyPlugin\nversion: 1.0\nmain: com.example.Main\n")
+    val emptyJar = File(tempDir, "empty.jar")
+    java.util.jar.JarOutputStream(emptyJar.outputStream()).use { /* empty */ }
+    val request =
+        HostLoadRequest(
+            requestId = "r1",
+            jarPath = emptyJar.absolutePath,
+            pluginName = "MyPlugin",
+            resourcesDir = resourcesDir.absolutePath,
+        )
+    val result = host.handleRequest(request)
+    assertTrue(result is HostLoadResult.Failed)
+    assertEquals(InnerPluginHost.PAPER_PLUGIN_MESSAGE, (result as HostLoadResult.Failed).message)
+  }
+
+  @Test
+  fun `a plugin yml in the resources dir wins over paper-plugin-yml detection`() {
+    // A project mid-migration may have both; plugin.yml means the Bukkit path is viable.
+    val resourcesDir = File(tempDir, "resources").apply { mkdirs() }
+    File(resourcesDir, "paper-plugin.yml").writeText("name: MyPlugin\nversion: 1.0\n")
+    File(resourcesDir, "plugin.yml")
+        .writeText("name: MyPlugin\nversion: 1.0\nmain: com.example.Missing\n")
+    val emptyJar = File(tempDir, "empty.jar")
+    java.util.jar.JarOutputStream(emptyJar.outputStream()).use { /* empty */ }
+    val request =
+        HostLoadRequest(
+            requestId = "r1",
+            jarPath = emptyJar.absolutePath,
+            pluginName = "MyPlugin",
+            resourcesDir = resourcesDir.absolutePath,
+        )
+    val result = host.handleRequest(request)
+    // The load proceeds past description lookup and fails later (main class missing) —
+    // the point is it must NOT be rejected as a Paper plugin.
+    assertTrue(result is HostLoadResult.Failed)
+    assertFalse((result as HostLoadResult.Failed).message.contains("paper-plugin.yml"))
+  }
+
   // ── leak-limit state machine ────────────────────────────────────────
 
   @Test
