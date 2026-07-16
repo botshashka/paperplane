@@ -361,9 +361,24 @@ open class InnerPluginHost(
     if (stillLeaking == 0) return recordLeakOutcome(0)
     System.gc()
     Thread.sleep(100L)
-    val confirmed = leakedClassLoaders.dropLast(1).count { it.get() != null }
+    val confirmed = leakedClassLoaders.dropLast(1).mapNotNull { it.get() }
     leakedClassLoaders.removeAll { it != leakedClassLoaders.last() && it.get() == null }
-    return recordLeakOutcome(confirmed)
+    return recordLeakOutcome(confirmed.size, allSurvivorsExcused(confirmed))
+  }
+
+  /**
+   * True when every surviving loader is pinned by at least one still-running async scheduler task
+   * owned by a plugin defined in that loader. CraftScheduler pool threads don't carry the plugin's
+   * contextClassLoader, so [interruptPluginThreads] never sees them — without this excusal, every
+   * long-running async task would register as a leak on each reload until it finishes. Excused
+   * survivors stay in [leakedClassLoaders] and still count toward the absolute survivor cap (via
+   * [lastConfirmedSurvivors]), so a genuinely stuck task eventually trips [leakLimitReached]
+   * anyway; only the consecutive-streak increment is skipped.
+   */
+  internal fun allSurvivorsExcused(survivors: List<ClassLoader>): Boolean {
+    if (survivors.isEmpty()) return false
+    val workers = runCatching { server.scheduler.activeWorkers }.getOrDefault(emptyList())
+    return survivors.all { survivor -> workers.any { it.owner.javaClass.classLoader === survivor } }
   }
 
   /**
@@ -377,16 +392,28 @@ open class InnerPluginHost(
    * working in every mode. A clean reload (confirmed == 0) resets the consecutive streak but
    * deliberately leaves [lastConfirmedSurvivors] untouched (the absolute cap exists exactly for the
    * alternating leak/clean case).
+   *
+   * [allExcused] (see [allSurvivorsExcused]) skips the consecutive-streak increment — skip only,
+   * never reset: an excused reload between two real leaks must not restart the streak. The
+   * survivor-cap assignment and the report output are unaffected, so the CLI still renders the
+   * scheduler attribution telling the user what is pinning the old loader.
    */
-  internal fun recordLeakOutcome(confirmed: Int): LeakSummary? {
+  internal fun recordLeakOutcome(confirmed: Int, allExcused: Boolean = false): LeakSummary? {
     if (confirmed <= 0) {
       consecutiveLeaks = 0
       return null
     }
-    consecutiveLeaks++
+    if (!allExcused) consecutiveLeaks++
     lastConfirmedSurvivors = confirmed
     if (leakDiagnostics == LeakDiagnosticsMode.OFF) return null
-    logger.warning("$confirmed classloader(s) leaked (#$consecutiveLeaks)")
+    if (allExcused) {
+      logger.warning(
+          "$confirmed old classloader(s) held by still-running async task(s) — " +
+              "not counted toward the leak limit"
+      )
+    } else {
+      logger.warning("$confirmed classloader(s) leaked (#$consecutiveLeaks)")
+    }
     return LeakSummary(
         consecutive = consecutiveLeaks,
         confirmedSurvivors = confirmed,

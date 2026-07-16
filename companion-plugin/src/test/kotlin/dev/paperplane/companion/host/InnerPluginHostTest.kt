@@ -1,11 +1,15 @@
 package dev.paperplane.companion.host
 
 import java.io.File
+import java.net.URLClassLoader
 import java.util.logging.Logger
 import org.bukkit.Server
 import org.bukkit.command.SimpleCommandMap
+import org.bukkit.plugin.Plugin
 import org.bukkit.plugin.PluginManager
 import org.bukkit.plugin.SimplePluginManager
+import org.bukkit.scheduler.BukkitScheduler
+import org.bukkit.scheduler.BukkitWorker
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -160,6 +164,73 @@ class InnerPluginHostTest {
     )
   }
 
+  // ── async-task excusal (still-running tasks are not leaks) ─────────
+
+  @Test
+  fun `excused reloads don't advance the consecutive-leak streak`() {
+    host.recordLeakOutcome(1, allExcused = true)
+    host.recordLeakOutcome(1, allExcused = true)
+    host.recordLeakOutcome(1, allExcused = true)
+    assertFalse(host.leakLimitReached, "excused survivors must not count toward the streak")
+  }
+
+  @Test
+  fun `an excused reload skips but does not reset the streak`() {
+    host.recordLeakOutcome(1)
+    host.recordLeakOutcome(1)
+    host.recordLeakOutcome(1, allExcused = true)
+    host.recordLeakOutcome(1)
+    assertTrue(
+        host.leakLimitReached,
+        "an excused reload between real leaks must not restart the streak",
+    )
+  }
+
+  @Test
+  fun `excused survivors still count toward the absolute cap`() {
+    host.recordLeakOutcome(5, allExcused = true)
+    assertTrue(host.leakLimitReached, "five excused survivors must still trip the absolute cap")
+  }
+
+  @Test
+  fun `excused reload still emits a summary so the CLI can render the cause`() {
+    val summary = host.recordLeakOutcome(1, allExcused = true)
+    assertEquals(0, summary!!.consecutive, "excusal must not have advanced the streak")
+    assertEquals(1, summary.confirmedSurvivors)
+  }
+
+  @Test
+  fun `survivor pinned by an async worker is excused`() {
+    val plugin = MockBukkit.createMockPlugin()
+    val schedHost = hostWithWorkers(listOf(workerOwnedBy(plugin)))
+    assertTrue(schedHost.allSurvivorsExcused(listOf(plugin.javaClass.classLoader)))
+  }
+
+  @Test
+  fun `survivor with no matching worker is not excused`() {
+    val plugin = MockBukkit.createMockPlugin()
+    val schedHost = hostWithWorkers(listOf(workerOwnedBy(plugin)))
+    assertFalse(schedHost.allSurvivorsExcused(listOf(URLClassLoader(emptyArray()))))
+  }
+
+  @Test
+  fun `one unexcused survivor blocks the excusal`() {
+    val plugin = MockBukkit.createMockPlugin()
+    val schedHost = hostWithWorkers(listOf(workerOwnedBy(plugin)))
+    assertFalse(
+        schedHost.allSurvivorsExcused(
+            listOf(plugin.javaClass.classLoader, URLClassLoader(emptyArray()))
+        ),
+        "any survivor not pinned by a worker is a real leak — excusal must not apply",
+    )
+  }
+
+  @Test
+  fun `no survivors means nothing to excuse`() {
+    val schedHost = hostWithWorkers(emptyList())
+    assertFalse(schedHost.allSurvivorsExcused(emptyList()))
+  }
+
   // ── withDuration carry-forward ──────────────────────────────────────
 
   @Test
@@ -188,10 +259,38 @@ class InnerPluginHostTest {
 
   // ── helpers ─────────────────────────────────────────────────────────
 
+  private fun hostWithWorkers(workers: List<BukkitWorker>): InnerPluginHost =
+      InnerPluginHost(
+          FakeServerWithScheduler(fakeServer, workers),
+          javaClass.classLoader,
+          probe,
+          Logger.getLogger("InnerPluginHostTest.sched"),
+      )
+
+  private fun workerOwnedBy(plugin: Plugin): BukkitWorker =
+      object : BukkitWorker {
+        override fun getTaskId(): Int = 1
+
+        override fun getOwner(): Plugin = plugin
+
+        override fun getThread(): Thread = Thread.currentThread()
+      }
+
   private class FakeServerWithSpm(
       private val delegate: Server,
       private val spm: SimplePluginManager,
   ) : Server by delegate {
     override fun getPluginManager(): PluginManager = spm
+  }
+
+  /** Delegating fake whose scheduler reports the given [workers] as active. */
+  private class FakeServerWithScheduler(
+      private val delegate: Server,
+      private val workers: List<BukkitWorker>,
+  ) : Server by delegate {
+    override fun getScheduler(): BukkitScheduler =
+        object : BukkitScheduler by delegate.scheduler {
+          override fun getActiveWorkers(): List<BukkitWorker> = workers
+        }
   }
 }
