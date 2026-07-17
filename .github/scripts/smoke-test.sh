@@ -49,6 +49,45 @@ else
 fi
 cd "$WORK_DIR/smoketest"
 
+# Inject a Brigadier lifecycle command into the scaffolded plugin BEFORE first boot. The probe
+# (SMOKEBRIG-PRESENT / SMOKEBRIG-EXECUTED-*) self-dispatches from a +100-tick task because the
+# script has no console into the Paper process. This is the semantic canary for the host's
+# LifecycleEvents.COMMANDS re-fire: the ReflectionProbe already fails loudly when Paper RENAMES
+# the internals, but only an end-to-end dispatch catches Paper changing their BEHAVIOR (command
+# not registered, stale node executing old code, duplicate executions).
+MAIN_SRC="$(find src/main/java -name "*.java" | head -1)"
+if [[ -z "$MAIN_SRC" ]]; then
+  echo "FAIL: scaffolded main class not found under src/main/java."
+  exit 1
+fi
+python3 - "$MAIN_SRC" <<'EOF'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+src = p.read_text()
+marker = 'getLogger().info("SmokeTest enabled!");'
+assert marker in src, "onEnable log line not found in " + sys.argv[1]
+inject = marker + """
+        try {
+            this.getLifecycleManager().registerEventHandler(io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents.COMMANDS, event -> {
+                event.registrar().register(
+                        io.papermc.paper.command.brigadier.Commands.literal("smokebrig")
+                                .executes(ctx -> {
+                                    getLogger().info("SMOKEBRIG-EXECUTED-V1");
+                                    return com.mojang.brigadier.Command.SINGLE_SUCCESS;
+                                })
+                                .build());
+            });
+        } catch (Throwable t) {
+            getLogger().info("SMOKEBRIG-REG-THREW: " + t);
+        }
+        org.bukkit.Bukkit.getScheduler().runTaskLater(this, () -> {
+            getLogger().info("SMOKEBRIG-PRESENT=" + (org.bukkit.Bukkit.getCommandMap().getCommand("smokebrig") != null));
+            org.bukkit.Bukkit.dispatchCommand(org.bukkit.Bukkit.getConsoleSender(), "smokebrig");
+        }, 100L);"""
+src = src.replace(marker, inject, 1)
+p.write_text(src)
+EOF
+
 echo "==> Starting ppl dev (timeout ${TIMEOUT_SECONDS}s)..."
 "$REPO_ROOT/ppl" dev > "$LOG_FILE" 2>&1 &
 DEV_PID=$!
@@ -123,6 +162,29 @@ if ! grep -qF "Cross-plugin lookup verified" "$LOG_FILE"; then
   exit 1
 fi
 
+# 6. The Brigadier lifecycle command exists and executes — the host's COMMANDS re-fire worked
+#    end-to-end. The plugin's probe logs at +100 ticks (~5s after enable), so poll.
+brig_deadline=$(( $(date +%s) + 45 ))
+until grep -qF "SMOKEBRIG-EXECUTED-V1" "$LOG_FILE"; do
+  if grep -qF "SMOKEBRIG-REG-THREW" "$LOG_FILE"; then
+    echo "FAIL: lifecycle COMMANDS handler registration threw."
+    grep -F "SMOKEBRIG-REG-THREW" "$LOG_FILE"
+    exit 1
+  fi
+  if [[ $(date +%s) -ge $brig_deadline ]]; then
+    echo "FAIL: Brigadier lifecycle command never executed — the COMMANDS re-fire is broken."
+    grep -F "SMOKEBRIG" "$LOG_FILE" || echo "  (no SMOKEBRIG lines at all)"
+    tail -50 "$LOG_FILE"
+    exit 1
+  fi
+  sleep 2
+done
+if ! grep -qF "SMOKEBRIG-PRESENT=true" "$LOG_FILE"; then
+  echo "FAIL: /smokebrig absent from the command map after load."
+  grep -F "SMOKEBRIG" "$LOG_FILE" || true
+  exit 1
+fi
+
 echo "==> Exercising a hot-reload cycle..."
 
 # The file watcher takes its baseline snapshot only after the CLI prints the post-startup
@@ -140,12 +202,9 @@ done
 sleep 6
 
 # Structural edit (new method) forces a full reload rather than a hotswap, so the changed
-# onEnable string re-logs and proves the NEW code is live.
-MAIN_SRC="$(find src/main/java -name "*.java" | head -1)"
-if [[ -z "$MAIN_SRC" ]]; then
-  echo "FAIL: scaffolded main class not found under src/main/java."
-  exit 1
-fi
+# onEnable string re-logs and proves the NEW code is live. The Brigadier handler's executed
+# string flips V1 -> V2 so a stale pre-reload node executing old-classloader code is detectable
+# as a second V1 line. MAIN_SRC was resolved (and validated) before first boot.
 python3 - "$MAIN_SRC" <<'EOF'
 import sys, pathlib
 p = pathlib.Path(sys.argv[1])
@@ -153,6 +212,7 @@ src = p.read_text()
 marker = 'getLogger().info("SmokeTest enabled!");'
 assert marker in src, "onEnable log line not found in " + sys.argv[1]
 src = src.replace(marker, 'getLogger().info("SmokeTest enabled! v2");')
+src = src.replace('SMOKEBRIG-EXECUTED-V1', 'SMOKEBRIG-EXECUTED-V2')
 src = src.replace("@Override\n    public void onEnable() {",
                   "// smoke-reload\n    public void smokeReload() { }\n\n    @Override\n    public void onEnable() {", 1)
 p.write_text(src)
@@ -182,7 +242,35 @@ until grep -qF "SmokeTest enabled! v2" "$LOG_FILE" && grep -qF "Plugin reloaded"
   sleep 2
 done
 
-# 6. The reload was clean: no leak warnings, no reload failures.
+# 7. After the reload the NEW instance's Brigadier handler executes — and exactly once each way:
+#    a second V1 execution means the stale pre-reload node survived teardown and ran
+#    old-classloader code; more than one V2 means duplicate registration.
+brig2_deadline=$(( $(date +%s) + 45 ))
+until grep -qF "SMOKEBRIG-EXECUTED-V2" "$LOG_FILE"; do
+  if [[ $(date +%s) -ge $brig2_deadline ]]; then
+    echo "FAIL: reloaded Brigadier command never executed the NEW handler."
+    grep -F "SMOKEBRIG" "$LOG_FILE" || true
+    tail -50 "$LOG_FILE"
+    exit 1
+  fi
+  sleep 2
+done
+v1_count=$(grep -cF "SMOKEBRIG-EXECUTED-V1" "$LOG_FILE" || true)
+v2_count=$(grep -cF "SMOKEBRIG-EXECUTED-V2" "$LOG_FILE" || true)
+if [[ "$v1_count" -ne 1 || "$v2_count" -ne 1 ]]; then
+  echo "FAIL: expected exactly one V1 and one V2 execution, got V1=$v1_count V2=$v2_count —"
+  echo "      stale command node or duplicate registration."
+  grep -F "SMOKEBRIG" "$LOG_FILE"
+  exit 1
+fi
+present_true_count=$(grep -cF "SMOKEBRIG-PRESENT=true" "$LOG_FILE" || true)
+if [[ "$present_true_count" -ne 2 ]]; then
+  echo "FAIL: /smokebrig must be present in the command map after BOTH loads (got $present_true_count/2)."
+  grep -F "SMOKEBRIG-PRESENT" "$LOG_FILE" || true
+  exit 1
+fi
+
+# 8. The reload was clean: no leak warnings, no reload failures.
 if grep -qF "leaked" "$LOG_FILE"; then
   echo "FAIL: reload leaked memory."
   grep -F "leaked" "$LOG_FILE"
@@ -194,7 +282,7 @@ if grep -qF "Reload failed" "$LOG_FILE"; then
   exit 1
 fi
 
-# 7. Invariant #3 still holds after the reload: the rebuilt jar stays out of plugins/.
+# 9. Invariant #3 still holds after the reload: the rebuilt jar stays out of plugins/.
 if [[ -f "$WORK_DIR/smoketest/.paperplane/server/plugins/smoketest-1.0.0.jar" ]]; then
   echo "FAIL: User JAR landed in plugins/ after the reload cycle."
   exit 1
