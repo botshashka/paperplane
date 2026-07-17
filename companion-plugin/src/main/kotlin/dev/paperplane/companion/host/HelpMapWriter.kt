@@ -23,23 +23,44 @@ class HelpMapWriter(
     private val topics: MutableMap<String, HelpTopic>,
 ) {
 
+  // Topics we displaced by writing our own into an already-occupied key — e.g. an inner-plugin
+  // command whose name collides with a core or other-plugin command. Captured on [register] and put
+  // back on [unregister] so a hot-reload cycle never permanently destroys a foreign command's /help
+  // entry (which unconditional put/remove would).
+  private val displaced = mutableMapOf<String, HelpTopic>()
+
   /** Add a primary topic for [cmd] and one alias topic per alias. */
   fun register(cmd: PluginCommand) {
     val primaryKey = topicKey(cmd.name)
-    topics[primaryKey] = GenericCommandHelpTopic(cmd)
+    put(primaryKey, GenericCommandHelpTopic(cmd))
     for (alias in cmd.aliases) {
       val aliasKey = topicKey(alias)
       if (aliasKey == primaryKey) continue
-      topics[aliasKey] = PaperPlaneAliasHelpTopic(aliasKey, primaryKey, helpMap)
+      put(aliasKey, PaperPlaneAliasHelpTopic(aliasKey, primaryKey, helpMap))
     }
   }
 
-  /** Remove the primary and all alias topics for [cmd]. */
+  /** Remove the primary and all alias topics for [cmd], restoring anything they displaced. */
   fun unregister(cmd: PluginCommand) {
-    topics.remove(topicKey(cmd.name))
+    val primaryKey = topicKey(cmd.name)
+    restore(primaryKey)
     for (alias in cmd.aliases) {
-      topics.remove(topicKey(alias))
+      val aliasKey = topicKey(alias)
+      if (aliasKey == primaryKey) continue
+      restore(aliasKey)
     }
+  }
+
+  /** Write [topic] at [key], remembering any topic it displaces so [restore] can put it back. */
+  private fun put(key: String, topic: HelpTopic) {
+    topics[key]?.let { displaced[key] = it }
+    topics[key] = topic
+  }
+
+  /** Remove our topic at [key], reinstating a displaced foreign topic if there was one. */
+  private fun restore(key: String) {
+    val prior = displaced.remove(key)
+    if (prior != null) topics[key] = prior else topics.remove(key)
   }
 
   private fun topicKey(name: String): String = if (name.startsWith("/")) name else "/$name"
