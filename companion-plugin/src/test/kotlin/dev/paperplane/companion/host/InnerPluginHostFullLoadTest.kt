@@ -32,6 +32,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import org.mockbukkit.mockbukkit.MockBukkit
 import org.mockbukkit.mockbukkit.ServerMock
+import org.mockbukkit.mockbukkit.world.WorldMock
 
 /**
  * Full-load test for [InnerPluginHost]. Drives the actual `loadFresh → enable → reload → shutdown`
@@ -174,7 +175,11 @@ class InnerPluginHostFullLoadTest {
   fun `teardown releases chunk tickets and the plugin's keyed boss bars`() {
     host.handleRequest(makeLoadRequest("TicketBar"))
     val inner = host.current()!!
-    val world = server.addSimpleWorld("ticketbar-world")
+    // MockBukkit's WorldMock throws UnimplementedOperationException (a TestAbortedException!) for
+    // plugin chunk tickets — using it here would silently SKIP this test. TicketWorldMock
+    // implements the ticket API for real so the teardown path is genuinely exercised.
+    val world = TicketWorldMock()
+    server.addWorld(world)
     world.addPluginChunkTicket(0, 0, inner)
     val innerKey = NamespacedKey(inner, "progress")
     server.createBossBar(innerKey, "Progress", BarColor.BLUE, BarStyle.SOLID)
@@ -194,6 +199,30 @@ class InnerPluginHostFullLoadTest {
     assertNotNull(
         server.getBossBar(foreignKey),
         "boss bars from other namespaces must be untouched",
+    )
+  }
+
+  @Test
+  fun `teardown survives a throwing release step and still completes`() {
+    host.handleRequest(makeLoadRequest("ToughTeardown"))
+    val inner = host.current()!!
+    // A world whose ticket-release throws — one failing step must not abort the sequence
+    // (before the fix it skipped everything up to and including the classloader close).
+    server.addWorld(
+        object : WorldMock() {
+          override fun removePluginChunkTickets(plugin: org.bukkit.plugin.Plugin): Unit =
+              error("release step boom")
+        }
+    )
+    val innerKey = NamespacedKey(inner, "tough-bar")
+    server.createBossBar(innerKey, "Tough", BarColor.BLUE, BarStyle.SOLID)
+
+    host.shutdown()
+
+    assertFalse(host.isLoaded(), "teardown must complete despite a failing release step")
+    assertNull(
+        server.getBossBar(innerKey),
+        "steps after the throwing step (boss-bar removal) must still run",
     )
   }
 
@@ -640,6 +669,26 @@ class InnerPluginHostFullLoadTest {
       private val spm: SimplePluginManager,
   ) : Server by delegate {
     override fun getPluginManager(): PluginManager = spm
+  }
+
+  /**
+   * [WorldMock] with a real plugin-chunk-ticket implementation. MockBukkit's own throws
+   * `UnimplementedOperationException`, which extends `TestAbortedException` — inside a test that
+   * silently SKIPS it instead of failing, and inside [InnerPluginHost.teardown] it used to abort
+   * the release sequence before the classloader close.
+   */
+  private class TicketWorldMock : WorldMock() {
+    private val tickets = mutableMapOf<Pair<Int, Int>, MutableSet<org.bukkit.plugin.Plugin>>()
+
+    override fun addPluginChunkTicket(x: Int, z: Int, plugin: org.bukkit.plugin.Plugin): Boolean =
+        tickets.getOrPut(x to z) { mutableSetOf() }.add(plugin)
+
+    override fun removePluginChunkTickets(plugin: org.bukkit.plugin.Plugin) {
+      tickets.values.forEach { it.remove(plugin) }
+    }
+
+    override fun getPluginChunkTickets(x: Int, z: Int): Collection<org.bukkit.plugin.Plugin> =
+        tickets[x to z]?.toList() ?: emptyList()
   }
 
   /**

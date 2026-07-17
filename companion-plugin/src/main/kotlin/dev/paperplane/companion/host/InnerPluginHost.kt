@@ -237,9 +237,13 @@ open class InnerPluginHost(
   // ── teardown ────────────────────────────────────────────────────────
 
   private fun teardown(a: Active) {
-    server.pluginManager.disablePlugin(a.plugin)
-    HandlerList.unregisterAll(a.plugin)
-    server.scheduler.cancelTasks(a.plugin)
+    // Every step is individually guarded: a dev plugin can throw from onDisable (or any release
+    // step can fail on an exotic server impl), and one failure must not abort the rest — an
+    // aborted teardown leaves stale handlers, a stale lookupNames entry, and an OPEN classloader
+    // (which on Windows keeps the staged jar file-locked, blocking the next restage).
+    release("disable plugin") { server.pluginManager.disablePlugin(a.plugin) }
+    release("unregister event handlers") { HandlerList.unregisterAll(a.plugin) }
+    release("cancel scheduled tasks") { server.scheduler.cancelTasks(a.plugin) }
     // CraftScheduler.cancelTasks enqueues a sentinel task (anonymous CraftScheduler$3) that
     // captures `plugin` via val$plugin. After parsePending() consumes it, CraftScheduler.head is
     // reassigned to point at that sentinel — pinning the inner plugin and its classloader for the
@@ -247,34 +251,57 @@ open class InnerPluginHost(
     // advance to a task that captures only the long-lived companion, releasing the inner plugin.
     // Skip while the companion itself is disabling (server shutdown): scheduling from a disabled
     // plugin throws, and the whole scheduler is going away with the JVM anyway.
-    hostPlugin?.takeIf { it.isEnabled }?.let { server.scheduler.runTask(it, Runnable {}) }
-    server.servicesManager.unregisterAll(a.plugin)
-    server.messenger.unregisterIncomingPluginChannel(a.plugin)
-    server.messenger.unregisterOutgoingPluginChannel(a.plugin)
+    release("advance scheduler sentinel") {
+      hostPlugin?.takeIf { it.isEnabled }?.let { server.scheduler.runTask(it, Runnable {}) }
+    }
+    release("unregister services") { server.servicesManager.unregisterAll(a.plugin) }
+    release("unregister plugin channels") {
+      server.messenger.unregisterIncomingPluginChannel(a.plugin)
+      server.messenger.unregisterOutgoingPluginChannel(a.plugin)
+    }
     // Chunk tickets and keyed boss bars survive disablePlugin — release them explicitly or they
     // keep chunks force-loaded / linger in the registry (and pin the old loader) across reloads.
-    for (world in server.worlds) world.removePluginChunkTickets(a.plugin)
+    release("release chunk tickets") {
+      for (world in server.worlds) world.removePluginChunkTickets(a.plugin)
+    }
     val ns = a.name.lowercase()
     // Bukkit namespaces plugin-created keys by lowercased plugin name. Collect before removing —
     // removeBossBar mutates the registry backing the iterator.
-    val staleBars = server.bossBars.asSequence().map { it.key }.filter { it.namespace == ns }
-    for (key in staleBars.toList()) server.removeBossBar(key)
+    release("remove keyed boss bars") {
+      val staleBars = server.bossBars.asSequence().map { it.key }.filter { it.namespace == ns }
+      for (key in staleBars.toList()) server.removeBossBar(key)
+    }
     // Recipes registered by the inner plugin (namespace == lowercased plugin name) also survive
     // disablePlugin. Left in place, the re-enabled plugin re-adds the same NamespacedKey, which the
     // server treats as a duplicate and silently ignores — so recipe edits would never take effect
     // across hot-reload. Collect first, then remove: removeRecipe mutates the recipe registry.
-    val staleRecipes = buildList {
-      val it = server.recipeIterator()
-      while (it.hasNext()) {
-        ((it.next() as? Keyed)?.key)?.takeIf { key -> key.namespace == ns }?.let { key -> add(key) }
+    release("remove keyed recipes") {
+      val staleRecipes = buildList {
+        val it = server.recipeIterator()
+        while (it.hasNext()) {
+          ((it.next() as? Keyed)?.key)
+              ?.takeIf { key -> key.namespace == ns }
+              ?.let { key -> add(key) }
+        }
       }
+      for (key in staleRecipes) server.removeRecipe(key)
     }
-    for (key in staleRecipes) server.removeRecipe(key)
-    commandRegistrar.clear()
-    permissionRegistrar.clear()
-    interruptPluginThreads(a.classLoader)
-    removeFromLookupNames(a.name)
+    release("clear command registrations") { commandRegistrar.clear() }
+    release("clear permission registrations") { permissionRegistrar.clear() }
+    release("interrupt plugin threads") { interruptPluginThreads(a.classLoader) }
+    release("remove from lookupNames") { removeFromLookupNames(a.name) }
     closeQuietly(a.classLoader)
+  }
+
+  /** Runs one teardown release step, downgrading any failure to a warning so the rest still run. */
+  private inline fun release(what: String, block: () -> Unit) {
+    try {
+      block()
+    } catch (
+        @Suppress("TooGenericExceptionCaught") // teardown must survive any single step failing
+        e: Exception) {
+      logger.warning("Teardown: failed to $what: $e")
+    }
   }
 
   // ── load helpers ────────────────────────────────────────────────────
