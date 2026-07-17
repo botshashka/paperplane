@@ -54,6 +54,13 @@ class DevPluginClassLoader(
 
   @Volatile private var initializedPlugin: JavaPlugin? = null
 
+  // Class names currently being resolved through the cross-plugin fallback on this thread. Guards
+  // against a pair of dev loaders that list each other's plugins recursing forever on a class
+  // neither can provide (A→B→A→…): a re-entry for a name already in flight short-circuits to
+  // "unresolved" so the search unwinds to a clean ClassNotFoundException instead of a stack
+  // overflow.
+  private val crossPluginInProgress = ThreadLocal.withInitial { HashSet<String>() }
+
   override fun loadClass(name: String, resolve: Boolean): Class<*> {
     synchronized(getClassLoadingLock(name)) {
       // 1. Check already loaded
@@ -75,6 +82,23 @@ class DevPluginClassLoader(
       } catch (_: ClassNotFoundException) {}
 
       // 4. Try other plugins' classloaders (cross-plugin visibility)
+      loadFromOtherPlugins(name)?.let {
+        return it
+      }
+
+      throw ClassNotFoundException(name)
+    }
+  }
+
+  /**
+   * Cross-plugin visibility (step 4): try every other plugin's classloader in turn. Reentrancy-
+   * guarded via [crossPluginInProgress] so mutually-referential dev loaders can't recurse
+   * indefinitely — the second entry for the same class on this thread returns null (unresolved).
+   */
+  private fun loadFromOtherPlugins(name: String): Class<*>? {
+    val inProgress = crossPluginInProgress.get()
+    if (!inProgress.add(name)) return null
+    try {
       for (plugin in pluginManager.plugins) {
         val cl = plugin.javaClass.classLoader
         if (cl === this) continue
@@ -82,8 +106,9 @@ class DevPluginClassLoader(
           return cl.loadClass(name)
         } catch (_: ClassNotFoundException) {}
       }
-
-      throw ClassNotFoundException(name)
+      return null
+    } finally {
+      inProgress.remove(name)
     }
   }
 
