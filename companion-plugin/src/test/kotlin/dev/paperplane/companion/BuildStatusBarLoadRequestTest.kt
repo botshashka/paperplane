@@ -634,10 +634,43 @@ class BuildStatusBarLoadRequestTest {
     )
   }
 
+  // ── Build-status poll: transitions + mtime read-skip guard ──────────
+
+  @Test
+  fun `pollBuildStatus reacts to state transitions across distinct mtimes`() {
+    writeStatus("building", mtime = 1_000L)
+    bar.pollBuildStatusForTest()
+    assertTrue(bar.blockWorldEdits, "building must block world edits")
+
+    writeStatus("ready", mtime = 2_000L)
+    bar.pollBuildStatusForTest()
+    assertFalse(bar.blockWorldEdits, "ready must unblock world edits")
+  }
+
+  @Test
+  fun `pollBuildStatus skips a status file whose mtime has not advanced`() {
+    writeStatus("building", mtime = 5_000L)
+    bar.pollBuildStatusForTest()
+    assertTrue(bar.blockWorldEdits)
+
+    // Content flips to "ready" but the mtime is unchanged: the poll short-circuits before reading,
+    // so the stale state persists. This is the read-skipping guard that keeps idle polls free —
+    // a genuine transition always bumps the mtime (the CLI rewrites via tmp + atomic move).
+    writeStatus("ready", mtime = 5_000L)
+    bar.pollBuildStatusForTest()
+    assertTrue(bar.blockWorldEdits, "an unchanged mtime must skip the re-read")
+  }
+
   // ── helpers ─────────────────────────────────────────────────────────
 
   private fun writeRequest(request: HostLoadRequest) {
     File(ppDir, "load-request.json").writeText(Gson().toJson(request))
+  }
+
+  private fun writeStatus(state: String, mtime: Long) {
+    val f = File(ppDir, "companion-status.json")
+    f.writeText("""{"state":"$state"}""")
+    check(f.setLastModified(mtime)) { "test platform could not set mtime on $f" }
   }
 
   /**

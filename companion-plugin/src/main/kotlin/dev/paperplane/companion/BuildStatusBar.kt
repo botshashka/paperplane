@@ -40,6 +40,9 @@ class BuildStatusBar(
   // All mutable state is accessed exclusively from the main server thread (Bukkit scheduler tasks
   // and event handlers are single-threaded on Paper outside Folia).
   private var lastBuildState: String? = null
+  // Last-seen mtime of companion-status.json, so idle polls skip the read+parse when it is
+  // unchanged.
+  private var lastStatusMtime: Long = 0L
   private var lastRequestId: String? = null
   private var inflightRequest = false
   private var hotSwapper: HotSwapper? = null
@@ -92,9 +95,18 @@ class BuildStatusBar(
 
   // ── Build status (companion-status.json) ───────────────────────────
 
+  /** Visible for tests: drives one status-file poll without the Bukkit scheduler. */
+  internal fun pollBuildStatusForTest() = pollBuildStatus()
+
   private fun pollBuildStatus() {
     val statusFile = File(serverRoot, ".paperplane/companion-status.json")
     if (!statusFile.exists()) return
+    // The CLI writes this file only on state transitions (tmp + atomic move), so an unchanged mtime
+    // means unchanged content. Skip the read+parse on idle polls — otherwise the whole file is
+    // re-read and re-deserialized ~4x/second for the entire "watching for changes" stretch.
+    val mtime = statusFile.lastModified()
+    if (mtime == lastStatusMtime) return
+    lastStatusMtime = mtime
     try {
       val json = gson.fromJson(statusFile.readText(), com.google.gson.JsonObject::class.java)
       val state = json.get("state")?.asString ?: return
