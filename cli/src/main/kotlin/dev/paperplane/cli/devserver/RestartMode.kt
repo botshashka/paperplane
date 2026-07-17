@@ -36,7 +36,11 @@ internal open class RestartMode(
     session.runMainWatchLoop(
         onChanged = { _ -> rebuild(state.metadata, state.paperJar) },
         healthCheck = {
-          if (!serverManager.isRunning()) {
+          // hasExitedUnexpectedly, not !isRunning(): rebuild() stops and restarts the server
+          // inside the watcher callback, and this check polls concurrently from the main loop —
+          // an intentional restart (or a build failure waiting for a fix with the server down)
+          // must not read as a crash.
+          if (serverManager.hasExitedUnexpectedly()) {
             session.ui.error("Server process exited unexpectedly")
             false
           } else true

@@ -333,6 +333,50 @@ class PaperServerManagerTest {
   }
 
   @Test
+  fun `hasExitedUnexpectedly is false before any start`() {
+    assertFalse(createManager().hasExitedUnexpectedly())
+  }
+
+  @Test
+  fun `hasExitedUnexpectedly tracks crash then requested stop then restart`() {
+    val manager = createManager()
+    File(tempDir, "server-25566").mkdirs()
+    val javaBin = File(File(System.getProperty("java.home"), "bin"), "java").absolutePath
+    val missingJar = File(tempDir, "missing.jar")
+
+    // The JVM starts and exits immediately (no such jar) — a death the manager did not request.
+    manager.start(missingJar, emptyList(), javaBin = javaBin)
+    waitUntil("process self-terminates") { !manager.isRunning() }
+    assertTrue(
+        manager.hasExitedUnexpectedly(),
+        "a self-terminated process is an unexpected exit",
+    )
+
+    // Requesting a stop — even on an already-dead process, as cleanup paths do — settles it.
+    manager.stop()
+    assertFalse(
+        manager.hasExitedUnexpectedly(),
+        "after stop() is requested the exit is no longer unexpected",
+    )
+
+    // A fresh start must reset the requested-stop flag so the next crash is caught again.
+    manager.start(missingJar, emptyList(), javaBin = javaBin)
+    waitUntil("restarted process self-terminates") { !manager.isRunning() }
+    assertTrue(
+        manager.hasExitedUnexpectedly(),
+        "start() must re-arm unexpected-exit detection",
+    )
+  }
+
+  private fun waitUntil(what: String, condition: () -> Boolean) {
+    val deadline = System.currentTimeMillis() + 30_000
+    while (!condition()) {
+      if (System.currentTimeMillis() > deadline) throw AssertionError("timed out waiting: $what")
+      Thread.sleep(50)
+    }
+  }
+
+  @Test
   fun `isRunning returns false when not started`() {
     val manager = createManager()
     assertFalse(manager.isRunning())

@@ -22,6 +22,7 @@ class FakePaperServerManager(
     var readyResult: Boolean = true,
     var runningResult: Boolean = true,
     var simulatedLogs: List<String> = emptyList(),
+    var exitedUnexpectedly: Boolean = false,
 ) : PaperServerManager(serverDir, downloader, ui) {
 
   /** Ordered log of every method call for assertions. */
@@ -74,6 +75,11 @@ class FakePaperServerManager(
   override fun isRunning(): Boolean {
     calls += "isRunning"
     return runningResult
+  }
+
+  override fun hasExitedUnexpectedly(): Boolean {
+    calls += "hasExitedUnexpectedly"
+    return exitedUnexpectedly
   }
 
   override fun waitForReady(): Boolean {

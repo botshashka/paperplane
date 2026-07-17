@@ -40,6 +40,11 @@ open class PaperServerManager(
 
   private var process: Process? = null
   private var processStdin: java.io.OutputStream? = null
+
+  // True from the moment a stop is requested until the next start. Distinguishes an intentional
+  // shutdown (mode-driven restarts, cleanup) from the process dying on its own — see
+  // [hasExitedUnexpectedly].
+  @Volatile private var stopRequested = false
   private val pluginsDir = File(serverDir, "plugins")
   private val gson = com.google.gson.Gson()
 
@@ -358,6 +363,9 @@ open class PaperServerManager(
     val proc = pb.start()
     process = proc
     processStdin = proc.outputStream
+    // Reset only after the fresh process is published, so a concurrent health check never pairs
+    // the old dead process with a cleared flag.
+    stopRequested = false
 
     Thread(
             {
@@ -372,6 +380,9 @@ open class PaperServerManager(
   }
 
   open fun stop() {
+    // Record the intent BEFORE the early returns: a crashed server that cleanup then stop()s
+    // must settle to "not unexpected" too.
+    stopRequested = true
     val proc = process ?: return
     if (!proc.isAlive) return
     val unit = java.util.concurrent.TimeUnit.SECONDS
@@ -435,6 +446,18 @@ open class PaperServerManager(
   }
 
   open fun isRunning(): Boolean = process?.isAlive == true
+
+  /**
+   * True only when the server process died WITHOUT [stop] having been requested — a crash, OOM
+   * kill, or external termination. Health checks must use this instead of `!isRunning()`: modes
+   * restart the server on purpose from watcher callbacks (restart-mode rebuilds, hot-reload leak
+   * restarts, post-fix restarts), and sampling `isRunning()` during that stop→start window reads an
+   * intentional restart as a server death and tears the whole session down.
+   */
+  open fun hasExitedUnexpectedly(): Boolean {
+    val proc = process ?: return false
+    return !proc.isAlive && !stopRequested
+  }
 
   open fun waitForReady(): Boolean {
     val proc = process ?: return false

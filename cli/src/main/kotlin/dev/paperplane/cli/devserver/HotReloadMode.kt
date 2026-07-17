@@ -126,7 +126,10 @@ internal open class HotReloadMode(
    */
   internal fun healthCheck(): Boolean {
     if (serverDownAwaitingFix) return true
-    if (!serverManager.isRunning()) {
+    // hasExitedUnexpectedly, not !isRunning(): the leak-limit restart stops and restarts the
+    // server inside the watcher callback while this check polls concurrently from the main loop —
+    // an intentional restart must not read as a crash.
+    if (serverManager.hasExitedUnexpectedly()) {
       session.ui.error("Server process exited unexpectedly")
       return false
     }

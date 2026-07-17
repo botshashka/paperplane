@@ -541,6 +541,41 @@ class HotReloadModeRenderTest {
     )
   }
 
+  @Test
+  fun `the health check stays quiet during an intentional stop-start window`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    // Mid-restart: the process is down (stop() ran, start() hasn't finished) but the stop was
+    // requested, so the manager reports no unexpected exit. Before the hasExitedUnexpectedly
+    // migration this state read as a crash and tore the session down mid-leak-restart.
+    val server =
+        FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui, runningResult = false)
+    val mode = TestableHotReloadMode(fixture.session, server)
+
+    assertTrue(
+        mode.healthCheck(),
+        "an intentional stop→start window must not be treated as a crash",
+    )
+    assertTrue(
+        fixture.terminal.writes.isEmpty(),
+        "a healthy check must emit nothing; got: ${fixture.terminal.writes}",
+    )
+  }
+
+  @Test
+  fun `the health check fails when the server dies without a requested stop`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    val server =
+        FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui, runningResult = false)
+    server.exitedUnexpectedly = true
+    val mode = TestableHotReloadMode(fixture.session, server)
+
+    assertFalse(mode.healthCheck(), "an unrequested process death must fail the health check")
+    assertTrue(
+        fixture.terminal.writes.any { it.contains("exited unexpectedly") },
+        "the crash must be reported; got: ${fixture.terminal.writes}",
+    )
+  }
+
   // ── Server log interleaving ────────────────────────────────────────
 
   @Test
