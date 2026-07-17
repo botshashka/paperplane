@@ -218,7 +218,9 @@ open class InnerPluginHost(
     // reassigned to point at that sentinel — pinning the inner plugin and its classloader for the
     // entire idle gap until something else is enqueued. Posting a host-owned no-op forces head to
     // advance to a task that captures only the long-lived companion, releasing the inner plugin.
-    hostPlugin?.let { server.scheduler.runTask(it, Runnable {}) }
+    // Skip while the companion itself is disabling (server shutdown): scheduling from a disabled
+    // plugin throws, and the whole scheduler is going away with the JVM anyway.
+    hostPlugin?.takeIf { it.isEnabled }?.let { server.scheduler.runTask(it, Runnable {}) }
     server.servicesManager.unregisterAll(a.plugin)
     server.messenger.unregisterIncomingPluginChannel(a.plugin)
     server.messenger.unregisterOutgoingPluginChannel(a.plugin)
