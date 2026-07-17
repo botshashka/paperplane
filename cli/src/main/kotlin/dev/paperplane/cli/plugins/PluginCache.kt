@@ -1,5 +1,6 @@
 package dev.paperplane.cli.plugins
 
+import dev.paperplane.cli.util.fileDigestHex
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -7,7 +8,6 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
-import java.security.MessageDigest
 
 /**
  * Manages downloaded plugin JARs under `.paperplane/cache/plugins/`. Cache key is
@@ -24,11 +24,6 @@ import java.security.MessageDigest
  */
 open class PluginCache(private val cacheDir: File) {
   private val client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()
-
-  private companion object {
-    /** Read-buffer size for SHA512 hashing. */
-    private const val SHA_BUFFER_BYTES = 64 * 1024
-  }
 
   /**
    * Returns the path a locked plugin *would* occupy in the cache. Does not create it and does not
@@ -139,18 +134,7 @@ open class PluginCache(private val cacheDir: File) {
   }
 
   /** Computes SHA512 of [file] as a 128-char lowercase hex string. */
-  open fun sha512(file: File): String {
-    val digest = MessageDigest.getInstance("SHA-512")
-    file.inputStream().use { input ->
-      val buf = ByteArray(SHA_BUFFER_BYTES)
-      while (true) {
-        val read = input.read(buf)
-        if (read <= 0) break
-        digest.update(buf, 0, read)
-      }
-    }
-    return digest.digest().joinToString("") { "%02x".format(it) }
-  }
+  open fun sha512(file: File): String = fileDigestHex(file, "SHA-512")
 
   private fun verifySha(file: File, expected: String): Boolean =
       sha512(file).equals(expected, ignoreCase = true)

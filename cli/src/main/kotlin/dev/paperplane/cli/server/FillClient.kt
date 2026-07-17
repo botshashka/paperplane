@@ -4,6 +4,7 @@ import com.google.gson.Gson
 import com.google.gson.JsonObject
 import dev.paperplane.cli.Versions
 import dev.paperplane.cli.plugins.atomicMoveOrFallback
+import dev.paperplane.cli.util.fileDigestHex
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -11,7 +12,6 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
-import java.security.MessageDigest
 import java.time.Duration
 
 /**
@@ -125,16 +125,5 @@ internal class FillClient(
     }
   }
 
-  private fun sha256Of(file: File): String {
-    val digest = MessageDigest.getInstance("SHA-256")
-    file.inputStream().use { input ->
-      val buffer = ByteArray(8192)
-      while (true) {
-        val read = input.read(buffer)
-        if (read < 0) break
-        digest.update(buffer, 0, read)
-      }
-    }
-    return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
-  }
+  private fun sha256Of(file: File): String = fileDigestHex(file, "SHA-256")
 }
