@@ -1,5 +1,6 @@
 package dev.paperplane.cli.server
 
+import dev.paperplane.cli.plugins.atomicMoveOrFallback
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.InputStream
@@ -42,11 +43,7 @@ object CompanionJarRewriter {
         }
       }
     }
-    java.nio.file.Files.move(
-        tmp.toPath(),
-        outputJar.toPath(),
-        java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-    )
+    atomicMoveOrFallback(tmp.toPath(), outputJar.toPath())
   }
 
   /** Copies [entry] into [jos], rewriting `plugin.yml` to carry the inherited depends. */
@@ -82,6 +79,11 @@ object CompanionJarRewriter {
    * Strips any existing `depend:` / `softdepend:` lines from [original] and appends new ones from
    * [depend] / [softdepend] (only when non-empty). Plain text rewrite — keeps the existing
    * companion plugin.yml shape intact (no YAML parser).
+   *
+   * Assumes the inline flow form (`depend: [A, B]`), which is the only form the bundled companion
+   * plugin.yml ever uses and the only form we re-inject. Block form (`depend:` followed by indented
+   * `- A` items) would leave the list items orphaned — safe today because that input never occurs,
+   * but if the companion plugin.yml ever switches to block style this must strip continuations too.
    *
    * Exposed for unit testing.
    */

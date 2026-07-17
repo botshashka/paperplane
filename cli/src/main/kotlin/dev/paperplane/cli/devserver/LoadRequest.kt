@@ -1,9 +1,8 @@
 package dev.paperplane.cli.devserver
 
 import com.google.gson.Gson
+import dev.paperplane.cli.plugins.atomicMoveOrFallback
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.util.UUID
 
 /**
@@ -43,7 +42,10 @@ data class LoadRequest(
       val target = File(ppDir, FILE_NAME)
       val tmp = File(ppDir, TMP_NAME)
       tmp.writeText(gson.toJson(request))
-      Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+      // Route through the shared helper (like every other IPC write) so a transient Windows sharing
+      // violation against the companion's reader retries as a non-atomic replace instead of
+      // throwing.
+      atomicMoveOrFallback(tmp.toPath(), target.toPath())
     }
 
     fun requestPath(serverDir: File): File = File(serverDir, ".paperplane/$FILE_NAME")
