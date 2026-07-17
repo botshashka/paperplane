@@ -33,8 +33,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "==> Building CLI fat JAR..."
-"$REPO_ROOT/gradlew" :cli:shadowJar
+echo "==> Building CLI fat JAR and publishing the Gradle plugin to mavenLocal..."
+# The scaffolded project applies the dev.paperplane Gradle plugin, which `ppl create` wires up to
+# resolve from mavenLocal (a pluginManagement block is only emitted when the plugin is present
+# there). A fresh CI runner has an empty mavenLocal, so publish it or the first build fails with
+# "Plugin [id: 'dev.paperplane'] was not found".
+"$REPO_ROOT/gradlew" :cli:shadowJar :gradle-plugin:publishToMavenLocal
 
 echo "==> Scaffolding test plugin in $WORK_DIR (Paper: $PAPER_VERSION)..."
 cd "$WORK_DIR"
