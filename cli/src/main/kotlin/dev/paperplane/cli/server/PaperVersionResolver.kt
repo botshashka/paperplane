@@ -1,14 +1,7 @@
 package dev.paperplane.cli.server
 
-import com.google.gson.Gson
-import com.google.gson.JsonObject
 import dev.paperplane.cli.Versions
-import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URI
 import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
 import java.time.Duration
 
 class PaperVersionResolver(
@@ -19,7 +12,7 @@ class PaperVersionResolver(
     private const val TIMEOUT_SECONDS = 5L
   }
 
-  private val gson = Gson()
+  private val fill = FillClient(client, "Paper", Duration.ofSeconds(TIMEOUT_SECONDS))
 
   @Volatile private var cachedVersions: List<String>? = null
 
@@ -44,15 +37,12 @@ class PaperVersionResolver(
     }
     val result =
         try {
-          val json = gson.fromJson(fetch(baseUrl), JsonObject::class.java)
           // Fill v3 groups versions in a map keyed by minor line, each list ordered newest-first:
           // {"versions":{"1.21":["1.21.11","1.21.10",...],"1.20":[...]}}. Flatten, filter to
           // supported stable versions, and sort ascending (latest last) since the API order is
           // both grouped and descending.
-          json
-              .getAsJsonObject("versions")
-              .entrySet()
-              .flatMap { (_, list) -> list.asJsonArray.map { it.asString } }
+          fill
+              .parseVersionsMap(fill.fetch(baseUrl))
               .filter {
                 Versions.apiVersion(it) in Versions.SUPPORTED_API_VERSIONS && !it.contains("-")
               }
@@ -62,19 +52,5 @@ class PaperVersionResolver(
         }
     if (result.isNotEmpty()) cachedVersions = result
     return result
-  }
-
-  private fun fetch(url: String): String {
-    val request =
-        HttpRequest.newBuilder()
-            .uri(URI.create(url))
-            .header("User-Agent", Versions.userAgent())
-            .timeout(Duration.ofSeconds(TIMEOUT_SECONDS))
-            .build()
-    val response = client.send(request, HttpResponse.BodyHandlers.ofString())
-    if (response.statusCode() != HttpURLConnection.HTTP_OK) {
-      throw IOException("Paper API request failed: HTTP ${response.statusCode()} for $url")
-    }
-    return response.body()
   }
 }

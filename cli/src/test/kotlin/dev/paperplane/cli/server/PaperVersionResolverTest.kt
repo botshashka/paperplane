@@ -1,9 +1,9 @@
 package dev.paperplane.cli.server
 
 import com.google.gson.Gson
-import com.sun.net.httpserver.HttpServer
 import dev.paperplane.cli.Versions
-import java.net.InetSocketAddress
+import dev.paperplane.cli.testing.LocalHttpServer
+import dev.paperplane.cli.testing.readTestResource
 import java.net.http.HttpClient
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -12,49 +12,34 @@ import org.junit.jupiter.api.Test
 
 class PaperVersionResolverTest {
 
-  private lateinit var server: HttpServer
+  private lateinit var http: LocalHttpServer
   private lateinit var client: HttpClient
-  private var baseUrl = ""
   private val gson = Gson()
 
   @BeforeEach
   fun setUp() {
-    server = HttpServer.create(InetSocketAddress(0), 0)
-    server.start()
-    val port = server.address.port
-    baseUrl = "http://localhost:$port"
+    http = LocalHttpServer()
     client = HttpClient.newHttpClient()
   }
 
   @AfterEach
   fun tearDown() {
-    server.stop(0)
+    http.stop()
   }
 
-  private fun resolver(): PaperVersionResolver = PaperVersionResolver(client, baseUrl)
-
-  private fun respond(body: String) {
-    server.createContext("/") { exchange ->
-      exchange.sendResponseHeaders(200, body.length.toLong())
-      exchange.responseBody.use { it.write(body.toByteArray()) }
-    }
-  }
+  private fun resolver(): PaperVersionResolver = PaperVersionResolver(client, http.baseUrl)
 
   /** Builds a Fill v3-shaped project response (versions grouped by minor line) from a flat list. */
   private fun respondVersions(vararg versions: String) {
     val grouped = versions.groupBy { it.split(".").take(2).joinToString(".") }
-    respond(gson.toJson(mapOf("versions" to grouped)))
+    http.serveText("/", gson.toJson(mapOf("versions" to grouped)))
   }
-
-  private fun resource(path: String): String =
-      checkNotNull(javaClass.getResourceAsStream(path)) { "missing test resource $path" }
-          .use { it.readBytes().decodeToString() }
 
   // ── real captured Fill v3 responses (golden) ──────────────────────
 
   @Test
   fun `resolveLatest parses real Fill v3 project response shape`() {
-    respond(resource("/fill/paper-project.json"))
+    http.serveText("/", readTestResource("/fill/paper-project.json"))
 
     // Latest supported stable line in the captured payload.
     assertEquals("1.21.11", resolver().resolveLatest())
@@ -62,7 +47,7 @@ class PaperVersionResolverTest {
 
   @Test
   fun `resolveRecent parses real Fill v3 project response shape`() {
-    respond(resource("/fill/paper-project.json"))
+    http.serveText("/", readTestResource("/fill/paper-project.json"))
 
     assertEquals(listOf("1.21.9", "1.21.10", "1.21.11"), resolver().resolveRecent(3))
   }
@@ -111,7 +96,7 @@ class PaperVersionResolverTest {
 
   @Test
   fun `resolveLatest returns fallback on non-200 response`() {
-    server.createContext("/") { exchange -> exchange.sendResponseHeaders(500, -1) }
+    http.serveStatus("/", 500)
 
     assertEquals(Versions.PAPER_FALLBACK, resolver().resolveLatest())
   }
@@ -119,14 +104,14 @@ class PaperVersionResolverTest {
   @Test
   fun `resolveLatest returns fallback on connection failure`() {
     // Stop the server to simulate connection failure
-    server.stop(0)
+    http.stop()
 
     assertEquals(Versions.PAPER_FALLBACK, resolver().resolveLatest())
   }
 
   @Test
   fun `resolveLatest returns fallback on malformed JSON`() {
-    respond("not json")
+    http.serveText("/", "not json")
 
     assertEquals(Versions.PAPER_FALLBACK, resolver().resolveLatest())
   }
@@ -190,14 +175,14 @@ class PaperVersionResolverTest {
 
   @Test
   fun `resolveRecent returns fallback list on connection failure`() {
-    server.stop(0)
+    http.stop()
 
     assertEquals(listOf(Versions.PAPER_FALLBACK), resolver().resolveRecent())
   }
 
   @Test
   fun `resolveRecent returns fallback list on non-200 response`() {
-    server.createContext("/") { exchange -> exchange.sendResponseHeaders(500, -1) }
+    http.serveStatus("/", 500)
 
     assertEquals(listOf(Versions.PAPER_FALLBACK), resolver().resolveRecent())
   }
