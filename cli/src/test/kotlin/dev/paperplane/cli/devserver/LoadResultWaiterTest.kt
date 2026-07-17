@@ -144,6 +144,19 @@ class LoadResultWaiterTest {
   // ── Server death ────────────────────────────────────────────────────
 
   @Test
+  fun `a durable matching result wins over a simultaneously-dead server`() {
+    // The host wrote the result and the process then died within the same poll window — the reload
+    // genuinely completed, so the on-disk result must be reported, not ServerExited.
+    writeComplete(LoadReport(requestId = "r1", status = "ok", strategy = "fresh", pluginName = "P"))
+
+    val result = await("r1", timeoutMs = 1000, alive = false)
+
+    val ok = assertInstanceOf(LoadWaitResult.Ok::class.java, result)
+    assertEquals("r1", ok.report!!.requestId)
+    assertNoClaimLeftovers()
+  }
+
+  @Test
   fun `dead server aborts the wait immediately with ServerExited`() {
     val start = System.currentTimeMillis()
     val result = await("r1", timeoutMs = 10_000, alive = false)

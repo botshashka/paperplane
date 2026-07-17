@@ -63,13 +63,16 @@ internal class PollingLoadResultWaiter(private val ui: TerminalUI) : LoadResultW
     val failed = LoadRequest.failedFlag(serverDir)
     val start = System.currentTimeMillis()
     while (System.currentTimeMillis() - start < timeoutMs) {
-      if (!isAlive()) return LoadWaitResult.ServerExited
+      // Read the durable result flags BEFORE checking liveness: if the host wrote a matching result
+      // and the process then died within the same poll window, the reload genuinely completed and
+      // that on-disk result must win over the subsequent process death.
       readComplete(complete, expectedRequestId)?.let {
         return it
       }
       readFailed(failed, expectedRequestId)?.let {
         return it
       }
+      if (!isAlive()) return LoadWaitResult.ServerExited
       Thread.sleep(POLL_INTERVAL_MS)
     }
     return LoadWaitResult.TimedOut
