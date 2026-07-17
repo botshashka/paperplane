@@ -9,6 +9,7 @@ import java.lang.instrument.Instrumentation
 import java.lang.ref.WeakReference
 import java.util.jar.JarFile
 import java.util.logging.Logger
+import org.bukkit.Keyed
 import org.bukkit.Server
 import org.bukkit.event.HandlerList
 import org.bukkit.plugin.PluginDescriptionFile
@@ -105,8 +106,11 @@ open class InnerPluginHost(
 
   /**
    * Top-level entry point: handle a [LoadRequest]. First request loads; subsequent requests reload.
-   * Tear-down on failure does NOT happen automatically — the previous plugin remains loaded if
-   * reload fails (matches the existing rollback semantics).
+   *
+   * Rollback semantics: a reload rejected BEFORE teardown (leak-limit refusal, NMS plugin, missing
+   * or invalid `plugin.yml`) leaves the previous plugin fully loaded. Once teardown has run, the
+   * old plugin is gone; if the subsequent load then fails, the host is left unloaded (isLoaded() ==
+   * false) rather than pointing at the dead instance — the next request loads fresh.
    */
   open fun handleRequest(request: HostLoadRequest): HostLoadResult {
     val start = System.currentTimeMillis()
@@ -172,7 +176,7 @@ open class InnerPluginHost(
 
     if (usesNmsClasses(a.plugin)) {
       return HostLoadResult.Failed(
-          "Plugin '${a.name}' uses NMS/CraftBukkit classes — skipping hot-reload",
+          "Plugin '${a.name}' bundles NMS/CraftBukkit classes — skipping hot-reload",
           0,
       )
     }
@@ -191,6 +195,13 @@ open class InnerPluginHost(
 
     teardown(a)
     leakedClassLoaders.add(WeakReference(a.classLoader))
+    // The old plugin is now disabled and its loader closed — it is genuinely gone. Drop [active] to
+    // null BEFORE attempting the new load so that if [loadPlugin]/[initializeAndRegister] throw,
+    // the
+    // host is left honestly unloaded (isLoaded() == false, current() == null) rather than pointing
+    // at a dead instance, and a retry routes through loadFresh() instead of tearing this same dead
+    // loader down again and re-adding it to leakedClassLoaders (which would double-count the leak).
+    active = null
 
     val (plugin, classLoader) = loadPlugin(request, description)
     initializeAndRegister(plugin, description)
@@ -232,6 +243,17 @@ open class InnerPluginHost(
     // removeBossBar mutates the registry backing the iterator.
     val staleBars = server.bossBars.asSequence().map { it.key }.filter { it.namespace == ns }
     for (key in staleBars.toList()) server.removeBossBar(key)
+    // Recipes registered by the inner plugin (namespace == lowercased plugin name) also survive
+    // disablePlugin. Left in place, the re-enabled plugin re-adds the same NamespacedKey, which the
+    // server treats as a duplicate and silently ignores — so recipe edits would never take effect
+    // across hot-reload. Collect first, then remove: removeRecipe mutates the recipe registry.
+    val staleRecipes = buildList {
+      val it = server.recipeIterator()
+      while (it.hasNext()) {
+        ((it.next() as? Keyed)?.key)?.takeIf { key -> key.namespace == ns }?.let { key -> add(key) }
+      }
+    }
+    for (key in staleRecipes) server.removeRecipe(key)
     commandRegistrar.clear()
     permissionRegistrar.clear()
     interruptPluginThreads(a.classLoader)
@@ -260,8 +282,9 @@ open class InnerPluginHost(
 
     val mainClass = classLoader.loadClass(description.main)
     val plugin = mainClass.getDeclaredConstructor().newInstance() as JavaPlugin
-    // Transition-window fallback: while the ASM patcher still exists (removed in Commit 3), the
-    // patched ctor skips CPCL init. Also guards hypothetical Paper builds where init never fires.
+    // Fallback for the unlikely case where the JavaPlugin ctor didn't drive CPCL init (a Paper
+    // build
+    // where the ConfiguredPluginClassLoader init hook never fires) — wire the plugin up explicitly.
     if (classLoader.getPlugin() == null) classLoader.init(plugin)
     check(classLoader.getPlugin() === plugin) {
       "Inner plugin was not initialized by its classloader"
@@ -374,6 +397,12 @@ open class InnerPluginHost(
 
   // ── safety nets ─────────────────────────────────────────────────────
 
+  /**
+   * True only when the plugin *bundles* (shades) NMS/CraftBukkit classes — i.e. its own loader
+   * defines them, which would clash on reload. A plugin that merely *references* NMS resolves those
+   * classes through Paper's loader, so this returns false and the plugin hot-reloads normally (the
+   * leak detector remains the backstop for anything that pins the old loader).
+   */
   protected open fun usesNmsClasses(plugin: JavaPlugin): Boolean {
     val inst = AgentAccess.instrumentation() ?: return false
     return containsNmsClasses(inst, plugin.javaClass.classLoader)
@@ -527,6 +556,9 @@ open class InnerPluginHost(
     if (survivors.isEmpty()) return
     val inst = AgentAccess.instrumentation()
     val allLoaded = inst?.allLoadedClasses
+    // Snapshot every thread's stack once, not once per survivor — getAllStackTraces() walks the
+    // whole live thread set and is far too costly to repeat inside the loop below.
+    val allThreads = Thread.getAllStackTraces().keys
     logger.warning("── leak diagnostics: ${survivors.size} surviving loader(s) ──")
     survivors.forEachIndexed { i, cl ->
       val tag = "loader#$i ${cl::class.java.simpleName}@${System.identityHashCode(cl).toString(16)}"
@@ -535,7 +567,7 @@ open class InnerPluginHost(
       logger.warning(
           "  $tag — ${classes.size} class(es) still loaded${if (sample.isNotEmpty()) ": $sample" else ""}"
       )
-      val threads = Thread.getAllStackTraces().keys.filter { it.contextClassLoader === cl }
+      val threads = allThreads.filter { it.contextClassLoader === cl }
       if (threads.isNotEmpty()) {
         logger.warning("  $tag — ${threads.size} thread(s) with this contextClassLoader:")
         threads.forEach { t ->
@@ -675,7 +707,8 @@ data class HostLoadRequest(
 )
 
 /**
- * One attributed source of a surviving classloader leak. `kind` ∈ thread|scheduler|command|unknown.
+ * One attributed source of a surviving classloader leak. `kind` is `thread` or `scheduler` (the two
+ * pinners [buildAttribution] identifies); the `unknown` default is only a deserialization fallback.
  */
 data class LeakAttribution(val kind: String = "unknown", val detail: String = "")
 

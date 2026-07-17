@@ -1,15 +1,22 @@
 package dev.paperplane.companion.host
 
 import java.io.File
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.jar.JarEntry
 import java.util.jar.JarOutputStream
+import java.util.logging.Handler
+import java.util.logging.LogRecord
 import java.util.logging.Logger
+import org.bukkit.Material
 import org.bukkit.NamespacedKey
 import org.bukkit.Server
 import org.bukkit.boss.BarColor
 import org.bukkit.boss.BarStyle
 import org.bukkit.command.SimpleCommandMap
+import org.bukkit.inventory.ItemStack
+import org.bukkit.inventory.ShapedRecipe
 import org.bukkit.plugin.PluginManager
 import org.bukkit.plugin.SimplePluginManager
 import org.bukkit.plugin.java.JavaPlugin
@@ -190,6 +197,38 @@ class InnerPluginHostFullLoadTest {
     )
   }
 
+  @Test
+  fun `teardown removes the plugin's keyed recipes but leaves foreign ones`() {
+    host.handleRequest(makeLoadRequest("RecipeCook"))
+    val inner = host.current()!!
+    val innerKey = NamespacedKey(inner, "gadget")
+    server.addRecipe(
+        ShapedRecipe(innerKey, ItemStack(Material.DIAMOND)).apply {
+          shape("X")
+          setIngredient('X', Material.STICK)
+        }
+    )
+    val foreignKey = NamespacedKey.fromString("other:foreign_gadget")!!
+    server.addRecipe(
+        ShapedRecipe(foreignKey, ItemStack(Material.DIAMOND)).apply {
+          shape("Y")
+          setIngredient('Y', Material.STICK)
+        }
+    )
+
+    host.shutdown()
+
+    assertNull(
+        server.getRecipe(innerKey),
+        "the inner plugin's keyed recipes must be removed on teardown — a duplicate key on the " +
+            "next reload is silently ignored, so recipe edits would never take effect",
+    )
+    assertNotNull(
+        server.getRecipe(foreignKey),
+        "recipes from other namespaces must be untouched",
+    )
+  }
+
   // ── Reload: old disabled + new instance ─────────────────────────────
 
   @Test
@@ -317,6 +356,55 @@ class InnerPluginHostFullLoadTest {
   // ── Failed load leaves no residue ───────────────────────────────────
 
   @Test
+  fun `reload failure after teardown leaves host unloaded and recovers via fresh load`() {
+    host.handleRequest(makeLoadRequest("ReloadBreak", classSuffix = "V1"))
+    assertTrue(host.isLoaded())
+    assertEquals(0, TestInnerPluginCounters.disableCount.get())
+
+    // Reload with a main class that throws from its constructor: readDescription + validate pass,
+    // so teardown runs (old plugin gone), then loadPlugin's newInstance throws — the post-teardown
+    // failure window. The host must be left honestly unloaded, not pointing at the dead instance.
+    val result = host.handleRequest(explodingRequest("ReloadBreak"))
+
+    assertTrue(
+        result is HostLoadResult.Failed,
+        "a post-teardown load failure must report Failed, got: $result",
+    )
+    assertFalse(host.isLoaded(), "a failed reload after teardown must leave the host unloaded")
+    assertNull(host.current())
+    assertEquals(
+        1,
+        TestInnerPluginCounters.disableCount.get(),
+        "the old plugin's onDisable ran exactly once during teardown",
+    )
+
+    // Recovery: because active was reset to null, the next good request routes through loadFresh
+    // (no second teardown of the already-dead loader) and succeeds.
+    val recovered = host.handleRequest(makeLoadRequest("ReloadBreak", classSuffix = "V3"))
+    assertTrue(
+        recovered is HostLoadResult.Ok,
+        "host must recover via a fresh load after a failed reload, got: $recovered",
+    )
+    assertTrue(host.isLoaded())
+    assertEquals(1, TestInnerPluginCounters.disableCount.get(), "no extra teardown on recovery")
+  }
+
+  @Test
+  fun `a plugin_yml naming a missing main class fails cleanly instead of crashing`() {
+    // The user's plugin.yml points at a class that isn't in the build output (typo'd or renamed
+    // main). loadClass misses in our URLs, in the parent, and across every other plugin's loader —
+    // that search must terminate in a readable ClassNotFoundException, not a StackOverflowError.
+    val result = host.handleRequest(brokenMainRequest("MissingMain"))
+
+    assertTrue(result is HostLoadResult.Failed, "a missing main class must report Failed: $result")
+    assertTrue(
+        (result as HostLoadResult.Failed).message.contains("NoSuchInnerPlugin"),
+        "the failure must name the class that could not be found, got: ${result.message}",
+    )
+    assertFalse(host.isLoaded())
+  }
+
+  @Test
   fun `load failure leaves host unloaded`() {
     val bogus =
         HostLoadRequest(
@@ -328,6 +416,109 @@ class InnerPluginHostFullLoadTest {
     assertTrue(result is HostLoadResult.Failed)
     assertFalse(host.isLoaded())
     assertNull(host.current())
+  }
+
+  // ── Verbose leak diagnostics (LeakDiagnosticsMode.FULL path) ────────
+
+  @Test
+  fun `dumpVerboseDiagnostics is a no-op when nothing has leaked`() {
+    withCapturedLog { captured ->
+      host.handleRequest(makeLoadRequest("NoSurvivors"))
+
+      host.dumpVerboseDiagnostics()
+
+      assertTrue(
+          captured.none { it.contains("leak diagnostics") },
+          "a single load leaks nothing — the dump must stay silent, got: $captured",
+      )
+    }
+  }
+
+  @Test
+  fun `dumpVerboseDiagnostics reports each surviving leaked loader`() {
+    withCapturedLog { captured ->
+      val v1 = threeGenerationsPinningTheFirst()
+
+      host.dumpVerboseDiagnostics()
+
+      assertTrue(
+          captured.any { it.contains("leak diagnostics") && it.contains("surviving loader") },
+          "must announce the surviving loader count, got: $captured",
+      )
+      assertTrue(captured.any { it.contains("loader#0") }, "must tag each survivor")
+      assertTrue(captured.any { it.contains("pluginManager.plugins scan") })
+      assertTrue(captured.any { it.contains("commandMap.knownCommands scan") })
+      assertTrue(captured.any { it.contains("getInitiatedClasses") })
+      assertNotNull(v1, "keep the pinning reference alive until after the dump")
+    }
+  }
+
+  @Test
+  fun `dumpVerboseDiagnostics attributes a thread still rooted in a surviving loader`() {
+    withCapturedLog { captured ->
+      val v1 = threeGenerationsPinningTheFirst()
+      // Start the pinning thread AFTER the reloads so teardown's interruptPluginThreads can't
+      // reap it; it holds the old loader as its contextClassLoader exactly like a real leak.
+      val release = CountDownLatch(1)
+      val pinner =
+          Thread { release.await() }
+              .apply {
+                name = "pinning-thread"
+                isDaemon = true
+                contextClassLoader = v1.javaClass.classLoader
+                start()
+              }
+      try {
+        host.dumpVerboseDiagnostics()
+
+        assertTrue(
+            captured.any { it.contains("thread(s) with this contextClassLoader") },
+            "a thread rooted in the survivor must be attributed, got: $captured",
+        )
+        assertTrue(captured.any { it.contains("pinning-thread") }, "must name the pinning thread")
+      } finally {
+        release.countDown()
+        pinner.join(1_000)
+      }
+    }
+  }
+
+  /**
+   * Drives three load generations and returns the first plugin instance. Holding it strongly pins
+   * its classloader, so it survives [checkForLeaks]'s GC and lands in the survivor set — the
+   * most-recently-torn-down loader is excluded by the dump's `dropLast(1)`, hence three
+   * generations.
+   */
+  private fun threeGenerationsPinningTheFirst(): JavaPlugin {
+    host.handleRequest(makeLoadRequest("VerboseDump", classSuffix = "V1"))
+    val v1 = host.current()!!
+    host.handleRequest(makeLoadRequest("VerboseDump", classSuffix = "V2"))
+    host.handleRequest(makeLoadRequest("VerboseDump", classSuffix = "V3"))
+    return v1
+  }
+
+  /** Runs [body] with a handler capturing everything the host logs, then detaches it. */
+  private fun withCapturedLog(body: (List<String>) -> Unit) {
+    val logger = Logger.getLogger("InnerPluginHostFullLoadTest")
+    val handler = CapturingHandler()
+    logger.addHandler(handler)
+    try {
+      body(handler.messages)
+    } finally {
+      logger.removeHandler(handler)
+    }
+  }
+
+  private class CapturingHandler : Handler() {
+    val messages: MutableList<String> = CopyOnWriteArrayList()
+
+    override fun publish(record: LogRecord) {
+      messages += record.message
+    }
+
+    override fun flush() {}
+
+    override fun close() {}
   }
 
   // ── helpers ─────────────────────────────────────────────────────────
@@ -366,6 +557,67 @@ class InnerPluginHostFullLoadTest {
 
     return HostLoadRequest(
         requestId = "$pluginName-$classSuffix-${System.nanoTime()}",
+        jarPath = jar.absolutePath,
+        pluginName = pluginName,
+    )
+  }
+
+  /**
+   * Builds a JAR whose main class ([TestExplodingPlugin]) loads fine but throws from its
+   * constructor, so `readDescription` + `validate` pass and teardown runs, then `loadPlugin`'s
+   * `newInstance` throws — reproducing the post-teardown reload-failure window (an edited main
+   * class that blows up on instantiation).
+   */
+  private fun explodingRequest(pluginName: String): HostLoadRequest {
+    val jar = File(tempDir, "$pluginName-boom.jar")
+    val classBytes = readClassBytes(TestExplodingPlugin::class.java)
+    JarOutputStream(jar.outputStream()).use { jos ->
+      val internalName = TestExplodingPlugin::class.java.name.replace('.', '/') + ".class"
+      jos.putNextEntry(JarEntry(internalName))
+      jos.write(classBytes)
+      jos.closeEntry()
+
+      jos.putNextEntry(JarEntry("plugin.yml"))
+      jos.write(
+          """
+          name: $pluginName
+          main: ${TestExplodingPlugin::class.java.name}
+          version: 1.0
+          """
+              .trimIndent()
+              .toByteArray(),
+      )
+      jos.closeEntry()
+    }
+    return HostLoadRequest(
+        requestId = "$pluginName-boom-${System.nanoTime()}",
+        jarPath = jar.absolutePath,
+        pluginName = pluginName,
+    )
+  }
+
+  /**
+   * Builds a JAR with a valid `plugin.yml` naming a main class that is NOT in the JAR, so
+   * `readDescription` + `validate` pass but `loadPlugin`'s `loadClass` misses everywhere — the
+   * class-not-found path through the cross-plugin fallback.
+   */
+  private fun brokenMainRequest(pluginName: String): HostLoadRequest {
+    val jar = File(tempDir, "$pluginName-broken.jar")
+    JarOutputStream(jar.outputStream()).use { jos ->
+      jos.putNextEntry(JarEntry("plugin.yml"))
+      jos.write(
+          """
+          name: $pluginName
+          main: dev.paperplane.companion.host.NoSuchInnerPlugin
+          version: 1.0
+          """
+              .trimIndent()
+              .toByteArray(),
+      )
+      jos.closeEntry()
+    }
+    return HostLoadRequest(
+        requestId = "$pluginName-broken-${System.nanoTime()}",
         jarPath = jar.absolutePath,
         pluginName = pluginName,
     )
@@ -417,6 +669,14 @@ class InnerPluginHostFullLoadTest {
     }
 
     override fun getPlugin(name: String): org.bukkit.plugin.Plugin? = lookupNames[name.lowercase()]
+
+    /**
+     * Resolve from our own map, exactly like Paper's instance manager does. This override is load-
+     * bearing, not a convenience: `SimplePluginManager.getPlugins()` delegates to whatever sits in
+     * `paperPluginManager` — which is this object — so inheriting the `by spm` delegation would
+     * bounce the two off each other until the stack overflows.
+     */
+    override fun getPlugins(): Array<org.bukkit.plugin.Plugin> = lookupNames.values.toTypedArray()
   }
 }
 
@@ -449,5 +709,16 @@ class TestInnerPlugin : JavaPlugin() {
 
   override fun onDisable() {
     TestInnerPluginCounters.disableCount.incrementAndGet()
+  }
+}
+
+/**
+ * A fixture whose constructor throws after the `JavaPlugin` super-ctor has run — models an edited
+ * main class that compiles and loads but blows up on instantiation, driving the host's
+ * post-teardown reload-failure path.
+ */
+class TestExplodingPlugin : JavaPlugin() {
+  init {
+    error("boom in inner plugin constructor")
   }
 }
