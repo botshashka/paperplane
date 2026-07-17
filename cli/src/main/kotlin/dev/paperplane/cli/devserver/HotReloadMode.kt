@@ -18,9 +18,6 @@ internal open class HotReloadMode(
   internal companion object {
     private const val RELOAD_TIMEOUT_MS = 10_000L
 
-    /** Host-attached `action` that tells the CLI to restart the server to reclaim leaked memory. */
-    private const val RESTART_ACTION = "restart"
-
     /**
      * Pure helper: build a [LoadRequest] from a rebuild's inputs. Extracted so the strategy
      * selection (HOTSWAP vs DIRECTORY vs JAR) can be tested without standing up a full
@@ -67,10 +64,27 @@ internal open class HotReloadMode(
           changedClasses = changedClasses,
       )
     }
+
+    /**
+     * Whether [triggerReload] must (re)build the plugin JAR before staging it.
+     *
+     * The staged JAR is load-bearing ONLY in JAR-fallback mode — no fast-metadata classes dir,
+     * which is the one case [buildLoadRequest] emits empty `classesDirs` and the companion's
+     * `buildClassLoaderUrls` actually loads the JAR. A rebuild ran `classes` (compileOnly), never
+     * `jar`, so in that mode the artifact at `metadata.jarPath` would otherwise be the stale
+     * first-build JAR and the reload would silently run old code. In directory/hotswap mode the JAR
+     * is never added to the loader, so the extra `jar` build is skipped to keep reloads fast. Also
+     * rebuild when the JAR is simply missing (first reload before any `jar` task has run).
+     */
+    internal fun needsJarBuild(fastMeta: ProjectMetadata?, builtJarExists: Boolean): Boolean =
+        !builtJarExists || fastMeta == null || fastMeta.classesDir.isEmpty()
   }
 
   private var buildSnapshot: BuildSnapshot? = null
-  private var cachedFastMeta: ProjectMetadata? = null
+  // Fast-path metadata (classes dirs for directory/hotswap reloads), fetched once. Internal so
+  // tests
+  // can seed it to exercise the JAR-fallback vs directory decision in [triggerReload].
+  internal var cachedFastMeta: ProjectMetadata? = null
   // Baseline for the next rebuild's class diff. Internal so tests can verify it stays current.
   internal var lastPostBuildSnapshot: Map<String, Long>? = null
   private val javaRuntime by lazy { session.resolveJava() }
@@ -280,16 +294,20 @@ internal open class HotReloadMode(
 
   /**
    * Writes the reload request and returns its requestId so [waitAndReport] can match the result.
+   * Internal so tests can drive the JAR-(re)build decision directly.
    */
-  private fun triggerReload(metadata: ProjectMetadata, changes: ClassChanges): String {
+  internal fun triggerReload(metadata: ProjectMetadata, changes: ClassChanges): String {
     val ppDir = File(serverManager.serverDir, ".paperplane")
     ppDir.mkdirs()
     LoadRequest.completeFlag(serverManager.serverDir).delete()
     LoadRequest.failedFlag(serverManager.serverDir).delete()
 
-    // Always restage the user JAR so the host can fall back to a JAR load if directory load fails.
+    // Restage the user JAR. It is load-bearing only in JAR-fallback mode, and rebuild() ran
+    // `classes`, not `jar`, so (re)build the artifact whenever the host will actually load it —
+    // otherwise a stale first-build JAR is staged and the reload silently runs old code. See
+    // [needsJarBuild].
     val builtJar = File(session.projectDir, metadata.jarPath)
-    if (!builtJar.exists()) session.gradle.build()
+    if (needsJarBuild(cachedFastMeta, builtJar.exists())) session.gradle.build()
     val stagedJarPath = serverManager.stagePlugin(builtJar)
 
     val request = buildLoadRequest(metadata, cachedFastMeta, changes, stagedJarPath)
@@ -355,7 +373,8 @@ internal open class HotReloadMode(
     // belt-and-braces, on the refusal Failed sent if a prior tripping Ok was missed.
     // Either way, restart the server to reclaim the leaked memory. Runs inline in the
     // serialized watcher callback, so no concurrent rebuild can interleave.
-    return if (reportAction(result) == RESTART_ACTION) restartForLeaks(metadata) else phaseEnd
+    return if (reportAction(result) == LoadReport.ACTION_RESTART) restartForLeaks(metadata)
+    else phaseEnd
   }
 
   /** The host-attached `action` on the result's report, if any (Ok and Failed both carry one). */

@@ -21,10 +21,19 @@ data class LoadReport(
     val message: String? = null,
     val leaks: LeakSummary? = null,
     val action: String? = null,
-)
+) {
+  companion object {
+    /**
+     * [action] value asking the CLI to restart the server (mirror of
+     * `HostLoadReport.ACTION_RESTART`).
+     */
+    const val ACTION_RESTART = "restart"
+  }
+}
 
 /**
- * One attributed source of a surviving classloader leak. `kind` ∈ thread|scheduler|command|unknown.
+ * One attributed source of a surviving classloader leak. The companion emits `thread` or
+ * `scheduler`; the `unknown` default is only a deserialization fallback.
  */
 data class LeakAttribution(val kind: String = "unknown", val detail: String = "")
 

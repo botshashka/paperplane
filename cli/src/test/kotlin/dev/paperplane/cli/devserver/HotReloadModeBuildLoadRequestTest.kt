@@ -3,6 +3,7 @@ package dev.paperplane.cli.devserver
 import dev.paperplane.cli.gradle.ClassChanges
 import dev.paperplane.cli.gradle.ProjectMetadata
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -145,6 +146,34 @@ class HotReloadModeBuildLoadRequestTest {
         )
     assertTrue(request.changedClasses.isEmpty())
     assertTrue(request.classesDirs.isNotEmpty())
+  }
+
+  // ── needsJarBuild: keep the staged JAR fresh in JAR-fallback mode ────
+
+  @Test
+  fun `needsJarBuild is true in JAR-fallback mode so the staged jar is never stale`() {
+    // JAR fallback = the staged jar is the only thing the host loads; it must reflect fresh code
+    // even though the rebuild only ran `classes`.
+    assertTrue(HotReloadMode.needsJarBuild(fastMeta = null, builtJarExists = true))
+    assertTrue(
+        HotReloadMode.needsJarBuild(
+            fastMeta = baseMetadata.copy(classesDir = "", classesDirs = emptyList()),
+            builtJarExists = true,
+        )
+    )
+  }
+
+  @Test
+  fun `needsJarBuild is false in directory mode so fast reloads skip the jar task`() {
+    // Directory/hotswap mode: the host loads from classesDirs and never touches the jar, so there
+    // is no reason to pay for a `jar` build.
+    assertFalse(HotReloadMode.needsJarBuild(fastMeta = fastMeta(), builtJarExists = true))
+  }
+
+  @Test
+  fun `needsJarBuild is true whenever the jar is missing regardless of mode`() {
+    assertTrue(HotReloadMode.needsJarBuild(fastMeta = fastMeta(), builtJarExists = false))
+    assertTrue(HotReloadMode.needsJarBuild(fastMeta = null, builtJarExists = false))
   }
 
   // ── identity / metadata propagation ─────────────────────────────────
