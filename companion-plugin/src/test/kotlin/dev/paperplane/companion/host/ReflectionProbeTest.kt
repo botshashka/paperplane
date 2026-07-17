@@ -170,6 +170,36 @@ class ReflectionProbeTest {
     )
   }
 
+  // ── Brigadier lifecycle-command resolution ──────────────────────────
+
+  @Test
+  fun `lifecycleCommandSync is null on a runtime without CraftServer command machinery`() {
+    // MockBukkit's test classpath HAS the lifecycle-command API (paper-api + the provider mock),
+    // but the server is not CraftServer-shaped (no syncCommands) — the feature must resolve to
+    // "unavailable" silently, not to a probe error, or every unit-test probe would explode.
+    val spm = SimplePluginManager(server, SimpleCommandMap(server, mutableMapOf()))
+    val probe = ReflectionProbe.probe(FakeServerWithSpm(server, spm))
+    assertTrue(probe.lifecycleCommandSync == null, "no CraftServer marker → feature unavailable")
+  }
+
+  @Test
+  fun `probe fails when the server looks like CraftServer but lifecycle internals are missing`() {
+    // A server WITH syncCommands and a classpath WITH the lifecycle-command API is "modern Paper"
+    // as far as the probe can tell — but paper-server's LifecycleEventRunner isn't on the test
+    // classpath, modeling a Paper that moved the re-collection machinery. Silently skipping would
+    // leave Brigadier commands unregistered and stale nodes alive across reloads, so the probe
+    // must refuse loudly.
+    val spm = SimplePluginManager(server, SimpleCommandMap(server, mutableMapOf()))
+    val ex =
+        assertThrows(UnsupportedPaperVersionException::class.java) {
+          ReflectionProbe.probe(FakeCraftLikeServer(server, spm))
+        }
+    assertTrue(
+        ex.message!!.contains("Brigadier lifecycle-command internals"),
+        "Error must point at the failed resolution, got: ${ex.message}",
+    )
+  }
+
   // ── Field/method shape pinning ──────────────────────────────────────
 
   @Test
@@ -253,6 +283,20 @@ class ReflectionProbeTest {
       private val spm: SimplePluginManager,
   ) : Server by delegate {
     override fun getPluginManager(): PluginManager = spm
+  }
+
+  /**
+   * Server that passes the probe's "modern Paper" discriminator: a public `syncCommands` method
+   * (the CraftServer marker) on a classpath where the lifecycle-command API resolves.
+   */
+  private class FakeCraftLikeServer(
+      private val delegate: Server,
+      private val spm: SimplePluginManager,
+  ) : Server by delegate {
+    override fun getPluginManager(): PluginManager = spm
+
+    @Suppress("unused") // resolved reflectively by the probe's discriminator
+    fun syncCommands() = Unit
   }
 
   /** Server with a real SPM and a custom HelpMap implementation. */

@@ -11,6 +11,7 @@ import java.util.jar.JarFile
 import java.util.logging.Logger
 import org.bukkit.Keyed
 import org.bukkit.Server
+import org.bukkit.command.PluginIdentifiableCommand
 import org.bukkit.event.HandlerList
 import org.bukkit.plugin.PluginDescriptionFile
 import org.bukkit.plugin.java.JavaPlugin
@@ -287,6 +288,26 @@ open class InnerPluginHost(
       for (key in staleRecipes) server.removeRecipe(key)
     }
     release("clear command registrations") { commandRegistrar.clear() }
+    // Brigadier commands registered via LifecycleEvents.COMMANDS (and any command the plugin
+    // registered into the CommandMap itself) are NOT covered by commandRegistrar.clear() — left in
+    // place, the old instance's node keeps executing old-classloader code until the next tree
+    // rebuild AND pins the old loader. On modern Paper, knownCommands is a live view of the
+    // Brigadier dispatcher (BukkitBrigForwardingMap): lifecycle nodes surface as
+    // PluginVanillaCommandWrapper (a PluginIdentifiableCommand), and removing the entry removes
+    // the dispatcher node. Pure public API — on runtimes without that machinery any remaining
+    // inner-owned entries are plain map entries and removal is equally correct. Must run BEFORE
+    // the lookupNames removal below: wrapping a node resolves its owner via getPlugin(name).
+    release("remove stale Brigadier command nodes") {
+      val known = server.commandMap.knownCommands
+      val staleKeys =
+          known.entries
+              .filter { (it.value as? PluginIdentifiableCommand)?.plugin === a.plugin }
+              .map { it.key }
+      if (staleKeys.isNotEmpty()) {
+        for (key in staleKeys) known.remove(key)
+        BrigadierSync.sync(server)
+      }
+    }
     release("clear permission registrations") { permissionRegistrar.clear() }
     release("interrupt plugin threads") { interruptPluginThreads(a.classLoader) }
     release("remove from lookupNames") { removeFromLookupNames(a.name) }
@@ -363,6 +384,38 @@ open class InnerPluginHost(
     permissionRegistrar.apply(description)
     commandRegistrar.apply(plugin, description)
     server.pluginManager.enablePlugin(plugin)
+    fireLifecycleCommandCollection()
+  }
+
+  /**
+   * Re-fires Paper's `LifecycleEvents.COMMANDS` collection after the inner plugin is enabled, so
+   * Brigadier commands its `onEnable` registered handlers for exist immediately — Paper otherwise
+   * only collects them at startup or `/minecraft:reload` (see [LifecycleCommandSync]). Follows up
+   * with [BrigadierSync.sync] because the re-collection itself does not push command-tree packets
+   * to clients.
+   *
+   * Re-entrancy: this synchronously runs the COMMANDS handlers of ALL loaded plugins on the main
+   * thread, from inside the host's load path. That cannot recurse into the host — the companion
+   * registers no lifecycle handlers, and host entry points are driven by the CLI's load requests,
+   * not by lifecycle events. A handler that throws (a broken dev plugin) is downgraded to a severe
+   * log: the plugin itself is already enabled and working, so a broken commands handler must not
+   * fail the whole load or leave the host pointing at a closed classloader.
+   *
+   * No-op when the runtime has no Brigadier lifecycle-command machinery
+   * ([ReflectionProbe.lifecycleCommandSync] is null). Protected-open so orchestration tests can
+   * record invocations.
+   */
+  protected open fun fireLifecycleCommandCollection() {
+    val sync = probe.lifecycleCommandSync ?: return
+    try {
+      sync.fire()
+      BrigadierSync.sync(server)
+    } catch (
+        @Suppress("TooGenericExceptionCaught") // Handler exceptions must not fail the load.
+        e: Exception) {
+      val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
+      logger.severe("Brigadier command re-collection failed: $cause")
+    }
   }
 
   private fun addToLookupNames(name: String, plugin: JavaPlugin) {

@@ -54,12 +54,32 @@ private constructor(
      */
     val paperLookupNames: MutableMap<String, Plugin>?,
     val helpTopics: MutableMap<String, HelpTopic>,
+    /**
+     * Fires Paper's `LifecycleEvents.COMMANDS` re-collection the way `/minecraft:reload` does, or
+     * `null` when this runtime has no Brigadier lifecycle-command machinery to drive (pre-1.20.6
+     * Paper, unit-test fakes). Null is NOT an error: plugins that don't use lifecycle commands are
+     * completely unaffected, and on runtimes without the API there is nothing to re-collect. A
+     * runtime that HAS the API but whose internals don't match what we resolve is an error — see
+     * [resolveLifecycleCommandSync].
+     */
+    val lifecycleCommandSync: LifecycleCommandSync?,
 ) {
 
   companion object {
     private const val CPCL_INTERFACE =
         "io.papermc.paper.plugin.provider.classloader.ConfiguredPluginClassLoader"
     private const val PLUGIN_META = "io.papermc.paper.plugin.configuration.PluginMeta"
+
+    // Brigadier lifecycle-command re-collection touchpoints. The first two are paper-api types;
+    // the runner and registrar are paper-server internals (verified via javap on the shipped
+    // 1.21.4 and 1.21.11 server jars — identical shapes).
+    private const val LIFECYCLE_EVENTS =
+        "io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents"
+    private const val RELOADABLE_CAUSE =
+        "io.papermc.paper.plugin.lifecycle.event.registrar.ReloadableRegistrarEvent\$Cause"
+    private const val LIFECYCLE_RUNNER =
+        "io.papermc.paper.plugin.lifecycle.event.LifecycleEventRunner"
+    private const val PAPER_COMMANDS = "io.papermc.paper.command.brigadier.PaperCommands"
 
     private const val VERSION_FLOOR_MESSAGE =
         "This Paper version predates the plugin-loader API (needs Paper 1.19.3+). Hot-reload is " +
@@ -99,11 +119,130 @@ private constructor(
                 null
               }
 
+      val lifecycleCommandSync = resolveLifecycleCommandSync(server, errors)
+
       if (errors.isNotEmpty() || lookupField == null || helpTopics == null) {
         throw UnsupportedPaperVersionException(buildMessage(server, errors))
       }
 
-      return ReflectionProbe(lookupField, paperLookupNames, helpTopics)
+      return ReflectionProbe(lookupField, paperLookupNames, helpTopics, lifecycleCommandSync)
+    }
+
+    /**
+     * Resolves the internals behind Paper's `/minecraft:reload` lifecycle-command re-collection:
+     * `LifecycleEventRunner.INSTANCE.callReloadableRegistrarEvent(...)` plus
+     * `PaperCommands.INSTANCE.setValid()` (both `paper-server` classes), and the API-side
+     * `LifecycleEvents.COMMANDS` event type and `ReloadableRegistrarEvent.Cause.RELOAD` arguments.
+     *
+     * Returns `null` without error when the runtime has no Brigadier lifecycle-command API at all:
+     * no `LifecycleEvents` class or no `COMMANDS` field (Paper < 1.20.6 — older than the API), or
+     * no `syncCommands` method on the server class (not a CraftServer — unit-test fakes). In both
+     * cases there is nothing to re-collect and plugins without lifecycle commands are unaffected.
+     *
+     * Once the runtime demonstrably HAS the API (`COMMANDS` resolvable AND a CraftServer-shaped
+     * server), every internal must resolve — a failure means Paper moved the re-collection
+     * machinery, and silently skipping it would make dev-loaded plugins' Brigadier commands never
+     * register (and leave stale nodes executing old-classloader code across hot-reloads). That is a
+     * correctness hole, so it is a probe error, not a degraded mode.
+     */
+    internal fun resolveLifecycleCommandSync(
+        server: Server,
+        errors: MutableList<String>,
+    ): LifecycleCommandSync? {
+      val apiLoader = JavaPlugin::class.java.classLoader
+      val commandsEventType =
+          try {
+            Class.forName(LIFECYCLE_EVENTS, false, apiLoader).getField("COMMANDS").get(null)
+          } catch (@Suppress("TooGenericExceptionCaught") _: Throwable) {
+            return null // API predates lifecycle commands — nothing to re-collect.
+          } ?: return null
+      val isCraftServer =
+          try {
+            server.javaClass.getMethod("syncCommands")
+            true
+          } catch (_: NoSuchMethodException) {
+            false
+          }
+      if (!isCraftServer) return null // Unit-test fake — no server-side machinery to drive.
+
+      fun failed(what: String): Nothing? {
+        errors.add(
+            "Paper's Brigadier lifecycle-command internals changed: $what. Host cannot re-fire " +
+                "LifecycleEvents.COMMANDS, so dev-loaded plugins' Brigadier commands would never " +
+                "register."
+        )
+        return null
+      }
+
+      val serverLoader = server.javaClass.classLoader
+      val runnerClass =
+          try {
+            Class.forName(LIFECYCLE_RUNNER, false, serverLoader)
+          } catch (@Suppress("TooGenericExceptionCaught") _: Throwable) {
+            return failed("$LIFECYCLE_RUNNER not found")
+          }
+      val runner =
+          try {
+            runnerClass.getField("INSTANCE").get(null)
+          } catch (_: ReflectiveOperationException) {
+            return failed("$LIFECYCLE_RUNNER.INSTANCE not found")
+          } ?: return failed("$LIFECYCLE_RUNNER.INSTANCE is null")
+      val callMethods =
+          runnerClass.methods.filter {
+            it.name == "callReloadableRegistrarEvent" && it.parameterCount == 4
+          }
+      val callMethod =
+          callMethods.singleOrNull()
+              ?: return failed(
+                  "expected exactly one 4-arg LifecycleEventRunner.callReloadableRegistrarEvent, " +
+                      "found ${callMethods.size}"
+              )
+      val paperCommandsClass =
+          try {
+            Class.forName(PAPER_COMMANDS, false, serverLoader)
+          } catch (@Suppress("TooGenericExceptionCaught") _: Throwable) {
+            return failed("$PAPER_COMMANDS not found")
+          }
+      val paperCommands =
+          try {
+            paperCommandsClass.getField("INSTANCE").get(null)
+          } catch (_: ReflectiveOperationException) {
+            return failed("$PAPER_COMMANDS.INSTANCE not found")
+          } ?: return failed("$PAPER_COMMANDS.INSTANCE is null")
+      val setValid =
+          try {
+            paperCommandsClass.getMethod("setValid")
+          } catch (_: NoSuchMethodException) {
+            return failed("$PAPER_COMMANDS.setValid() not found")
+          }
+      val reloadCause =
+          try {
+            Class.forName(RELOADABLE_CAUSE, false, apiLoader).getField("RELOAD").get(null)
+          } catch (@Suppress("TooGenericExceptionCaught") _: Throwable) {
+            return failed("$RELOADABLE_CAUSE.RELOAD not found")
+          } ?: return failed("$RELOADABLE_CAUSE.RELOAD is null")
+
+      // Pin that the resolved method actually accepts the arguments we will pass — a signature
+      // drift must surface here as a clear probe error, not as an IllegalArgumentException later.
+      val params = callMethod.parameterTypes
+      val args = listOf(commandsEventType, paperCommands, Plugin::class.java, reloadCause)
+      for ((i, arg) in args.withIndex()) {
+        if (!params[i].isInstance(arg)) {
+          return failed(
+              "callReloadableRegistrarEvent parameter $i (${params[i].name}) does not accept " +
+                  arg.javaClass.name
+          )
+        }
+      }
+
+      return LifecycleCommandSync(
+          runner,
+          callMethod,
+          paperCommands,
+          setValid,
+          commandsEventType,
+          reloadCause,
+      )
     }
 
     /**

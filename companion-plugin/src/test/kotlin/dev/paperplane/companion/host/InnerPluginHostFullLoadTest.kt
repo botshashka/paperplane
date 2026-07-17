@@ -258,6 +258,111 @@ class InnerPluginHostFullLoadTest {
     )
   }
 
+  // ── Brigadier lifecycle-command orchestration ───────────────────────
+
+  @Test
+  fun `lifecycle command collection fires after every enable and not on teardown alone`() {
+    val firesAfterEnableCount = mutableListOf<Int>()
+    val recordingHost =
+        object :
+            InnerPluginHost(
+                fakeServer,
+                javaClass.classLoader,
+                ReflectionProbe.probe(fakeServer),
+                Logger.getLogger("InnerPluginHostFullLoadTest.fires"),
+            ) {
+          override fun fireLifecycleCommandCollection() {
+            // Record how many onEnables have run at fire time — pins the fire to AFTER enable
+            // (a fire before enablePlugin would collect nothing: the plugin registers its
+            // COMMANDS handler in onEnable).
+            firesAfterEnableCount += TestInnerPluginCounters.enableCount.get()
+          }
+        }
+
+    recordingHost.handleRequest(makeLoadRequest("FireOrder", classSuffix = "V1"))
+    assertEquals(
+        listOf(1),
+        firesAfterEnableCount,
+        "fresh load must fire exactly once, after onEnable ran",
+    )
+
+    recordingHost.handleRequest(makeLoadRequest("FireOrder", classSuffix = "V2"))
+    assertEquals(
+        listOf(1, 2),
+        firesAfterEnableCount,
+        "reload must fire exactly once more, after the new instance's onEnable",
+    )
+
+    recordingHost.shutdown()
+    assertEquals(
+        listOf(1, 2),
+        firesAfterEnableCount,
+        "shutdown tears down without a new enable — no re-fire (the node sweep handles removal)",
+    )
+  }
+
+  @Test
+  fun `lifecycle command collection does not fire when the load fails before enable`() {
+    var fires = 0
+    val recordingHost =
+        object :
+            InnerPluginHost(
+                fakeServer,
+                javaClass.classLoader,
+                ReflectionProbe.probe(fakeServer),
+                Logger.getLogger("InnerPluginHostFullLoadTest.nofire"),
+            ) {
+          override fun fireLifecycleCommandCollection() {
+            fires++
+          }
+        }
+
+    val result = recordingHost.handleRequest(brokenMainRequest("NoFire"))
+
+    assertTrue(result is HostLoadResult.Failed, "precondition: the load must fail")
+    assertEquals(0, fires, "a load that never enabled anything must not re-collect commands")
+  }
+
+  // ── Brigadier stale-node sweep on teardown ──────────────────────────
+
+  @Test
+  fun `teardown removes command-map entries owned by the inner plugin but leaves others`() {
+    host.handleRequest(makeLoadRequest("SweepOwner"))
+    val inner = host.current()!!
+    // Model what Paper's BukkitBrigForwardingMap surfaces for lifecycle-registered Brigadier
+    // commands: knownCommands entries that are PluginIdentifiableCommand owned by the inner
+    // plugin (main label + namespaced label), which commandRegistrar.clear() does not track.
+    val known = fakeServer.commandMap.knownCommands
+    known["brigtest"] = OwnedCommand("brigtest", inner)
+    known["sweepowner:brigtest"] = OwnedCommand("sweepowner:brigtest", inner)
+    val foreignOwner = MockBukkit.createMockPlugin("ForeignOwner")
+    known["foreign-owned"] = OwnedCommand("foreign-owned", foreignOwner)
+    known["plain"] = PlainCommand("plain")
+
+    host.shutdown()
+
+    assertNull(known["brigtest"], "inner-owned command nodes must be swept on teardown")
+    assertNull(known["sweepowner:brigtest"], "namespaced labels must be swept too")
+    assertNotNull(known["foreign-owned"], "other plugins' commands must be untouched")
+    assertNotNull(known["plain"], "non-plugin commands (vanilla wrappers) must be untouched")
+  }
+
+  @Test
+  fun `reload sweeps the old instance's command-map entries`() {
+    host.handleRequest(makeLoadRequest("SweepReload", classSuffix = "V1"))
+    val oldInstance = host.current()!!
+    val known = fakeServer.commandMap.knownCommands
+    known["stale-cmd"] = OwnedCommand("stale-cmd", oldInstance)
+
+    host.handleRequest(makeLoadRequest("SweepReload", classSuffix = "V2"))
+
+    assertNull(
+        known["stale-cmd"],
+        "the OLD instance's node executes old-classloader code and pins the old loader — " +
+            "reload teardown must remove it",
+    )
+  }
+
   // ── Reload: old disabled + new instance ─────────────────────────────
 
   @Test
@@ -689,6 +794,33 @@ class InnerPluginHostFullLoadTest {
 
     override fun getPluginChunkTickets(x: Int, z: Int): Collection<org.bukkit.plugin.Plugin> =
         tickets[x to z]?.toList() ?: emptyList()
+  }
+
+  /**
+   * A command owned by a plugin, the shape Paper's `BukkitBrigForwardingMap` wraps
+   * lifecycle-registered Brigadier nodes into (`PluginVanillaCommandWrapper` is a
+   * `PluginIdentifiableCommand`).
+   */
+  private class OwnedCommand(
+      name: String,
+      private val owner: org.bukkit.plugin.Plugin,
+  ) : org.bukkit.command.Command(name), org.bukkit.command.PluginIdentifiableCommand {
+    override fun execute(
+        sender: org.bukkit.command.CommandSender,
+        commandLabel: String,
+        args: Array<out String>,
+    ): Boolean = true
+
+    override fun getPlugin(): org.bukkit.plugin.Plugin = owner
+  }
+
+  /** A command with no owning plugin — models vanilla command wrappers the sweep must skip. */
+  private class PlainCommand(name: String) : org.bukkit.command.Command(name) {
+    override fun execute(
+        sender: org.bukkit.command.CommandSender,
+        commandLabel: String,
+        args: Array<out String>,
+    ): Boolean = true
   }
 
   /**
