@@ -466,7 +466,7 @@ class PaperServerManagerTest {
     assertTrue(stagedFile.exists(), "Staged file should exist at $stagedPath")
     assertEquals("jar-content-v1", stagedFile.readText())
     assertTrue(
-        stagedPath.contains(".paperplane/staged/"),
+        stagedPath.replace(File.separatorChar, '/').contains(".paperplane/staged/"),
         "Plugin must be staged outside plugins/ — was: $stagedPath",
     )
     assertFalse(

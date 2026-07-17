@@ -34,7 +34,12 @@ class FileWatcherTest {
     watcher.stop()
 
     val allChanged = changes.flatten()
-    assertTrue(allChanged.any { it.endsWith("New.kt") }, "New.kt should be in changes")
+    // The watcher lowercases emitted paths on Windows (case-insensitive-filesystem dedup),
+    // so filename assertions here and below must be case-insensitive.
+    assertTrue(
+        allChanged.any { it.endsWith("New.kt", ignoreCase = true) },
+        "New.kt should be in changes",
+    )
   }
 
   @Test
@@ -60,7 +65,7 @@ class FileWatcherTest {
     watcher.stop()
 
     val allChanged = changes.flatten()
-    assertTrue(allChanged.any { it.endsWith("Main.kt") })
+    assertTrue(allChanged.any { it.endsWith("Main.kt", ignoreCase = true) })
   }
 
   @Test
@@ -88,7 +93,7 @@ class FileWatcherTest {
 
     val allChanged = changes.flatten()
     assertTrue(allChanged.none { it.endsWith(".class") }, ".class files should be ignored")
-    assertTrue(allChanged.any { it.endsWith("Detected.kt") })
+    assertTrue(allChanged.any { it.endsWith("Detected.kt", ignoreCase = true) })
   }
 
   @Test
@@ -202,7 +207,7 @@ class FileWatcherTest {
     watcher.stop()
 
     val allChanged = changes.flatten()
-    assertTrue(allChanged.any { it.endsWith("SavedDuringRebuild.kt") })
+    assertTrue(allChanged.any { it.endsWith("SavedDuringRebuild.kt", ignoreCase = true) })
   }
 
   @Test
@@ -228,6 +233,6 @@ class FileWatcherTest {
     watcher.stop()
 
     val allChanged = changes.flatten()
-    assertTrue(allChanged.any { it.endsWith("ToDelete.kt") })
+    assertTrue(allChanged.any { it.endsWith("ToDelete.kt", ignoreCase = true) })
   }
 }

@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 
@@ -47,6 +48,9 @@ class JbrDownloaderTest {
 
   @Test
   fun `download returns cached java binary with macOS layout`() {
+    // findJavaBin deliberately skips the Contents/Home layout on Windows — it's macOS-only
+    // JBR packaging — so this cache would (correctly) miss there and hit the network.
+    assumeFalse(Platform.isWindows, "Contents/Home layout is macOS-only")
     val cacheDir = File(tempDir, "jbr")
     val jbrDir = jbrCacheDir(cacheDir, "21")
     val subdir = File(jbrDir, "jbrsdk-21.0.10-$os-$arch-b1163.110")
@@ -100,6 +104,7 @@ class JbrDownloaderTest {
 
   @Test
   fun `download returns cached java binary at direct macOS path`() {
+    assumeFalse(Platform.isWindows, "Contents/Home layout is macOS-only")
     val cacheDir = File(tempDir, "jbr")
     val jbrDir = jbrCacheDir(cacheDir, "21")
     val javaBin = File(jbrDir, "Contents/Home/bin/$binaryName")
@@ -140,7 +145,9 @@ class JbrDownloaderTest {
     // Cache for JDK 21
     val dir21 = jbrCacheDir(cacheDir, "21")
     val sub21 = File(dir21, "jbrsdk-21.0.10-$os-$arch-b1163.110")
-    val java21 = File(sub21, "Contents/Home/bin/$binaryName")
+    // Plain bin/ layout — probed on every OS, so the cache resolves on Windows too and this
+    // test never falls through to the network.
+    val java21 = File(sub21, "bin/$binaryName")
     java21.parentFile.mkdirs()
     java21.writeText("java 21")
     java21.setExecutable(true)
@@ -148,7 +155,7 @@ class JbrDownloaderTest {
     // Cache for JDK 17
     val dir17 = jbrCacheDir(cacheDir, "17")
     val sub17 = File(dir17, "jbrsdk-17.0.12-$os-$arch-b1000.50")
-    val java17 = File(sub17, "Contents/Home/bin/$binaryName")
+    val java17 = File(sub17, "bin/$binaryName")
     java17.parentFile.mkdirs()
     java17.writeText("java 17")
     java17.setExecutable(true)

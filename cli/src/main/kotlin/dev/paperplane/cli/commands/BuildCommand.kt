@@ -89,7 +89,8 @@ open class BuildCommand(private val ui: TerminalUI) : CliktCommand(name = "build
     val rel = file.relativeToOrNull(cwd)
     // Fall back to absolute path when the file lives outside cwd — relativeTo would emit a chain of
     // "../../.." which is harder to read than the absolute path.
-    return if (rel != null && !rel.path.startsWith("..")) rel.path else file.absolutePath
+    return if (rel != null && !rel.path.startsWith("..")) rel.invariantSeparatorsPath
+    else file.absolutePath
   }
 
   companion object {

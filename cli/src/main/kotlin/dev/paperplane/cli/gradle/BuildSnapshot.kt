@@ -16,7 +16,7 @@ class BuildSnapshot(private val classesDir: File) {
     return classesDir
         .walkTopDown()
         .filter { it.isFile && it.extension == "class" }
-        .associate { it.relativeTo(classesDir).path to crc32(it) }
+        .associate { it.relativeTo(classesDir).invariantSeparatorsPath to crc32(it) }
   }
 
   companion object {

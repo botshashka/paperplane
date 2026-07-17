@@ -153,9 +153,25 @@ open class InnerPluginHost(
     }
 
     val (plugin, classLoader) = loadPlugin(request, description)
-    initializeAndRegister(plugin, description)
+    registerOrClose(plugin, classLoader, description)
     active = Active(plugin, classLoader, description.name)
     return HostLoadResult.Ok(description.name, 0)
+  }
+
+  /** [initializeAndRegister], but closing the loader on failure so the jar isn't left locked. */
+  private fun registerOrClose(
+      plugin: JavaPlugin,
+      classLoader: DevPluginClassLoader,
+      description: PluginDescriptionFile,
+  ) {
+    try {
+      initializeAndRegister(plugin, description)
+    } catch (
+        @Suppress("TooGenericExceptionCaught") // close-and-rethrow must cover every failure
+        t: Throwable) {
+      closeQuietly(classLoader)
+      throw t
+    }
   }
 
   // ── reload ──────────────────────────────────────────────────────────
@@ -204,7 +220,7 @@ open class InnerPluginHost(
     active = null
 
     val (plugin, classLoader) = loadPlugin(request, description)
-    initializeAndRegister(plugin, description)
+    registerOrClose(plugin, classLoader, description)
     active = Active(plugin, classLoader, description.name)
 
     if (!plugin.isEnabled) {
@@ -258,15 +274,7 @@ open class InnerPluginHost(
     permissionRegistrar.clear()
     interruptPluginThreads(a.classLoader)
     removeFromLookupNames(a.name)
-    try {
-      a.classLoader.close()
-    } catch (
-        @Suppress(
-            "TooGenericExceptionCaught"
-        ) // close() may throw on broken streams; logged + swallowed
-        e: Exception) {
-      logger.warning("Failed to close inner classloader: ${e.message}")
-    }
+    closeQuietly(a.classLoader)
   }
 
   // ── load helpers ────────────────────────────────────────────────────
@@ -280,16 +288,37 @@ open class InnerPluginHost(
     val context = PluginInitContext(server, description, dataFolder, File(request.jarPath))
     val classLoader = DevPluginClassLoader(urls, parentClassLoader, server.pluginManager, context)
 
-    val mainClass = classLoader.loadClass(description.main)
-    val plugin = mainClass.getDeclaredConstructor().newInstance() as JavaPlugin
-    // Fallback for the unlikely case where the JavaPlugin ctor didn't drive CPCL init (a Paper
-    // build
-    // where the ConfiguredPluginClassLoader init hook never fires) — wire the plugin up explicitly.
-    if (classLoader.getPlugin() == null) classLoader.init(plugin)
-    check(classLoader.getPlugin() === plugin) {
-      "Inner plugin was not initialized by its classloader"
+    try {
+      val mainClass = classLoader.loadClass(description.main)
+      val plugin = mainClass.getDeclaredConstructor().newInstance() as JavaPlugin
+      // Fallback for the unlikely case where the JavaPlugin ctor didn't drive CPCL init (a Paper
+      // build where the ConfiguredPluginClassLoader init hook never fires) — wire the plugin up
+      // explicitly.
+      if (classLoader.getPlugin() == null) classLoader.init(plugin)
+      check(classLoader.getPlugin() === plugin) {
+        "Inner plugin was not initialized by its classloader"
+      }
+      return plugin to classLoader
+    } catch (
+        @Suppress("TooGenericExceptionCaught") // close-and-rethrow must cover every failure
+        t: Throwable) {
+      // A failed load must not leak the loader: it holds the staged jar open, which on Windows
+      // locks the file — blocking the next rebuild's restaging (and temp-dir cleanup in tests).
+      closeQuietly(classLoader)
+      throw t
     }
-    return plugin to classLoader
+  }
+
+  private fun closeQuietly(classLoader: DevPluginClassLoader) {
+    try {
+      classLoader.close()
+    } catch (
+        @Suppress(
+            "TooGenericExceptionCaught"
+        ) // close() may throw on broken streams; logged + swallowed
+        e: Exception) {
+      logger.warning("Failed to close inner classloader: ${e.message}")
+    }
   }
 
   private fun initializeAndRegister(
