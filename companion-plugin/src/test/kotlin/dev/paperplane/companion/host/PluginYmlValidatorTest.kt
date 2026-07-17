@@ -51,6 +51,15 @@ class PluginYmlValidatorTest {
     assertTrue(PluginYmlValidator.compareApiVersions("1.21", "1.21.4") < 0)
   }
 
+  @Test
+  fun `compareApiVersions fails open, sorting a malformed segment as older`() {
+    // Non-numeric segments compare as -1 so a malformed version never blocks a load with a
+    // surprising error — it just sorts below any real version at that position.
+    assertTrue(PluginYmlValidator.compareApiVersions("1.x", "1.21") < 0)
+    assertTrue(PluginYmlValidator.compareApiVersions("1.21", "1.x") > 0)
+    assertEquals(0, PluginYmlValidator.compareApiVersions("1.x", "1.y"))
+  }
+
   // ── validate happy path ──────────────────────────────────────────────
 
   @Test
@@ -76,23 +85,41 @@ class PluginYmlValidatorTest {
 
   @Test
   fun `validate rejects when plugin api-version exceeds paper version`() {
-    // MockBukkit's default bukkitVersion is "Mock" or similar — check what it returns and only
-    // assert the codepath when we can extract a version. If MockBukkit returns no parseable
-    // version, this test is skipped (compareApiVersions only runs when paper version detected).
-    val description = makeDescription("MyPlugin", apiVersion = "9.99")
-    val result = PluginYmlValidator.validate(description, server, logger())
-    // Either rejected (if MockBukkit returned a parseable version) or Ok (if it didn't).
-    // Both are acceptable - the rejection path is the real concern.
-    if (result is PluginYmlValidator.Result.Reject) {
-      assertTrue(result.message.contains("api-version"))
-      assertTrue(result.message.contains("9.99"))
-    }
+    // Drive detectPaperApiVersion with a known, parseable bukkitVersion so the reject path runs
+    // deterministically (asserting unconditionally, not "only if MockBukkit happened to parse").
+    val paperServer = serverReporting("1.20.6-R0.1-SNAPSHOT")
+    val description = makeDescription("MyPlugin", apiVersion = "1.21")
+
+    val result = PluginYmlValidator.validate(description, paperServer, logger())
+
+    assertTrue(
+        result is PluginYmlValidator.Result.Reject,
+        "api-version above the server's must be rejected",
+    )
+    val msg = (result as PluginYmlValidator.Result.Reject).message
+    assertTrue(msg.contains("api-version"), "message must mention api-version: $msg")
+    assertTrue(msg.contains("1.21"), "message must name the offending api-version: $msg")
   }
 
   @Test
-  fun `validate accepts plugin with old api-version`() {
+  fun `validate accepts a plugin whose api-version is at or below the paper version`() {
+    val paperServer = serverReporting("1.21.4-R0.1-SNAPSHOT")
     val description = makeDescription("MyPlugin", apiVersion = "1.13")
-    val result = PluginYmlValidator.validate(description, server, logger())
+
+    val result = PluginYmlValidator.validate(description, paperServer, logger())
+
+    assertTrue(result is PluginYmlValidator.Result.Ok)
+  }
+
+  @Test
+  fun `validate skips the api-version check when the paper version is unparseable`() {
+    // detectPaperApiVersion returns null for a non-version bukkitVersion, so even a wildly high
+    // api-version must not be rejected on that basis.
+    val paperServer = serverReporting("Mock")
+    val description = makeDescription("MyPlugin", apiVersion = "9.99")
+
+    val result = PluginYmlValidator.validate(description, paperServer, logger())
+
     assertTrue(result is PluginYmlValidator.Result.Ok)
   }
 
@@ -129,6 +156,16 @@ class PluginYmlValidatorTest {
   // ── helpers ──────────────────────────────────────────────────────────
 
   private fun logger() = Logger.getLogger("PluginYmlValidatorTest")
+
+  /** Wraps the MockBukkit server so `detectPaperApiVersion` sees a known [bukkitVersion]. */
+  private fun serverReporting(bukkitVersion: String): org.bukkit.Server {
+    // Delegate through a Server-typed reference (not the ServerMock type) so interface delegation
+    // binds to Server's signatures rather than ServerMock's narrowed generic overrides.
+    val base: org.bukkit.Server = server
+    return object : org.bukkit.Server by base {
+      override fun getBukkitVersion(): String = bukkitVersion
+    }
+  }
 
   private fun makeDescription(
       name: String,
