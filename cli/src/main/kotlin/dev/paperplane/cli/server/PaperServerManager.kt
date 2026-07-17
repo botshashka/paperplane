@@ -161,10 +161,11 @@ open class PaperServerManager(
 
   /**
    * Writes the companion's runtime config to `.paperplane/companion-config.json` — currently just
-   * the leak-diagnostics mode, with a `protocolVersion` so the companion can reject shapes it
-   * doesn't understand. Called on every start (harmless in restart/blue-green: the natively-loaded
-   * companion simply doesn't act on it, but shipping it unconditionally means the companion never
-   * has to guess). Written atomically (tmp + move) so the companion never reads a torn document.
+   * the leak-diagnostics mode, plus a reserved `protocolVersion` field for future shape negotiation
+   * (the companion reads only `leakDiagnostics` today and does not yet enforce the version). Called
+   * on every start (harmless in restart/blue-green: the natively-loaded companion simply doesn't
+   * act on it, but shipping it unconditionally means the companion never has to guess). Written
+   * atomically (tmp + move) so the companion never reads a torn document.
    */
   open fun writeCompanionConfig(dev: DevConfig) {
     val statusDir = File(serverDir, ".paperplane").apply { mkdirs() }
