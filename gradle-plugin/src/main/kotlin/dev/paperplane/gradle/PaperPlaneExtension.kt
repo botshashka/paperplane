@@ -4,6 +4,7 @@ import javax.inject.Inject
 import org.gradle.api.NamedDomainObjectContainer
 import org.gradle.api.Project
 import org.gradle.api.provider.ListProperty
+import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
 
 abstract class PaperPlaneExtension @Inject constructor(project: Project) {
@@ -17,12 +18,12 @@ abstract class PaperPlaneExtension @Inject constructor(project: Project) {
   abstract val softDepend: ListProperty<String>
 
   val commands: NamedDomainObjectContainer<CommandDefinition> =
-      project.container(CommandDefinition::class.java) { name ->
+      project.objects.domainObjectContainer(CommandDefinition::class.java) { name ->
         project.objects.newInstance(CommandDefinition::class.java, name)
       }
 
   val permissions: NamedDomainObjectContainer<PermissionDefinition> =
-      project.container(PermissionDefinition::class.java) { name ->
+      project.objects.domainObjectContainer(PermissionDefinition::class.java) { name ->
         project.objects.newInstance(PermissionDefinition::class.java, name)
       }
 
@@ -41,5 +42,5 @@ abstract class CommandDefinition @Inject constructor(val name: String) {
 abstract class PermissionDefinition @Inject constructor(val name: String) {
   abstract val default: Property<String>
   abstract val description: Property<String>
-  abstract val children: ListProperty<String>
+  abstract val children: MapProperty<String, Boolean>
 }

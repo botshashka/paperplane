@@ -1,9 +1,11 @@
 pluginManagement {
-    repositories {
-        gradlePluginPortal()
-        mavenCentral()
-    }
+  repositories {
+    gradlePluginPortal()
+    mavenCentral()
+  }
 }
+
+enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
 rootProject.name = "paperplane"
 

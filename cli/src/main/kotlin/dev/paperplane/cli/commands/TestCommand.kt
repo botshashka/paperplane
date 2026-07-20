@@ -4,16 +4,18 @@ import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import dev.paperplane.cli.Versions
-import dev.paperplane.cli.devserver.formatDurationMs
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.ui.TerminalUI
+import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
+import dev.paperplane.cli.util.formatDurationMs
 import dev.paperplane.cli.watcher.FileWatcher
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 
-class TestCommand : CliktCommand(name = "test") {
+open class TestCommand(private val ui: TerminalUI) : CliktCommand(name = "test") {
   companion object {
     private const val WATCH_POLL_INTERVAL_MS = 1000L
+    private const val MILLIS_PER_SECOND = 1000.0
   }
 
   private val watch by option("--watch", "-w", help = "Re-run tests on file changes").flag()
@@ -21,44 +23,49 @@ class TestCommand : CliktCommand(name = "test") {
   private val filter by option("--filter", "-f", help = "Filter tests by name (e.g. 'blockBreak')")
   private val projectDir = File(System.getProperty("user.dir"))
 
+  /** Factory for the underlying Gradle bridge. Tests override to inject a `FakeGradleBridge`. */
+  protected open fun newGradleBridge(): GradleBridge = GradleBridge(projectDir, ui)
+
   override fun run() {
+    try {
+      runInternal()
+    } finally {
+      ui.endView()
+    }
+  }
+
+  private fun runInternal() {
     val version = Versions.paperplaneVersion()
-    TerminalUI.header(version)
+    ui.header(version)
 
     if (watch) {
-      TerminalUI.beginBlock()
-      runTestsInBlock()
-      TerminalUI.endBlock()
-
-      TerminalUI.beginBlock(TerminalUI.BlockType.TRANSIENT)
-      TerminalUI.status("Watching for changes...")
+      ui.phase {
+        runTestsInBlock()
+        PhaseEnd.Watching
+      }
 
       val watcher =
           FileWatcher(File(projectDir, "src")) {
-            TerminalUI.discardBlock()
-            TerminalUI.beginBlock()
-            TerminalUI.change("Re-running tests...")
-            runTestsInBlock()
-            TerminalUI.endBlock()
-
-            TerminalUI.beginBlock(TerminalUI.BlockType.TRANSIENT)
-            TerminalUI.status("Watching for changes...")
+            ui.phase {
+              change("Re-running tests...")
+              runTestsInBlock()
+              PhaseEnd.Watching
+            }
           }
       watcher.start()
       try {
         while (true) Thread.sleep(WATCH_POLL_INTERVAL_MS)
       } catch (_: InterruptedException) {
         watcher.stop()
+        ui.clearPinnedFooter()
       }
     } else {
-      TerminalUI.beginBlock()
-      runTestsInBlock()
-      TerminalUI.endBlock()
+      ui.block { runTestsInBlock() }
     }
   }
 
   private fun runTestsInBlock() {
-    val gradle = GradleBridge(projectDir)
+    val gradle = newGradleBridge()
 
     val buildStart = System.currentTimeMillis()
     // Clean stale results so filtered runs don't show old tests
@@ -69,7 +76,7 @@ class TestCommand : CliktCommand(name = "test") {
 
     val spinMessage =
         if (filter != null) "Running tests matching \"$filter\"..." else "Running tests..."
-    val success = TerminalUI.spin(spinMessage) { gradle.test(quiet = true, filter = filter) }
+    val success = ui.spin(spinMessage) { gradle.test(quiet = true, filter = filter) }
     val totalDuration = System.currentTimeMillis() - buildStart
 
     // Parse JUnit XML results
@@ -80,15 +87,15 @@ class TestCommand : CliktCommand(name = "test") {
       val passed = results.sumOf { it.passed }
       val failed = results.sumOf { it.failed }
       val total = passed + failed
-      val totalTime = formatDuration(totalDuration)
-      val testTime = formatDuration(results.sumOf { it.timeMs }.toLong())
+      val totalTime = formatDurationMs(totalDuration)
+      val testTime = formatDurationMs(results.sumOf { it.timeMs }.toLong())
 
-      TerminalUI.testSummary(passed, failed, total, totalTime, testTime)
+      ui.testSummary(passed, failed, total, totalTime, testTime)
       if (failed > 0 && !verbose) {
-        TerminalUI.status("Run with --verbose for full stack traces")
+        ui.status("Run with --verbose for full stack traces")
       }
     } else if (!success) {
-      TerminalUI.error("Tests failed (no results found)", formatDuration(totalDuration))
+      ui.error("Tests failed (no results found)", formatDurationMs(totalDuration))
     }
 
     gradle.close()
@@ -124,10 +131,10 @@ class TestCommand : CliktCommand(name = "test") {
             val failureMessage =
                 if (verbose) rawMessage else rawMessage?.lines()?.firstOrNull { it.isNotBlank() }
 
-            testCases.add(TestCaseResult(name, time * 1000, failureMessage))
+            testCases.add(TestCaseResult(name, time * MILLIS_PER_SECOND, failureMessage))
           }
 
-          TestSuiteResult(suiteName, suiteTime * 1000, testCases)
+          TestSuiteResult(suiteName, suiteTime * MILLIS_PER_SECOND, testCases)
         }
         ?.sortedBy { it.name } ?: emptyList()
   }
@@ -135,18 +142,16 @@ class TestCommand : CliktCommand(name = "test") {
   private fun displayResults(results: List<TestSuiteResult>) {
     for (suite in results) {
       val allPassed = suite.cases.all { it.failure == null }
-      TerminalUI.testClass(suite.name, allPassed, formatDuration(suite.timeMs.toLong()))
+      ui.testClass(suite.name, allPassed, formatDurationMs(suite.timeMs.toLong()))
       for (case in suite.cases) {
         val passed = case.failure == null
-        TerminalUI.testCase(case.name, passed, formatDuration(case.timeMs.toLong()))
+        ui.testCase(case.name, passed, formatDurationMs(case.timeMs.toLong()))
         if (case.failure != null) {
-          TerminalUI.testFailure(case.failure)
+          ui.testFailure(case.failure)
         }
       }
     }
   }
-
-  private fun formatDuration(ms: Long): String = formatDurationMs(ms)
 
   private data class TestSuiteResult(
       val name: String,

@@ -4,6 +4,8 @@ import com.charleskorn.kaml.Yaml
 import dev.paperplane.cli.config.DevConfig
 import dev.paperplane.cli.config.DevMode
 import dev.paperplane.cli.config.PaperPlaneConfig
+import dev.paperplane.cli.ui.RecordingTerminal
+import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import kotlinx.serialization.decodeFromString
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -13,6 +15,7 @@ import org.junit.jupiter.api.io.TempDir
 class DevCommandJbrTest {
 
   @TempDir lateinit var tempDir: File
+  private val ui = TerminalUI(RecordingTerminal())
 
   // ── DevConfig jbr field parsing ────────────────────────────────────
 
@@ -112,7 +115,7 @@ class DevCommandJbrTest {
 
   @Test
   fun `PaperPlaneConfig load returns defaults when file missing`() {
-    val config = PaperPlaneConfig.load(tempDir)
+    val config = PaperPlaneConfig.load(tempDir, ui)
     assertEquals("auto", config.dev.jbr)
     assertEquals(DevMode.HOT_RELOAD, config.dev.mode)
   }
@@ -128,7 +131,7 @@ class DevCommandJbrTest {
             .trimIndent()
     )
 
-    val config = PaperPlaneConfig.load(tempDir)
+    val config = PaperPlaneConfig.load(tempDir, ui)
     assertEquals("on", config.dev.jbr)
   }
 }

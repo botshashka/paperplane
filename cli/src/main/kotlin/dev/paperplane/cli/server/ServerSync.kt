@@ -8,94 +8,63 @@ import java.nio.file.attribute.FileTime
 object ServerSync {
 
   /**
-   * Syncs all runtime state from source server to target server. Uses incremental sync (timestamp +
-   * size) to skip unchanged files. Copies everything except lock files and CLI state, then patches
-   * the port in server.properties. The dev plugin jar and companion jar are skipped (deployed fresh
-   * after sync).
+   * Syncs runtime state (world data, player data, plugin data directories, etc) from source to
+   * target. Uses incremental sync (timestamp + size) to skip unchanged files. Skips lock files, CLI
+   * state, the dev plugin jar, the companion jar, and all PaperPlane-managed config files — those
+   * come from `paperplane.yml` directly via configure().
    */
-  fun syncServerState(sourceDir: File, targetDir: File, targetPort: Int, devPluginJarName: String) {
-    targetDir.mkdirs()
-    val srcChildren = (sourceDir.listFiles() ?: emptyArray()).associateBy { it.name }
-    val dstChildren = (targetDir.listFiles() ?: emptyArray()).associateBy { it.name }
-
-    // Remove files in target that don't exist in source (respecting skip rules)
-    for ((name, dstChild) in dstChildren) {
-      if (name !in srcChildren) {
-        if (dstChild.isDirectory) deleteDir(dstChild) else dstChild.delete()
-      }
-    }
-
-    for ((name, child) in srcChildren) {
-      if (child.name.endsWith(".lock")) continue
-      if (child.name == ".paperplane") continue // CLI state, not server data
-
-      val dst = File(targetDir, child.name)
-      if (child.name == "plugins") {
-        syncPlugins(child, dst, devPluginJarName)
-      } else if (child.isDirectory) {
-        incrementalSyncDir(child, dst)
-      } else {
-        copyIfChanged(child, dst)
-      }
-    }
-    // Patch port — the only config difference between blue and green
-    val props = File(targetDir, "server.properties")
-    if (props.exists()) {
-      props.writeText(
-          props.readText().replace(Regex("server-port=\\d+"), "server-port=$targetPort")
-      )
-    }
+  fun syncServerState(sourceDir: File, targetDir: File, devPluginJarName: String) {
+    syncChildren(
+        sourceDir,
+        targetDir,
+        skipName = {
+          it.endsWith(".lock") || it == ".paperplane" || it in ServerConfigs.MANAGED_CONFIG_FILES
+        },
+        onDirectory = { s, d ->
+          if (s.name == "plugins") syncPlugins(s, d, devPluginJarName) else incrementalSyncDir(s, d)
+        },
+    )
   }
 
   private fun syncPlugins(srcPlugins: File, dstPlugins: File, devPluginJarName: String) {
-    dstPlugins.mkdirs()
-    val srcChildren = (srcPlugins.listFiles() ?: emptyArray()).associateBy { it.name }
-    val dstChildren = (dstPlugins.listFiles() ?: emptyArray()).associateBy { it.name }
-
-    // Remove files in target that don't exist in source (respecting skip rules)
-    for ((name, dstChild) in dstChildren) {
-      if (name == devPluginJarName || name == "paperplane-companion.jar") continue
-      if (name !in srcChildren) {
-        if (dstChild.isDirectory) deleteDir(dstChild) else dstChild.delete()
-      }
-    }
-
-    for ((name, child) in srcChildren) {
-      if (
-          child.isFile &&
-              (child.name == devPluginJarName || child.name == "paperplane-companion.jar")
-      )
-          continue
-      val dst = File(dstPlugins, name)
-      if (child.isDirectory) {
-        incrementalSyncDir(child, dst)
-      } else {
-        copyIfChanged(child, dst)
-      }
-    }
+    syncChildren(
+        srcPlugins,
+        dstPlugins,
+        skipName = { it == devPluginJarName || it == "paperplane-companion.jar" },
+    )
   }
 
   private fun incrementalSyncDir(src: File, dst: File) {
+    syncChildren(src, dst, skipName = { it.endsWith(".lock") })
+  }
+
+  /**
+   * Two-pass directory sync: removes orphans in [dst] that aren't in [src] (skipping any name
+   * matching [skipName]), then walks [src] and either recurses on directories ([onDirectory]) or
+   * copies files ([onFile]). Skip predicate is applied to both passes.
+   */
+  private fun syncChildren(
+      src: File,
+      dst: File,
+      skipName: (String) -> Boolean,
+      onFile: (File, File) -> Unit = ::copyIfChanged,
+      onDirectory: (File, File) -> Unit = ::incrementalSyncDir,
+  ) {
     dst.mkdirs()
     val srcChildren = (src.listFiles() ?: emptyArray()).associateBy { it.name }
     val dstChildren = (dst.listFiles() ?: emptyArray()).associateBy { it.name }
 
-    // Remove files in dst that don't exist in src
     for ((name, dstChild) in dstChildren) {
+      if (skipName(name)) continue
       if (name !in srcChildren) {
         if (dstChild.isDirectory) deleteDir(dstChild) else dstChild.delete()
       }
     }
 
-    // Copy/update from src to dst
     for ((name, srcChild) in srcChildren) {
-      if (srcChild.name.endsWith(".lock")) continue
+      if (skipName(name)) continue
       val dstChild = File(dst, name)
-      if (srcChild.isDirectory) {
-        incrementalSyncDir(srcChild, dstChild)
-      } else {
-        copyIfChanged(srcChild, dstChild)
-      }
+      if (srcChild.isDirectory) onDirectory(srcChild, dstChild) else onFile(srcChild, dstChild)
     }
   }
 

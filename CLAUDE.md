@@ -14,8 +14,8 @@ PaperPlane (`ppl`) is a CLI dev tool for Minecraft Paper plugin development. It 
 
 # Run the CLI locally
 ./ppl dev            # start dev server with file watching
-./ppl init           # scaffold a new Paper plugin project
-./ppl setup          # download/configure Paper server
+./ppl create         # scaffold a new Paper plugin project (alias: ppl new)
+./ppl init           # add PaperPlane to an existing project (alias: ppl setup)
 ./ppl test           # run tests via Gradle Tooling API
 ./ppl clean          # clean .paperplane directory
 
@@ -32,7 +32,7 @@ PaperPlane (`ppl`) is a CLI dev tool for Minecraft Paper plugin development. It 
 
 ## Architecture
 
-Four Gradle submodules (`settings.gradle.kts`):
+Five Gradle submodules (`settings.gradle.kts`):
 
 - **`cli`** — The `ppl` command. Kotlin + Clikt CLI framework. Embeds companion and velocity plugin jars as resources (copied as `.bin` files during build to prevent Shadow from unpacking them). Uses Gradle Tooling API (`GradleBridge`) to invoke builds in the user's project without shelling out.
 
@@ -42,13 +42,15 @@ Four Gradle submodules (`settings.gradle.kts`):
 
 - **`velocity-plugin`** — Velocity proxy plugin for blue/green mode. Polls `active-server.json` to route/transfer players between blue and green Paper backends during zero-downtime rebuilds.
 
+- **`agent`** — Minimal Java agent for hot-swap class redefinition. Produces a JAR with `Premain-Class` manifest for `Can-Redefine-Classes` / `Can-Retransform-Classes`.
+
 ### Dev Server Modes
 
-Configured via `paperplane.yml` in the user's project:
+Configured via `dev.mode` in `paperplane.yml`:
 
-1. **Single server** (`proxy: false`) — Stops server, rebuilds, restarts. Simple but has downtime.
-2. **Blue/green** (`proxy: true`, default) — Two Paper servers behind a Velocity proxy. Rebuilds deploy to the standby server, then players are transferred. Pre-warms the standby after each swap.
-3. **Hot-reload** (`hot-reload: true`) — Single server stays running. Companion plugin unloads/reloads the plugin JAR in-place. Fastest iteration but experimental.
+1. **Restart** (`mode: restart`) — Stops server, rebuilds, restarts. Simple but has downtime.
+2. **Blue-green** (`mode: blue-green`) — Two Paper servers behind a Velocity proxy. Rebuilds deploy to the standby server, then players are transferred. Pre-warms the standby after each swap.
+3. **Hot-reload** (`mode: hot-reload`) — Single server stays running. Companion plugin unloads/reloads the plugin JAR in-place. Fastest iteration but experimental.
 
 ### CLI ↔ Server Communication
 
@@ -60,21 +62,23 @@ The CLI and companion plugin coordinate through flag files in `.paperplane/` ins
 
 ### TerminalUI Block System
 
-All CLI output goes through `TerminalUI` (`cli/.../ui/TerminalUI.kt`). Spacing between sections is handled by **blocks**, not manual `blank()` or `println()` calls.
+All CLI output goes through `TerminalUI` (`cli/.../ui/TerminalUI.kt`). Spacing between sections is handled by **scoped blocks**, not manual `blank()` or `println()` calls.
+
+**Two scoped primitives:**
+- `TerminalUI.block { … }` — one-shot PERSIST block for command output. The lambda receiver is `TerminalUI`, so emit calls (`success(...)`, `info(...)`, `error(...)`) are unqualified. The block closes in a finally, so exceptions can't leak a pinned footer.
+- `TerminalUI.phase { … PhaseEnd.Watching }` — iteration-scoped block for dev-server loops. Discards any prior pinned footer, opens a PERSIST block, runs the body, then opens a trailing TRANSIENT footer based on the returned `PhaseEnd`:
+  - `PhaseEnd.Watching` → "Watching for changes..."
+  - `PhaseEnd.Waiting` → "Waiting for changes..." (build/server failure)
+  - `PhaseEnd.None` → no trailing footer (terminal exit)
 
 **Rules:**
-- Wrap output in `beginBlock()` / `endBlock()`. Every block automatically gets 1 blank line above it.
-- PERSIST blocks (default) commit content to scroll. TRANSIENT blocks live in the footer and are erased on discard.
-- Use `awaitChanges()` to end the current block and start a transient "Watching..." footer.
-- To add a blank line between two groups of output, **split them into two blocks** — don't insert `blank()` between them.
+- Every block automatically gets 1 blank line above it. To add space between two groups of output, use two `block { }` calls — don't insert `blank()` between them.
 - `blank()` is only for intra-block spacing (visual grouping within a single block).
-- Never add manual `println()` for spacing. The block system handles it.
-
-**How spacing works (no cross-block state):**
-- `beginBlock(PERSIST)` prints a blank line to scroll (permanent separator).
-- `beginBlock(TRANSIENT)` renders the separator in the footer via `redraw()` (erased with the block).
-- `hasExternalOutput` (block-scoped) handles the gap between server logs and block content.
-- `endBlock()` prints content with no trailing blank line — the *next* `beginBlock` provides the separator.
+- `serverLog()` interleaves log lines above the pinned footer; safe to call from inside or outside a block/phase.
+- `spin(msg) { … }` pins a spinner. Inside a `block { }` / `phase { }` it reuses the outer block; outside, it auto-opens one.
+- `TerminalUI.clearPinnedFooter()` clears any pinned footer. Only needed in shutdown hooks as a safety net.
+- Deep helpers (`GradleBridge`, `PaperServerManager`, etc.) call typed emit methods (`status`, `error`, `buildError`, `serverLog`) directly — they inherit the current block from whatever phase the command opened.
+- `beginBlock` / `endBlock` / `discardBlock` are `@PublishedApi internal` implementation details of `block { }` and `phase { }`. Don't call them directly.
 
 ## Commit Convention
 
@@ -84,7 +88,13 @@ Types: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `chore`, `ci`, `build`
 
 ## Key Conventions
 
-- Kotlin throughout, Java 21 toolchain, JUnit 5 for tests
+- Kotlin throughout, Java 21 toolchain, JUnit 6 for tests
 - Config is `paperplane.yml` (parsed with kaml/kotlinx-serialization) — see `PaperPlaneConfig.kt` for schema
 - The `ppl` launcher script at repo root runs the built CLI jar directly
 - Version catalog in `gradle/libs.versions.toml` — all dependency versions managed there
+
+## Testing Standards
+
+**Aim for 100% coverage on every new module.** Don't declare a feature done until you've audited what's tested. Before claiming completion, walk every public function, every error branch, and every edge case and verify each is exercised by a test. If something isn't covered, either add a test or have a written reason why coverage isn't worth it (e.g. "thin Clikt wrapper around already-tested logic"). Coverage gaps are a defect, not a tradeoff to defer. The phrase "the tests cover the core" is a smell — list what's NOT covered and decide explicitly.
+
+**External-API clients must be tested against captured real responses, not hand-rolled fixtures.** When testing code that parses output from an external service (Modrinth, Hangar, GitHub releases, Paper API, etc.), the JSON/XML/whatever fixture must come from a real `curl` against the live endpoint, pasted verbatim into the test. Hand-rolled "looks-about-right" fixtures test your assumptions in lockstep with your parser — both can be wrong in the same direction and the test will still pass. Real example: an early `ModrinthClient` parser required `hashes.sha256`, and every test fed it `{"sha256": "..."}` JSON and passed, while real Modrinth responses contain only `sha1` and `sha512` — the entire integration was broken in production despite green tests. Lock the real shape in with at least one golden test per external endpoint, named so it's obviously the source of truth (e.g. `parses real Modrinth response shape`). Hand-rolled fixtures are still fine for edge cases (missing fields, error responses) — but the happy path must be a real captured payload.

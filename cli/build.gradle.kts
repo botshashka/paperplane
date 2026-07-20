@@ -1,6 +1,16 @@
 plugins {
-  alias(libs.plugins.shadow)
+  id("paperplane.kotlin")
+  application
+  id("com.gradleup.shadow")
   alias(libs.plugins.kotlin.serialization)
+}
+
+repositories { maven("https://repo.gradle.org/gradle/libs-releases") }
+
+application {
+  applicationName = "ppl"
+  mainClass = "dev.paperplane.cli.PaperPlaneKt"
+  applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
 }
 
 dependencies {
@@ -10,6 +20,8 @@ dependencies {
   implementation(libs.gradle.tooling.api)
   implementation(libs.gson)
   implementation(libs.slf4j.nop)
+  implementation(libs.jline.terminal)
+  runtimeOnly(libs.jline.terminal.jni)
 
   testImplementation(libs.junit.jupiter)
   testRuntimeOnly(libs.junit.platform.launcher)
@@ -47,9 +59,9 @@ tasks.processResources {
 }
 
 tasks.shadowJar {
-  archiveBaseName.set("paperplane-cli")
-  archiveClassifier.set("")
-  archiveVersion.set("")
+  archiveBaseName = "paperplane-cli"
+  archiveClassifier = ""
+  archiveVersion = ""
   manifest {
     attributes(
         "Main-Class" to "dev.paperplane.cli.PaperPlaneKt",
@@ -57,3 +69,48 @@ tasks.shadowJar {
     )
   }
 }
+
+// The distribution ships the shadow fat jar only (not individual dependency jars).
+// Override the startScripts classpath so the launcher only references the shadow jar.
+tasks.startScripts { classpath = files(tasks.shadowJar.flatMap { it.archiveFile }) }
+
+// Replace the default lib contents (all dependency jars) with just the shadow fat jar.
+val distLib = copySpec {
+  from(tasks.shadowJar)
+  into("lib")
+}
+
+distributions {
+  main {
+    contents {
+      // Remove the default CopySpec that includes runtime classpath jars
+      with(distLib)
+    }
+  }
+}
+
+// After Gradle resolves the dist contents, strip out the default per-dependency jars.
+// Only keep the shadow jar + bin scripts.
+tasks.distZip {
+  archiveBaseName = "ppl"
+  // Exclude all lib/ entries that are NOT the shadow jar
+  eachFile {
+    if (relativePath.pathString.contains("/lib/") && !name.contains("paperplane-cli")) {
+      exclude()
+    }
+  }
+}
+
+tasks.distTar {
+  archiveBaseName = "ppl"
+  eachFile {
+    if (relativePath.pathString.contains("/lib/") && !name.contains("paperplane-cli")) {
+      exclude()
+    }
+  }
+}
+
+// Disable shadowDist tasks — we use the standard distribution with shadow jar
+tasks.named("shadowDistZip") { enabled = false }
+
+tasks.named("shadowDistTar") { enabled = false }

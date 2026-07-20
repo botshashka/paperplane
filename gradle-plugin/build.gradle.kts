@@ -1,4 +1,5 @@
 plugins {
+  id("paperplane.kotlin")
   `java-gradle-plugin`
   `maven-publish`
 }
@@ -6,6 +7,7 @@ plugins {
 dependencies {
   implementation(libs.gson)
 
+  testImplementation(gradleTestKit())
   testImplementation(libs.junit.jupiter)
   testRuntimeOnly(libs.junit.platform.launcher)
 }

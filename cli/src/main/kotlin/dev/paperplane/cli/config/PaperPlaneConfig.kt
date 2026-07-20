@@ -3,12 +3,16 @@ package dev.paperplane.cli.config
 import com.charleskorn.kaml.InvalidPropertyValueException
 import com.charleskorn.kaml.UnknownPropertyException
 import com.charleskorn.kaml.Yaml
+import com.charleskorn.kaml.YamlConfiguration
+import com.charleskorn.kaml.YamlMap
+import com.github.ajalt.clikt.core.ProgramResult
+import dev.paperplane.cli.plugins.PluginDependency
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
-import kotlin.system.exitProcess
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 
 @Serializable
 data class PaperPlaneConfig(
@@ -16,7 +20,7 @@ data class PaperPlaneConfig(
     val dev: DevConfig = DevConfig(),
 ) {
   companion object {
-    fun load(projectDir: File): PaperPlaneConfig {
+    fun load(projectDir: File, ui: TerminalUI): PaperPlaneConfig {
       val configFile = File(projectDir, "paperplane.yml")
       if (!configFile.exists()) return PaperPlaneConfig()
       return try {
@@ -24,21 +28,33 @@ data class PaperPlaneConfig(
       } catch (e: InvalidPropertyValueException) {
         val unknown = e.cause as? UnknownPropertyException
         if (unknown != null) {
-          reportUnknownKey(unknown)
+          reportUnknownKey(ui, unknown)
         } else {
-          TerminalUI.error("Invalid paperplane.yml: ${e.message}")
+          ui.error("Invalid paperplane.yml: ${e.message}")
         }
-        exitProcess(1)
+        throw ProgramResult(1)
       } catch (e: UnknownPropertyException) {
-        reportUnknownKey(e)
-        exitProcess(1)
+        reportUnknownKey(ui, e)
+        throw ProgramResult(1)
       }
     }
 
-    private fun reportUnknownKey(e: UnknownPropertyException) {
-      TerminalUI.blank()
-      TerminalUI.error("Unknown key '${e.propertyName}' in paperplane.yml")
-      TerminalUI.status("Valid keys: ${e.validPropertyNames.sorted().joinToString(", ")}")
+    /**
+     * Serializes [config] back to `paperplane.yml` in [projectDir]. Used for reverse-sync of
+     * machine-managed fields like `server.ops` after a dev session. Note: comments and custom
+     * formatting in the existing file are not preserved — kaml does a round-trip serialization.
+     */
+    fun save(projectDir: File, config: PaperPlaneConfig) {
+      val yaml =
+          Yaml(configuration = YamlConfiguration(encodeDefaults = false, breakScalarsAt = 120))
+      val text = yaml.encodeToString(config)
+      File(projectDir, "paperplane.yml").writeText(text)
+    }
+
+    private fun reportUnknownKey(ui: TerminalUI, e: UnknownPropertyException) {
+      ui.blank()
+      ui.error("Unknown key '${e.propertyName}' in paperplane.yml")
+      ui.status("Valid keys: ${e.validPropertyNames.sorted().joinToString(", ")}")
     }
   }
 }
@@ -47,6 +63,44 @@ data class PaperPlaneConfig(
 data class ServerConfig(
     val version: String? = null,
     @SerialName("jvm-args") val jvmArgs: List<String> = listOf("-Xmx2G"),
+    /**
+     * User overrides for `server.properties`. Merged on top of PaperPlane's defaults. Managed keys
+     * (`server-port`, `accepts-transfers`, `online-mode`) cannot be overridden — they're required
+     * for the dev server to function.
+     */
+    val properties: Map<String, String> = emptyMap(),
+    /**
+     * Player names to pre-op on the dev server. Written to `ops.json` on each `ppl dev`. PaperPlane
+     * also auto-ops joining players, and their names are synced back into this list on shutdown so
+     * they persist across `ppl clean` runs.
+     */
+    val ops: List<String> = emptyList(),
+    /**
+     * Names that must never be auto-opped. Takes precedence over [ops] (a name appearing in both is
+     * never opped) and blocks the auto-op-on-join behavior as well as the reverse-sync that
+     * otherwise grows [ops] organically. Use this to deop a player permanently: add them here and
+     * they stay deopped across sessions.
+     */
+    @SerialName("op-banlist") val opBanlist: List<String> = emptyList(),
+    /**
+     * Passthrough overrides for `config/paper-global.yml`. Deep-merged on top of PaperPlane's
+     * defaults at configure time (user wins on leaf conflicts). Leave empty to use defaults.
+     * Paper's full schema is very large, so we don't enumerate keys here — users only set the ones
+     * they care about.
+     */
+    @SerialName("paper-global") val paperGlobal: YamlMap? = null,
+    /**
+     * Passthrough overrides for `config/paper-world-defaults.yml`. Deep-merged the same way as
+     * [paperGlobal].
+     */
+    @SerialName("paper-world-defaults") val paperWorldDefaults: YamlMap? = null,
+    /**
+     * Companion plugin dependencies for the dev server. Resolved from Modrinth (by slug) or from
+     * local filesystem paths, downloaded + verified against `paperplane-lock.yml`, and copied into
+     * the server plugins directory on every `ppl dev`. Managed via the `ppl plugin` subcommands
+     * (add / remove / update / install / list); hand-editing this list works too.
+     */
+    val plugins: List<PluginDependency> = emptyList(),
 )
 
 @Serializable
@@ -61,4 +115,31 @@ data class DevConfig(
     @SerialName("debounce-ms") val debounceMs: Long = 2000,
     val mode: DevMode = DevMode.HOT_RELOAD,
     val jbr: String = "auto",
+    /**
+     * How much classloader-leak diagnostics the hot-reload host emits. Transported to the companion
+     * via `.paperplane/companion-config.json`. See [LeakDiagnosticsMode] for the per-mode
+     * semantics.
+     */
+    @SerialName("leak-diagnostics")
+    val leakDiagnostics: LeakDiagnosticsMode = LeakDiagnosticsMode.SUMMARY,
 )
+
+/**
+ * Controls how much classloader-leak diagnostics the hot-reload host emits when a reload leaves a
+ * plugin classloader alive. The mode gates diagnostic **output only** — leak counting, the cheap
+ * attribution scan, and the leak-limit auto-restart action stay active in every mode.
+ *
+ * - [OFF] — no diagnostic output at all: no one-line leak log, no verbose per-loader dump, no heap
+ *   dump. Leak counting and the auto-restart action still run, so `off` silences the noise without
+ *   silently restoring the old do-nothing dead-end.
+ * - [SUMMARY] — the default: the leak attribution rides out on the load report (so the CLI can name
+ *   the likely cause) and a single one-line warning is logged. No verbose dump, no heap dump.
+ * - [FULL] — everything [SUMMARY] does, plus the verbose per-loader diagnostics and a one-shot heap
+ *   dump to `.paperplane/leak.hprof`.
+ */
+@Serializable
+enum class LeakDiagnosticsMode {
+  @SerialName("summary") SUMMARY,
+  @SerialName("full") FULL,
+  @SerialName("off") OFF,
+}

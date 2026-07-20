@@ -11,14 +11,14 @@ class PaperPlanePlugin : Plugin<Project> {
     project.tasks.register("ppGeneratePluginYml", PluginYmlGenerateTask::class.java) { task ->
       task.group = "paperplane"
       task.description = "Generates plugin.yml from PaperPlane extension configuration"
-      task.extension = extension
+      wirePluginYmlInputs(project, extension, task)
       task.outputDir.set(project.layout.buildDirectory.dir("generated/paperplane"))
     }
 
     project.tasks.register("ppMetadata", MetadataTask::class.java) { task ->
       task.group = "paperplane"
       task.description = "Writes project metadata for the PaperPlane CLI"
-      task.extension = extension
+      wireMetadataInputs(project, extension, task)
       task.outputDir.set(project.layout.buildDirectory.dir("paperplane"))
     }
 
@@ -49,19 +49,77 @@ class PaperPlanePlugin : Plugin<Project> {
       if (!extension.mainClass.isPresent) {
         // Will be resolved at task execution time by scanning compiled classes
       }
+
+      // Make ppMetadata run after jar packaging so jar path is known.
+      // Prefer shadowJar (fat jar) when available — ensures bundled dependencies are deployed.
+      val jarDep = if (project.tasks.findByName("shadowJar") != null) "shadowJar" else "jar"
+      project.tasks.named("ppMetadata") { task -> task.dependsOn(jarDep) }
     }
 
     project.tasks.register("ppMetadataFast", MetadataTask::class.java) { task ->
       task.group = "paperplane"
       task.description = "Writes project metadata for HMR (skips jar packaging)"
-      task.extension = extension
+      wireMetadataInputs(project, extension, task)
       task.outputDir.set(project.layout.buildDirectory.dir("paperplane"))
     }
 
-    // Make ppMetadata run after compileJava/compileKotlin so jar path is known
-    project.tasks.named("ppMetadata") { task -> task.dependsOn("jar") }
-
     project.tasks.named("ppMetadataFast") { task -> task.dependsOn("classes") }
+  }
+
+  private fun wirePluginYmlInputs(
+      project: Project,
+      extension: PaperPlaneExtension,
+      task: PluginYmlGenerateTask,
+  ) {
+    task.pluginName.set(extension.pluginName)
+    task.mainClass.set(extension.mainClass)
+    task.projectVersion.set(project.provider { project.version.toString() })
+    task.apiVersion.set(extension.apiVersion)
+    task.pluginDescription.set(extension.description)
+    task.authors.set(extension.authors)
+    task.website.set(extension.website)
+    task.depend.set(extension.depend)
+    task.softDepend.set(extension.softDepend)
+
+    val objects = project.objects
+    task.commands.set(
+        project.provider {
+          extension.commands.map { cmd ->
+            objects.newInstance(CommandInput::class.java).apply {
+              commandName.set(cmd.name)
+              description.set(cmd.description)
+              usage.set(cmd.usage)
+              aliases.set(cmd.aliases)
+              permission.set(cmd.permission)
+            }
+          }
+        }
+    )
+    task.permissions.set(
+        project.provider {
+          extension.permissions.map { perm ->
+            objects.newInstance(PermissionInput::class.java).apply {
+              permissionName.set(perm.name)
+              default.set(perm.default)
+              description.set(perm.description)
+              children.set(perm.children)
+            }
+          }
+        }
+    )
+  }
+
+  private fun wireMetadataInputs(
+      project: Project,
+      extension: PaperPlaneExtension,
+      task: MetadataTask,
+  ) {
+    task.pluginName.set(extension.pluginName)
+    task.mainClass.set(extension.mainClass)
+    task.apiVersion.set(extension.apiVersion)
+    task.projectVersion.set(project.provider { project.version.toString() })
+    task.depend.set(extension.depend)
+    task.softDepend.set(extension.softDepend)
   }
 
   private fun detectPaperApiVersion(project: Project): String? {

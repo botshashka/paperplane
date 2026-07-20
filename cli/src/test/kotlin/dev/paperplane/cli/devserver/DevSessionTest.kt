@@ -1,10 +1,17 @@
 package dev.paperplane.cli.devserver
 
 import dev.paperplane.cli.Versions
+import dev.paperplane.cli.config.DevMode
 import dev.paperplane.cli.config.PaperPlaneConfig
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.server.PaperDownloader
+import dev.paperplane.cli.server.PaperServerManager
+import dev.paperplane.cli.testing.DevSessionFixture
+import dev.paperplane.cli.testing.FakePaperServerManager
+import dev.paperplane.cli.ui.RecordingTerminal
+import dev.paperplane.cli.ui.TerminalUI
+import dev.paperplane.cli.watcher.FileWatcher
 import java.io.File
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -16,24 +23,27 @@ import org.junit.jupiter.api.io.TempDir
 class DevSessionTest {
 
   @TempDir lateinit var tempDir: File
+  private val ui = TerminalUI(RecordingTerminal())
 
   private fun createSession(
       jbr: String = "off",
       serverVersion: String? = null,
+      mode: DevMode = DevMode.HOT_RELOAD,
   ): DevSession {
     val config =
-        PaperPlaneConfig.load(tempDir).let { cfg ->
+        PaperPlaneConfig.load(tempDir, ui).let { cfg ->
           cfg.copy(
-              dev = cfg.dev.copy(jbr = jbr),
+              dev = cfg.dev.copy(jbr = jbr, mode = mode),
               server = cfg.server.copy(version = serverVersion),
           )
         }
     return DevSession(
         config = config,
         ppDir = tempDir,
-        gradle = GradleBridge(tempDir),
+        gradle = GradleBridge(tempDir, ui),
         downloader = PaperDownloader(File(tempDir, "cache")),
         projectDir = tempDir,
+        ui = ui,
     )
   }
 
@@ -99,7 +109,7 @@ class DevSessionTest {
   fun `formatDurationMs matches DevSession formatDuration`() {
     val session = createSession()
     for (ms in listOf(0L, 1L, 500L, 999L, 1000L, 1500L, 5000L, 12345L)) {
-      assertEquals(session.formatDuration(ms), formatDurationMs(ms))
+      assertEquals(session.formatDuration(ms), dev.paperplane.cli.util.formatDurationMs(ms))
     }
   }
 
@@ -137,6 +147,166 @@ class DevSessionTest {
     assertTrue(ex.message!!.contains("1.17"))
   }
 
+  // ── enforceHotReloadVersionFloor ────────────────────────────────────
+
+  @Test
+  fun `hot-reload rejects Paper below 1_19_3`() {
+    val session = createSession(mode = DevMode.HOT_RELOAD)
+    val ex =
+        assertThrows(IllegalArgumentException::class.java) {
+          session.enforceHotReloadVersionFloor("1.19.2")
+        }
+    assertTrue(ex.message!!.contains("Hot-reload requires Paper 1.19.3+"))
+    assertTrue(ex.message!!.contains("restart") && ex.message!!.contains("blue-green"))
+  }
+
+  @Test
+  fun `hot-reload accepts Paper at and above 1_19_3`() {
+    val session = createSession(mode = DevMode.HOT_RELOAD)
+    // Exactly the floor and above must not throw.
+    session.enforceHotReloadVersionFloor("1.19.3")
+    session.enforceHotReloadVersionFloor("1.21.11")
+  }
+
+  @Test
+  fun `initialBuild enforces the hot-reload version floor`() {
+    // Wiring test: the floor must actually run on the startup path, not just exist as a function.
+    val fixture = DevSessionFixture(tempDir).withMetadata(paperApiVersion = "1.19.2")
+    val server =
+        FakePaperServerManager(
+            fixture.ppDir,
+            fixture.downloader,
+            fixture.ui,
+        )
+    val ex =
+        assertThrows(IllegalArgumentException::class.java) {
+          fixture.session.initialBuild(fixture.gradle.nextMetadata!!, server)
+        }
+    assertTrue(ex.message!!.contains("Hot-reload requires Paper 1.19.3+"))
+  }
+
+  @Test
+  fun `handleFixAttempt surfaces a floor violation and keeps the fix loop alive`() {
+    // The fix loop runs on the watcher thread — a floor violation must render as a failed attempt,
+    // not an escaping throw that would kill the watcher and hang the session.
+    val fixture = DevSessionFixture(tempDir).withMetadata(paperApiVersion = "1.19.2")
+
+    val result = fixture.session.handleFixAttempt(null)
+
+    assertEquals(DevSession.FixAttempt.BuildFailed, result)
+    assertTrue(
+        fixture.terminal.writes.any { it.contains("Hot-reload requires Paper 1.19.3+") },
+        "the floor's guidance must reach the user; writes were ${fixture.terminal.writes}",
+    )
+  }
+
+  @Test
+  fun `restart and blue-green skip the hot-reload version floor`() {
+    for (mode in
+        listOf(
+            DevMode.RESTART,
+            DevMode.BLUE_GREEN,
+        )) {
+      val session = createSession(mode = mode)
+      // Even ancient Paper is fine for native modes — no floor applies.
+      session.enforceHotReloadVersionFloor("1.16.5")
+    }
+  }
+
+  // ── syncOpsBackToConfig ─────────────────────────────────────────────
+
+  private fun opsBackSetup(
+      initialOps: List<String> = emptyList(),
+      opBanlist: List<String> = emptyList(),
+      liveOpNames: List<String>,
+  ): Pair<DevSession, PaperServerManager> {
+    // Seed paperplane.yml so PaperPlaneConfig.load picks up ops/opBanlist.
+    val yaml = buildString {
+      append("server:\n")
+      if (initialOps.isNotEmpty()) {
+        append("  ops:\n")
+        initialOps.forEach { append("    - \"$it\"\n") }
+      }
+      if (opBanlist.isNotEmpty()) {
+        append("  op-banlist:\n")
+        opBanlist.forEach { append("    - \"$it\"\n") }
+      }
+    }
+    File(tempDir, "paperplane.yml").writeText(yaml)
+    val config = PaperPlaneConfig.load(tempDir, ui)
+    val session =
+        DevSession(
+            config = config,
+            ppDir = tempDir,
+            gradle = GradleBridge(tempDir, ui),
+            downloader = PaperDownloader(File(tempDir, "cache")),
+            projectDir = tempDir,
+            ui = ui,
+        )
+    val serverDir = File(tempDir, "server").apply { mkdirs() }
+    val manager = PaperServerManager(serverDir, PaperDownloader(File(tempDir, "cache")), ui)
+    // Seed ops.json in the format PaperServerManager writes — readOpNames parses it.
+    val entries = liveOpNames.joinToString(",") { "{\"name\":\"$it\",\"level\":4}" }
+    File(serverDir, "ops.json").writeText("[$entries]")
+    return session to manager
+  }
+
+  @Test
+  fun `syncOpsBackToConfig appends new auto-opped names preserving order`() {
+    val (session, manager) =
+        opsBackSetup(
+            initialOps = listOf("alice", "bob"),
+            liveOpNames = listOf("alice", "charlie", "bob", "dave"),
+        )
+    session.syncOpsBackToConfig(manager)
+
+    assertEquals(listOf("alice", "bob", "charlie", "dave"), session.config.server.ops)
+    // Persisted to paperplane.yml too
+    val reloaded = PaperPlaneConfig.load(tempDir, ui)
+    assertEquals(listOf("alice", "bob", "charlie", "dave"), reloaded.server.ops)
+  }
+
+  @Test
+  fun `syncOpsBackToConfig excludes banlisted names`() {
+    val (session, manager) =
+        opsBackSetup(
+            initialOps = listOf("alice"),
+            opBanlist = listOf("eve"),
+            liveOpNames = listOf("alice", "eve", "bob"),
+        )
+    session.syncOpsBackToConfig(manager)
+
+    assertEquals(listOf("alice", "bob"), session.config.server.ops)
+  }
+
+  @Test
+  fun `syncOpsBackToConfig is a no-op when no new names appeared`() {
+    val (session, manager) =
+        opsBackSetup(
+            initialOps = listOf("alice", "bob"),
+            liveOpNames = listOf("alice", "bob"),
+        )
+    // Delete paperplane.yml after setup so we can detect a write.
+    File(tempDir, "paperplane.yml").delete()
+    session.syncOpsBackToConfig(manager)
+
+    assertFalse(
+        File(tempDir, "paperplane.yml").exists(),
+        "no-op sync must not rewrite paperplane.yml",
+    )
+    assertEquals(listOf("alice", "bob"), session.config.server.ops)
+  }
+
+  @Test
+  fun `syncOpsBackToConfig is a no-op when ops json is missing`() {
+    val (session, manager) = opsBackSetup(initialOps = listOf("alice"), liveOpNames = emptyList())
+    File(manager.serverDir, "ops.json").delete()
+    File(tempDir, "paperplane.yml").delete()
+    session.syncOpsBackToConfig(manager)
+
+    assertFalse(File(tempDir, "paperplane.yml").exists())
+  }
+
   @Test
   fun `resolveMcVersion throws for unsupported config override`() {
     val session = createSession(serverVersion = "1.16.5")
@@ -147,16 +317,101 @@ class DevSessionTest {
     assertTrue(ex.message!!.contains("1.16"))
   }
 
-  // ── DevSession constants ──────────────────────────────────────────
+  // ── maybeInvalidateGradleConnection ─────────────────────────────────
 
-  @Test
-  fun `SERVER_PORT and SWAP_PORT are distinct`() {
-    assertTrue(DevSession.SERVER_PORT != DevSession.SWAP_PORT)
+  private class CountingGradleBridge(projectDir: File, ui: TerminalUI) :
+      GradleBridge(projectDir, ui) {
+    var closeCount = 0
+      private set
+
+    override fun doClose() {
+      closeCount++
+    }
+  }
+
+  private fun invalidationSession(bridge: CountingGradleBridge): DevSession {
+    val config = PaperPlaneConfig.load(tempDir, ui)
+    return DevSession(
+        config = config,
+        ppDir = tempDir,
+        gradle = bridge,
+        downloader = PaperDownloader(File(tempDir, "cache")),
+        projectDir = tempDir,
+        ui = ui,
+    )
   }
 
   @Test
-  fun `SERVER_PORT and SWAP_PORT are in valid range`() {
-    assertTrue(DevSession.SERVER_PORT in 1024..65535)
-    assertTrue(DevSession.SWAP_PORT in 1024..65535)
+  fun `maybeInvalidateGradleConnection does nothing for source-only changes`() {
+    val bridge = CountingGradleBridge(tempDir, ui)
+    val session = invalidationSession(bridge)
+    val srcPath = FileWatcher.normalizePath(File(tempDir, "src/main/java/Foo.java").absolutePath)
+
+    session.maybeInvalidateGradleConnection(listOf(srcPath))
+
+    assertEquals(0, bridge.closeCount)
+  }
+
+  @Test
+  fun `maybeInvalidateGradleConnection closes when build-gradle-kts changes`() {
+    val bridge = CountingGradleBridge(tempDir, ui)
+    val session = invalidationSession(bridge)
+    val buildPath = FileWatcher.normalizePath(File(tempDir, "build.gradle.kts").absolutePath)
+
+    session.maybeInvalidateGradleConnection(listOf(buildPath))
+
+    assertEquals(1, bridge.closeCount)
+  }
+
+  @Test
+  fun `maybeInvalidateGradleConnection closes when settings or properties change`() {
+    val bridge = CountingGradleBridge(tempDir, ui)
+    val session = invalidationSession(bridge)
+    val settingsPath = FileWatcher.normalizePath(File(tempDir, "settings.gradle.kts").absolutePath)
+    val propsPath = FileWatcher.normalizePath(File(tempDir, "gradle.properties").absolutePath)
+
+    session.maybeInvalidateGradleConnection(listOf(settingsPath))
+    session.maybeInvalidateGradleConnection(listOf(propsPath))
+
+    assertEquals(2, bridge.closeCount)
+  }
+
+  @Test
+  fun `maybeInvalidateGradleConnection closes once for mixed change sets`() {
+    val bridge = CountingGradleBridge(tempDir, ui)
+    val session = invalidationSession(bridge)
+    val srcPath = FileWatcher.normalizePath(File(tempDir, "src/main/java/Foo.java").absolutePath)
+    val buildPath = FileWatcher.normalizePath(File(tempDir, "build.gradle.kts").absolutePath)
+
+    session.maybeInvalidateGradleConnection(listOf(srcPath, buildPath))
+
+    assertEquals(1, bridge.closeCount)
+  }
+
+  @Test
+  fun `maybeInvalidateGradleConnection matches normalized watcher paths byte-for-byte`() {
+    // The watcher emits paths via FileWatcher.normalizePath, and the check normalizes the
+    // build-config paths the same way before comparison. Whatever a real file's absolute path
+    // looks like on disk, sending it back through normalizePath must produce a hit — otherwise
+    // the watcher and the check would silently disagree.
+    val bridge = CountingGradleBridge(tempDir, ui)
+    val session = invalidationSession(bridge)
+    val watcherEmitted =
+        FileWatcher.normalizePath(File(tempDir, "build.gradle.kts").absoluteFile.path)
+
+    session.maybeInvalidateGradleConnection(listOf(watcherEmitted))
+
+    assertEquals(1, bridge.closeCount)
+  }
+
+  @Test
+  fun `maybeInvalidateGradleConnection ignores non-matching paths in the changed list`() {
+    val bridge = CountingGradleBridge(tempDir, ui)
+    val session = invalidationSession(bridge)
+    val unrelated = FileWatcher.normalizePath(File(tempDir, "build.gradle.unrelated").absolutePath)
+
+    session.maybeInvalidateGradleConnection(listOf(unrelated))
+
+    assertEquals(0, bridge.closeCount)
   }
 }

@@ -1,23 +1,12 @@
-plugins { alias(libs.plugins.shadow) }
-
-repositories { maven("https://repo.papermc.io/repository/maven-public/") }
+plugins { id("paperplane.minecraft-plugin") }
 
 dependencies {
   compileOnly(libs.velocity.api)
   implementation(libs.gson)
 }
 
-tasks.processResources { expand("version" to project.version) }
-
 tasks.shadowJar {
-  archiveBaseName.set("paperplane-velocity")
-  archiveClassifier.set("")
-  archiveVersion.set("")
+  archiveBaseName = "paperplane-velocity"
+  archiveClassifier = ""
+  archiveVersion = ""
 }
-
-tasks.jar {
-  archiveBaseName.set("paperplane-velocity")
-  enabled = false
-}
-
-tasks.named("build") { dependsOn(tasks.shadowJar) }

@@ -1,32 +1,4 @@
-plugins {
-    alias(libs.plugins.kotlin.jvm) apply false
-    alias(libs.plugins.ktfmt) apply false
-    alias(libs.plugins.detekt) apply false
-}
-
-allprojects {
-    group = "dev.paperplane"
-    version = "0.1.0"
-
-    repositories {
-        mavenCentral()
-        maven("https://repo.gradle.org/gradle/libs-releases")
-        maven("https://repo.papermc.io/repository/maven-public/")
-    }
-}
-
-subprojects {
-    apply(plugin = "org.jetbrains.kotlin.jvm")
-    apply(plugin = "com.ncorti.ktfmt.gradle")
-    apply(plugin = "dev.detekt")
-
-    configure<JavaPluginExtension> {
-        toolchain {
-            languageVersion.set(JavaLanguageVersion.of(21))
-        }
-    }
-
-tasks.withType<Test> {
-        useJUnitPlatform()
-    }
-}
+// Root build file — shared configuration lives in convention plugins in buildSrc/:
+//   paperplane.java            — base JVM config (toolchain, JUnit, mavenCentral)
+//   paperplane.kotlin          — adds Kotlin, ktfmt, detekt
+//   paperplane.minecraft-plugin — adds shadow + PaperMC repo for server plugins

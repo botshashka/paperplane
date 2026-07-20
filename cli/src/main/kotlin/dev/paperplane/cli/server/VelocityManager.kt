@@ -1,10 +1,11 @@
 package dev.paperplane.cli.server
 
+import dev.paperplane.cli.ui.Ansi
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import java.util.UUID
 
-class VelocityManager(private val proxyDir: File) {
+open class VelocityManager(private val proxyDir: File, private val ui: TerminalUI) {
   companion object {
     private const val TRANSFER_POLL_INTERVAL_MS = 100L
     private const val STOP_TIMEOUT_SECONDS = 5L
@@ -18,7 +19,7 @@ class VelocityManager(private val proxyDir: File) {
 
   val forwardingSecret: String = UUID.randomUUID().toString()
 
-  fun configure(serverPort: Int, swapPort: Int, proxyPort: Int) {
+  open fun configure(serverPort: Int, swapPort: Int, proxyPort: Int) {
     proxyDir.mkdirs()
     pluginsDir.mkdirs()
 
@@ -70,11 +71,11 @@ class VelocityManager(private val proxyDir: File) {
     copyTransferPlugin()
   }
 
-  fun clearTransferComplete() {
+  open fun clearTransferComplete() {
     File(proxyDir, "transfer-complete").delete()
   }
 
-  fun waitForTransferComplete(timeoutMs: Long = 5000): Boolean {
+  open fun waitForTransferComplete(timeoutMs: Long = 5000): Boolean {
     val file = File(proxyDir, "transfer-complete")
     val start = System.currentTimeMillis()
     while (System.currentTimeMillis() - start < timeoutMs) {
@@ -87,15 +88,15 @@ class VelocityManager(private val proxyDir: File) {
     return false
   }
 
-  fun writeActiveServer(serverName: String, transfer: Boolean = false) {
+  open fun writeActiveServer(serverName: String, transfer: Boolean = false) {
     File(proxyDir, "active-server.json")
         .writeText("""{"active":"$serverName","transfer":$transfer}""")
   }
 
-  fun start(velocityJar: File): Process {
+  open fun start(velocityJar: File, javaBin: String = "java") {
     val cmd =
         listOf(
-            "java",
+            javaBin,
             "-Xmx256M",
             "-XX:+UseG1GC",
             "--enable-native-access=ALL-UNNAMED",
@@ -117,18 +118,16 @@ class VelocityManager(private val proxyDir: File) {
     Thread(
             {
               proc.inputStream.bufferedReader().forEachLine { line ->
-                TerminalUI.serverLog("  ${formatProxyLine(line)}")
+                ui.serverLog("  ${formatProxyLine(line)}")
               }
             },
             "proxy-output",
         )
         .apply { isDaemon = true }
         .start()
-
-    return proc
   }
 
-  fun stop() {
+  open fun stop() {
     val proc = process ?: return
     if (!proc.isAlive) return
 
@@ -141,15 +140,15 @@ class VelocityManager(private val proxyDir: File) {
     process = null
   }
 
-  fun isRunning(): Boolean = process?.isAlive == true
+  open fun isRunning(): Boolean = process?.isAlive == true
 
-  fun waitForReady(port: Int = PaperServerManager.DEFAULT_PORT): Boolean {
+  open fun waitForReady(port: Int = PaperServerManager.DEFAULT_PORT): Boolean {
     val proc = process ?: return false
     val startTime = System.currentTimeMillis()
     val timeout = READY_TIMEOUT_MS
     while (proc.isAlive && System.currentTimeMillis() - startTime < timeout) {
       try {
-        java.net.Socket("localhost", port).close()
+        java.net.Socket(java.net.InetAddress.getLoopbackAddress(), port).close()
         return true
       } catch (_: Exception) {
         Thread.sleep(READY_POLL_INTERVAL_MS)
@@ -168,13 +167,10 @@ class VelocityManager(private val proxyDir: File) {
 
   private val proxyLineRegex = Regex("""\[[\d:]+] \[([^]]+)] (.+)""")
 
-  private fun formatProxyLine(line: String): String {
+  internal fun formatProxyLine(line: String): String {
     val match = proxyLineRegex.find(line)
-    return if (match != null) {
-      val (thread, message) = match.destructured
-      "\u001b[2m[proxy/$thread]\u001b[0m $message"
-    } else {
-      "\u001b[2m[proxy]\u001b[0m $line"
-    }
+    val prefix = if (match != null) "proxy/${match.destructured.component1()}" else "proxy"
+    val message = if (match != null) match.destructured.component2() else line
+    return if (Ansi.useColor) "\u001b[2m[$prefix]\u001b[0m $message" else "[$prefix] $message"
   }
 }

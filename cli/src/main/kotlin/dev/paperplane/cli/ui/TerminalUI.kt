@@ -1,237 +1,178 @@
 package dev.paperplane.cli.ui
 
+import dev.paperplane.cli.ui.Ansi.bold
+import dev.paperplane.cli.ui.Ansi.brightWhite
+import dev.paperplane.cli.ui.Ansi.cyan
+import dev.paperplane.cli.ui.Ansi.dim
+import dev.paperplane.cli.ui.Ansi.green
+import dev.paperplane.cli.ui.Ansi.red
+import dev.paperplane.cli.ui.Ansi.yellow
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
-object TerminalUI {
-  private const val SPINNER_FRAME_INTERVAL_MS = 80L
-  private const val SPINNER_THREAD_JOIN_TIMEOUT_MS = 200L
-
-  private val noColor = System.getenv("NO_COLOR") != null
-  private val isTty = System.console() != null
-
-  // ANSI codes
-  private const val RESET = "\u001b[0m"
-  private const val BOLD = "\u001b[1m"
-  private const val DIM = "\u001b[2m"
-  private const val RED = "\u001b[31m"
-  private const val GREEN = "\u001b[32m"
-  private const val YELLOW = "\u001b[33m"
-  private const val BLUE = "\u001b[34m"
-  private const val CYAN = "\u001b[36m"
-  private const val WHITE = "\u001b[37m"
-  private const val BRIGHT_WHITE = "\u001b[97m"
-
-  enum class BlockType {
-    PERSIST, // printed to scroll when ended (startup, rebuild, info blocks)
-    TRANSIENT, // erased silently when ended (watching/waiting status)
+/**
+ * Public CLI rendering facade. Owns concurrency (a [ReentrantLock]), formatting (Ansi colors), and
+ * the spinner thread; delegates all state-machine and I/O work to [BlockState] + [BlockRenderer].
+ *
+ * One instance per CLI process. Constructed in `PaperPlane.main` with an [AnsiTerminal] and
+ * threaded through every command, dev-server mode, and helper via constructor injection. Tests
+ * construct a `TerminalUI(RecordingTerminal())` and assert on the recorded writes.
+ *
+ * The block/footer rules — separator handling, PERSIST vs TRANSIENT semantics, log interleaving
+ * above the pinned footer, spinner frame management — all live in [BlockState] and are
+ * unit-testable without a real terminal.
+ */
+class TerminalUI(terminal: Terminal) {
+  companion object {
+    private const val SPINNER_FRAME_INTERVAL_MS = 80L
+    private const val SPINNER_THREAD_JOIN_TIMEOUT_MS = 200L
   }
 
-  // Sticky footer state — all guarded by [lock]
+  /**
+   * Controls what trailing footer [phase] opens after its body returns.
+   * - [Watching]: "Watching for changes..." transient footer (normal success flow)
+   * - [Waiting]: "Waiting for changes..." transient footer (build/server failure flow)
+   * - [None]: no trailing footer (terminal states — shutdown, unrecoverable error)
+   */
+  enum class PhaseEnd {
+    Watching,
+    Waiting,
+    None,
+  }
+
+  /** Backwards-compatible accessor — delegates to [Ansi.useColor]. */
+  val useColor: Boolean
+    get() = Ansi.useColor
+
   private val lock = ReentrantLock()
-  private var blockActive = false
-  private var currentBlockType = BlockType.PERSIST
-  private val blockLines = mutableListOf<String>()
-  private var displayedLineCount = 0
-  private var spinnerMessage: String? = null
-  private var spinnerSubstatus: String? = null
-  private var spinnerFrameIndex = 0
-  private var needsSeparator = true
-  private var hasLogOutput = false
+  private val state = BlockState(terminal.isTty, widthProvider = { terminal.width })
+  private val renderer = BlockRenderer(Writer(terminal))
 
-  private val spinnerFrames = arrayOf("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
-
-  // ── Color helpers ──────────────────────────────────────────────────
-
-  private fun color(code: String, text: String): String = if (noColor) text else "$code$text$RESET"
-
-  private fun bold(text: String) = color(BOLD, text)
-
-  private fun dim(text: String) = color(DIM, text)
-
-  private fun green(text: String) = color(GREEN, text)
-
-  private fun red(text: String) = color(RED, text)
-
-  private fun yellow(text: String) = color(YELLOW, text)
-
-  private fun cyan(text: String) = color(CYAN, text)
-
-  private fun brightWhite(text: String) = color(BRIGHT_WHITE, text)
-
-  // ── Sticky footer internals ────────────────────────────────────────
-
-  /** Erases the currently displayed footer from the terminal. Must hold [lock]. */
-  private fun clearDisplay() {
-    if (displayedLineCount <= 0) return
-    print("\u001b[${displayedLineCount}A")
-    repeat(displayedLineCount) { print("\u001b[2K\n") }
-    print("\u001b[${displayedLineCount}A")
-    System.out.flush()
-    displayedLineCount = 0
+  /** Drives [state] under the lock and renders the resulting ops. */
+  private inline fun run(block: BlockState.() -> List<RenderOp>) {
+    lock.withLock { renderer.render(state.block()) }
   }
 
-  /** Redraws the full footer (block lines + optional spinner). Must hold [lock]. */
-  private fun redraw() {
-    if (!isTty) return
-    clearDisplay()
-    // Blank separator only after server/proxy logs have appeared above
-    val sep =
-        if (needsSeparator || currentBlockType == BlockType.TRANSIENT || hasLogOutput) {
-          println()
-          1
-        } else 0
-    for (line in blockLines) {
-      println(line)
-    }
-    val extra =
-        if (spinnerMessage != null) {
-          val frame =
-              if (noColor) spinnerFrames[spinnerFrameIndex]
-              else "$CYAN${spinnerFrames[spinnerFrameIndex]}$RESET"
-          val sub = spinnerSubstatus
-          val detail = if (sub != null) "  ${dim(sub)}" else ""
-          println("  $frame  ${dim(spinnerMessage!!)}$detail")
-          1
-        } else 0
-    displayedLineCount = sep + blockLines.size + extra
+  // ── Block lifecycle (internal — invoked by block { } / phase { }) ──
+
+  @PublishedApi
+  internal fun beginBlock(persist: Boolean = true) {
+    val type = if (persist) BlockState.BlockType.PERSIST else BlockState.BlockType.TRANSIENT
+    run { beginBlock(type) }
   }
 
-  /** If needed, prints a blank separator line before scroll-committed output. Must hold [lock]. */
-  private fun emitSeparatorIfNeeded() {
-    if (needsSeparator) {
-      println()
-      needsSeparator = false
-    }
-  }
+  @PublishedApi internal fun endBlock() = run { endBlock() }
 
-  private fun resetBlock() {
-    blockLines.clear()
-    spinnerMessage = null
-    spinnerSubstatus = null
-    displayedLineCount = 0
-    blockActive = false
-    hasLogOutput = false
-  }
-
-  // ── Block lifecycle ────────────────────────────────────────────────
+  @PublishedApi internal fun discardBlock() = run { discardBlock() }
 
   /**
-   * Starts a new pinned footer block. [type] determines what happens when the block ends:
-   * - [BlockType.PERSIST]: content is printed to scroll
-   * - [BlockType.TRANSIENT]: content is silently erased
+   * Scoped PERSIST block. Use for command one-shot output:
+   * ```
+   * TerminalUI.block {
+   *     success("Done")
+   *     info("files", "12 changed")
+   * }
+   * ```
+   *
+   * The lambda receiver is `TerminalUI`, so emit calls are unqualified. The block closes on scope
+   * exit even if [body] throws — "forgot to endBlock" becomes impossible.
    */
-  fun beginBlock(type: BlockType = BlockType.PERSIST) {
-    lock.withLock {
-      blockActive = true
-      currentBlockType = type
-      hasLogOutput = false
+  inline fun <T> block(body: TerminalUI.() -> T): T {
+    beginBlock(persist = true)
+    try {
+      return body()
+    } finally {
+      endBlock()
     }
   }
 
   /**
-   * Ends the current block. PERSIST blocks are printed to scroll with a blank line before (not
-   * after) for separation from previous content. TRANSIENT blocks are silently erased.
+   * Scoped iteration block for dev-server loops. Discards any prior pinned footer, opens a PERSIST
+   * block, runs [body], closes it, then opens a trailing TRANSIENT footer whose label is determined
+   * by [body]'s return value.
+   *
+   * Exceptions inside [body] clear the pinned footer and rethrow — the block doesn't leak.
    */
-  fun endBlock() {
-    lock.withLock {
-      if (!blockActive && blockLines.isEmpty()) return
-      if (isTty) clearDisplay()
-      if (currentBlockType == BlockType.PERSIST && blockLines.isNotEmpty()) {
-        emitSeparatorIfNeeded()
-        for (line in blockLines) {
-          println(line)
-        }
-        needsSeparator = true
-      }
-      resetBlock()
+  inline fun phase(body: TerminalUI.() -> PhaseEnd) {
+    discardBlock()
+    beginBlock(persist = true)
+    var completed = false
+    val end: PhaseEnd
+    try {
+      end = body()
+      completed = true
+    } finally {
+      if (!completed) discardBlock()
     }
-  }
-
-  /**
-   * Discards the current pinned block without printing it, regardless of type. Use in shutdown
-   * hooks where no new block follows.
-   */
-  fun discardBlock() {
-    lock.withLock {
-      if (!blockActive && blockLines.isEmpty()) return
-      if (isTty) clearDisplay()
-      resetBlock()
-    }
-  }
-
-  /**
-   * Ends the current block and starts a transient "Watching/Waiting" block. Convenience for the
-   * pattern that repeats throughout DevCommand.
-   */
-  fun awaitChanges(watching: Boolean = true) {
     endBlock()
-    beginBlock(BlockType.TRANSIENT)
-    status(if (watching) "Watching for changes..." else "Waiting for changes...")
-  }
-
-  // ── Output methods (block-aware) ───────────────────────────────────
-
-  private fun emit(text: String) {
-    lock.withLock {
-      if (blockActive && isTty) {
-        blockLines.add(text)
-        redraw()
-      } else {
-        println(text)
+    when (end) {
+      PhaseEnd.Watching -> {
+        beginBlock(persist = false)
+        status("Watching for changes...")
       }
+      PhaseEnd.Waiting -> {
+        beginBlock(persist = false)
+        status("Waiting for changes...")
+      }
+      PhaseEnd.None -> Unit
     }
   }
 
   /**
-   * Prints a server/proxy log line above the pinned footer. When no block is active, prints
-   * directly.
+   * Clears any pinned footer. Safety net for shutdown hooks; also used between dev-server phases
+   * when a health-check fails. Idempotent — no-op if nothing is pinned.
    */
-  fun serverLog(line: String) {
-    lock.withLock {
-      if (blockActive && isTty && displayedLineCount > 0) {
-        val first = !hasLogOutput
-        hasLogOutput = true
-        clearDisplay()
-        if (first) emitSeparatorIfNeeded()
-        println(line)
-        needsSeparator = true
-        redraw()
-      } else {
-        if (!hasLogOutput) emitSeparatorIfNeeded()
-        hasLogOutput = true
-        println(line)
-        needsSeparator = true
-      }
-    }
+  fun clearPinnedFooter() = run { discardBlock() }
+
+  /**
+   * Commits the current sub-group of lines and opens a fresh sub-block of the same type. Use inside
+   * a [phase] body to insert a section boundary between two visually separate groups of output
+   * without breaking out of the phase. The committed group is promoted to permanent scrollback, so
+   * if the phase body later throws, only the new group is discarded.
+   */
+  fun nextSection() = run { nextSection() }
+
+  // ── Output ─────────────────────────────────────────────────────────
+
+  private fun emit(text: String) = run { emit(text) }
+
+  /** Prints a server/proxy log line above the pinned footer. */
+  fun serverLog(line: String) = run { serverLog(line) }
+
+  // ── Out-of-block primitives ────────────────────────────────────────
+
+  fun cancelled() = run { cancelled("  ${yellow("⚠")}  ${dim("Cancelled")}") }
+
+  fun header(version: String) = run {
+    header("  ${cyan("✈")}  ${bold(cyan("PaperPlane"))} ${dim("v$version")}")
   }
 
-  // ── Public status methods ──────────────────────────────────────────
+  /**
+   * Bold subtitle line printed directly under [header]. Bypasses the block system since it appears
+   * before any block activity.
+   */
+  fun subtitle(text: String) = run { subtitle("  ${bold(brightWhite(text))}") }
 
-  fun header(version: String) {
-    println()
-    println("  ${cyan("✈")}  ${bold(cyan("PaperPlane"))} ${dim("v$version")}")
-    needsSeparator = true
-  }
+  /**
+   * Marks the end of a "view". Emits one trailing blank line so the shell prompt has breathing
+   * room. Idempotent within a view (reset by [header]).
+   */
+  fun endView() = run { endView() }
+
+  // ── Typed status emitters ──────────────────────────────────────────
 
   fun success(message: String, duration: String? = null) {
     val text =
-        if (duration != null) {
-          "  ${green("✓")}  $message ${dim(duration)}"
-        } else {
-          "  ${green("✓")}  $message"
-        }
+        if (duration != null) "  ${green("✓")}  $message ${dim(duration)}"
+        else "  ${green("✓")}  $message"
     emit(text)
   }
 
   fun error(message: String, duration: String? = null) {
     val text =
-        if (duration != null) {
-          "  ${red("✗")}  $message ${dim(duration)}"
-        } else {
-          "  ${red("✗")}  $message"
-        }
+        if (duration != null) "  ${red("✗")}  $message ${dim(duration)}"
+        else "  ${red("✗")}  $message"
     emit(text)
   }
 
@@ -285,30 +226,21 @@ object TerminalUI {
     emit("     $icon $name ${dim(duration)}")
   }
 
-  fun testSummary(passed: Int, failed: Int, total: Int, buildTime: String, testTime: String) {
+  fun testSummary(passed: Int, failed: Int, total: Int, totalTime: String, testTime: String) {
     emit("")
     val passedText = green("$passed passed")
     val failedText = if (failed > 0) "  ${red("$failed failed")}" else ""
     emit("  Tests   $passedText$failedText  ${dim("($total)")}")
-    emit("  Time    ${buildTime} ${dim("(build ${buildTime}, tests ${testTime})")}")
+    emit("  Time    $totalTime  ${dim("(tests $testTime)")}")
   }
 
   // ── Spinner ────────────────────────────────────────────────────────
 
   /**
    * Updates the detail text shown after the spinner message on the same line. Only meaningful while
-   * a [spin] block is executing; otherwise falls back to [status].
+   * a [spin] block is executing; otherwise falls back to a normal status emit.
    */
-  fun spinSubstatus(text: String) {
-    lock.withLock {
-      if (spinnerMessage != null) {
-        spinnerSubstatus = text
-        redraw()
-      } else {
-        emit("  ${dim(text)}")
-      }
-    }
-  }
+  fun spinSubstatus(text: String) = run { setSpinnerSubstatus(text) }
 
   /**
    * Runs [block] while showing a spinner with [message] pinned in the footer. Server/proxy logs
@@ -317,15 +249,9 @@ object TerminalUI {
    */
   fun <T> spin(message: String, block: () -> T): T {
     val autoBlock = lock.withLock {
-      val auto = !blockActive
-      if (auto) {
-        blockActive = true
-        currentBlockType = BlockType.PERSIST
-      }
-      spinnerMessage = message
-      spinnerSubstatus = null
-      spinnerFrameIndex = 0
-      redraw()
+      val auto = !state.isBlockActive
+      if (auto) renderer.render(state.beginBlock(BlockState.BlockType.PERSIST))
+      renderer.render(state.setSpinner(message, null))
       auto
     }
 
@@ -333,16 +259,9 @@ object TerminalUI {
     val thread =
         Thread(
             {
-              var i = 0
               while (!done.get()) {
                 Thread.sleep(SPINNER_FRAME_INTERVAL_MS)
-                lock.withLock {
-                  if (!done.get()) {
-                    i = (i + 1) % spinnerFrames.size
-                    spinnerFrameIndex = i
-                    redraw()
-                  }
-                }
+                lock.withLock { if (!done.get()) renderer.render(state.tickSpinner()) }
               }
             },
             "spinner",
@@ -356,19 +275,8 @@ object TerminalUI {
       done.set(true)
       thread.join(SPINNER_THREAD_JOIN_TIMEOUT_MS)
       lock.withLock {
-        spinnerMessage = null
-        spinnerSubstatus = null
-        if (isTty) redraw()
-        if (autoBlock) {
-          if (blockLines.isNotEmpty()) {
-            emitSeparatorIfNeeded()
-            for (line in blockLines) {
-              println(line)
-            }
-            needsSeparator = true
-          }
-          resetBlock()
-        }
+        val ops = state.clearSpinner() + if (autoBlock) state.endBlock() else emptyList()
+        renderer.render(ops)
       }
     }
   }

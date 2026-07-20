@@ -2,6 +2,8 @@ package dev.paperplane.cli.server
 
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import dev.paperplane.cli.ui.RecordingTerminal
+import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import org.junit.jupiter.api.Assertions.assertDoesNotThrow
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -17,11 +19,12 @@ class AtomicWriteTest {
   @TempDir lateinit var tempDir: File
 
   private val gson = Gson()
+  private val ui = TerminalUI(RecordingTerminal())
 
   private fun createManager(): PaperServerManager {
     val serverDir = File(tempDir, "server")
     val cacheDir = File(tempDir, "cache")
-    return PaperServerManager(serverDir, PaperDownloader(cacheDir))
+    return PaperServerManager(serverDir, PaperDownloader(cacheDir), ui)
   }
 
   @Test

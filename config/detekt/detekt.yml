@@ -1,3 +1,24 @@
+# Detekt rule overrides layered on the bundled default config
+# (see `buildUponDefaultConfig = true` in the root build.gradle.kts).
+# Rules not listed here inherit their default values.
+
+complexity:
+  # Facade objects (TerminalUI — block/phase/emit/spin/typed-output layers, all sharing the
+  # sticky-footer state), template libraries (ProjectTemplates), and service classes
+  # (PaperServerManager, BlueGreenMode, DevSession, GradleBridge, CreateCommand) cluster
+  # many small cohesive functions. Decomposing further would split tightly-related state
+  # across unrelated types for no real readability win.
+  TooManyFunctions:
+    allowedFunctionsPerClass: 32
+    allowedFunctionsPerObject: 32
+
 style:
   ReturnCount:
     max: 4
+
+  # LoopWithTooManyJumpStatements fires on any loop with >1 break/continue. In every current
+  # hit (CreateCommand.promptProjectNameAndDir validation loop, ImplodeCommand rc-file walker)
+  # the alternative — refactoring to a single exit point with boolean flags — hurts
+  # readability. Low-signal stylistic rule; disabled.
+  LoopWithTooManyJumpStatements:
+    active: false

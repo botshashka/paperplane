@@ -3,6 +3,7 @@ package dev.paperplane.cli.server
 import com.google.gson.Gson
 import com.google.gson.JsonArray
 import dev.paperplane.cli.ui.TerminalUI
+import dev.paperplane.cli.util.Platform
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -18,15 +19,25 @@ import java.net.http.HttpResponse
  * interfaces) via Instrumentation.redefineClasses().
  *
  * Downloads from JetBrains cache-redirector with release info from GitHub API. Caches extracted JDK
- * in .paperplane/cache/jbr-{version}/.
+ * in ~/.paperplane/jbr/{version}-{os}-{arch}/.
  */
-class JbrDownloader(private val cacheDir: File) {
+class JbrDownloader(private val ui: TerminalUI, cacheDir: File? = null) {
   private val client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()
   private val gson = Gson()
+  private val cacheDir = cacheDir ?: File(Platform.paperplaneHome, "jbr")
 
-  /** Downloads JBR if not cached. Returns the path to the `java` binary. */
+  /**
+   * Downloads JBR if not cached. Returns the path to the `java` binary.
+   *
+   * Three legitimately distinct failure modes (no release found / HTTP error / extracted but binary
+   * not found) at three different stages of the procedure — collapsing them into a single throw
+   * site would obscure where the failure originated.
+   */
+  @Suppress("ThrowsCount")
   fun download(jdkMajorVersion: String = "21"): File {
-    val jbrDir = File(cacheDir, "jbr-$jdkMajorVersion")
+    val os = detectOs()
+    val arch = detectArch()
+    val jbrDir = File(cacheDir, "$jdkMajorVersion-$os-$arch")
     val javaBin = findJavaBin(jbrDir)
     if (javaBin != null) return javaBin
 
@@ -37,26 +48,29 @@ class JbrDownloader(private val cacheDir: File) {
         findLatestRelease(jdkMajorVersion)
             ?: throw IOException("No JBR release found for JDK $jdkMajorVersion")
 
-    val os = detectOs()
-    val arch = detectArch()
     val downloadUrl = buildDownloadUrl(release, os, arch)
 
-    TerminalUI.spinSubstatus("${release.version} ($os-$arch)")
+    ui.spinSubstatus("${release.version} ($os-$arch)")
 
-    // Download tarball to temp file
-    val tarball = File(cacheDir, "jbr-$jdkMajorVersion.tar.gz")
+    // Download archive to temp file
+    val ext = if (Platform.isWindows) ".zip" else ".tar.gz"
+    val archive = File(cacheDir, "jbr-$jdkMajorVersion$ext")
     val request = HttpRequest.newBuilder().uri(URI.create(downloadUrl)).build()
-    val response = client.send(request, HttpResponse.BodyHandlers.ofFile(tarball.toPath()))
+    val response = client.send(request, HttpResponse.BodyHandlers.ofFile(archive.toPath()))
 
     if (response.statusCode() != HttpURLConnection.HTTP_OK) {
-      tarball.delete()
+      archive.delete()
       throw IOException("Failed to download JBR: HTTP ${response.statusCode()} from $downloadUrl")
     }
 
-    // Extract tarball
+    // Extract archive
     jbrDir.mkdirs()
-    extractTarGz(tarball, jbrDir)
-    tarball.delete()
+    if (Platform.isWindows) {
+      Platform.extractZip(archive, jbrDir)
+    } else {
+      extractTarGz(archive, jbrDir)
+    }
+    archive.delete()
 
     return findJavaBin(jbrDir)
         ?: throw IOException("JBR extracted but java binary not found in $jbrDir")
@@ -64,32 +78,17 @@ class JbrDownloader(private val cacheDir: File) {
 
   private fun findJavaBin(jbrDir: File): File? {
     if (!jbrDir.exists()) return null
-
-    // macOS: Contents/Home/bin/java (inside a wrapper dir)
-    // Linux: bin/java (inside a wrapper dir)
-    // The tarball extracts to a subdirectory like jbrsdk-21.0.10-osx-aarch64-b1163.110/
-    val candidates =
-        listOf(
-            // Direct bin
-            File(jbrDir, "bin/java"),
-            // macOS layout
-            File(jbrDir, "Contents/Home/bin/java"),
-        )
-
-    for (candidate in candidates) {
-      if (candidate.exists()) return candidate
-    }
-
-    // Search one level deep (tarball extracts to a subdirectory)
-    val subdirs = jbrDir.listFiles { f -> f.isDirectory } ?: return null
-    for (subdir in subdirs) {
-      for (relPath in listOf("bin/java", "Contents/Home/bin/java")) {
-        val candidate = File(subdir, relPath)
-        if (candidate.exists()) return candidate
+    val binary = if (Platform.isWindows) "java.exe" else "java"
+    val candidates = sequence {
+      yield(File(jbrDir, "bin/$binary"))
+      if (!Platform.isWindows) yield(File(jbrDir, "Contents/Home/bin/$binary"))
+      val subdirs = jbrDir.listFiles { f -> f.isDirectory } ?: emptyArray()
+      for (subdir in subdirs) {
+        yield(File(subdir, "bin/$binary"))
+        if (!Platform.isWindows) yield(File(subdir, "Contents/Home/bin/$binary"))
       }
     }
-
-    return null
+    return candidates.firstOrNull { it.exists() }
   }
 
   private data class JbrRelease(val version: String, val buildId: String)
@@ -121,8 +120,8 @@ class JbrDownloader(private val cacheDir: File) {
   }
 
   private fun buildDownloadUrl(release: JbrRelease, os: String, arch: String): String {
-    // Use jbrsdk (SDK, not JRE) — we need javac isn't required but full JDK is standard
-    val filename = "jbrsdk-${release.version}-$os-$arch-${release.buildId}.tar.gz"
+    val ext = if (Platform.isWindows) ".zip" else ".tar.gz"
+    val filename = "jbrsdk-${release.version}-$os-$arch-${release.buildId}$ext"
     return "https://cache-redirector.jetbrains.com/intellij-jbr/$filename"
   }
 

@@ -1,21 +1,31 @@
 package dev.paperplane.cli.watcher
 
+import dev.paperplane.cli.util.Platform
 import java.io.File
 
-class FileWatcher(
+open class FileWatcher(
     private val watchDir: File,
     private val debounceMs: Long = 2000,
-    private val onChange: (List<String>) -> Unit,
+    private val extraFiles: List<File> = emptyList(),
+    protected val onChange: (List<String>) -> Unit,
 ) {
   companion object {
     private const val POLL_INTERVAL_MS = 500L
     private const val STOP_JOIN_TIMEOUT_MS = 2000L
+
+    /**
+     * Normalize a file path the same way the watcher does when emitting changed-file paths. Callers
+     * comparing paths against the watcher's output (e.g. DevSession deciding whether a build-config
+     * file changed) must run their candidate paths through this — on Windows the watcher
+     * lowercases, so a case-mismatched check would silently miss changes.
+     */
+    fun normalizePath(path: String): String = if (Platform.isWindows) path.lowercase() else path
   }
 
   @Volatile private var running = false
   private var thread: Thread? = null
 
-  fun start() {
+  open fun start() {
     running = true
 
     // Snapshot all file modification times
@@ -30,23 +40,11 @@ class FileWatcher(
                     Thread.sleep(POLL_INTERVAL_MS)
 
                     val current = snapshot()
-
-                    // Find changed files
-                    for ((path, modTime) in current) {
-                      val prev = lastSnapshot[path]
-                      if (prev == null || prev != modTime) {
-                        changedFiles.add(path)
-                        lastChangeTime = System.currentTimeMillis()
-                      }
+                    val newChanges = diff(lastSnapshot, current)
+                    if (newChanges.isNotEmpty()) {
+                      changedFiles.addAll(newChanges)
+                      lastChangeTime = System.currentTimeMillis()
                     }
-                    // Find deleted files
-                    for (path in lastSnapshot.keys) {
-                      if (path !in current) {
-                        changedFiles.add(path)
-                        lastChangeTime = System.currentTimeMillis()
-                      }
-                    }
-
                     lastSnapshot = current
 
                     // Debounce: fire after quiet period
@@ -57,8 +55,16 @@ class FileWatcher(
                       val files = changedFiles.toList()
                       changedFiles.clear()
                       onChange(files)
-                      // Re-snapshot after rebuild since build may have changed files
-                      lastSnapshot = snapshot()
+                      // Files may change while onChange runs (a save mid-rebuild). Rebase the
+                      // baseline to the post-handle state, but carry the diff into changedFiles —
+                      // silently rebasing would swallow those edits and never rebuild them.
+                      val post = snapshot()
+                      val duringHandle = diff(lastSnapshot, post)
+                      if (duringHandle.isNotEmpty()) {
+                        changedFiles.addAll(duringHandle)
+                        lastChangeTime = System.currentTimeMillis()
+                      }
+                      lastSnapshot = post
                     }
                   }
                 },
@@ -69,9 +75,21 @@ class FileWatcher(
     thread!!.start()
   }
 
-  fun stop() {
+  open fun stop() {
     running = false
     thread?.join(STOP_JOIN_TIMEOUT_MS)
+  }
+
+  /** Paths changed, added, or deleted between [prev] and [current]. */
+  private fun diff(prev: Map<String, Long>, current: Map<String, Long>): Set<String> {
+    val changed = mutableSetOf<String>()
+    for ((path, modTime) in current) {
+      if (prev[path] != modTime) changed.add(path)
+    }
+    for (path in prev.keys) {
+      if (path !in current) changed.add(path)
+    }
+    return changed
   }
 
   private fun snapshot(): Map<String, Long> {
@@ -80,7 +98,12 @@ class FileWatcher(
         .walkTopDown()
         .onEnter { !shouldIgnoreDir(it.name) }
         .filter { it.isFile && !shouldIgnore(it.name) }
-        .forEach { result[it.absolutePath] = it.lastModified() }
+        .forEach { result[normalizePath(it.absolutePath)] = it.lastModified() }
+    for (extra in extraFiles) {
+      if (extra.isFile) {
+        result[normalizePath(extra.absolutePath)] = extra.lastModified()
+      }
+    }
     return result
   }
 

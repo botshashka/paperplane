@@ -1,17 +1,17 @@
-// Pure Java module — no Kotlin, no Shadow, no dependencies
-// Produces a minimal JAR with the correct agent manifest
+// Pure Java module — no Kotlin, no Shadow.
+// Produces a minimal JAR with the correct agent manifest.
+
+plugins { id("paperplane.java") }
 
 dependencies {
-  testImplementation("org.junit.jupiter:junit-jupiter:5.11.3")
-  testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.11.3")
+  testImplementation(libs.junit.jupiter)
+  testRuntimeOnly(libs.junit.platform.launcher)
 }
 
-tasks.test { useJUnitPlatform() }
-
 tasks.jar {
-  archiveBaseName.set("paperplane-agent")
-  archiveClassifier.set("")
-  archiveVersion.set("")
+  archiveBaseName = "paperplane-agent"
+  archiveClassifier = ""
+  archiveVersion = ""
   manifest {
     attributes(
         "Premain-Class" to "dev.paperplane.agent.PaperPlaneAgent",

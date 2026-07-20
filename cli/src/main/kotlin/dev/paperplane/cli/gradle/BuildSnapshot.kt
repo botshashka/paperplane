@@ -2,6 +2,7 @@ package dev.paperplane.cli.gradle
 
 import java.io.File
 import java.util.zip.CRC32
+import kotlin.io.DEFAULT_BUFFER_SIZE
 
 /**
  * Tracks .class file hashes between builds to detect what changed. Used to determine whether a
@@ -15,7 +16,7 @@ class BuildSnapshot(private val classesDir: File) {
     return classesDir
         .walkTopDown()
         .filter { it.isFile && it.extension == "class" }
-        .associate { it.relativeTo(classesDir).path to crc32(it) }
+        .associate { it.relativeTo(classesDir).invariantSeparatorsPath to crc32(it) }
   }
 
   companion object {
@@ -32,7 +33,7 @@ class BuildSnapshot(private val classesDir: File) {
 
     fun crc32(file: File): Long {
       val crc = CRC32()
-      val buf = ByteArray(8192)
+      val buf = ByteArray(DEFAULT_BUFFER_SIZE)
       file.inputStream().use { inp ->
         var n: Int
         while (inp.read(buf).also { n = it } != -1) crc.update(buf, 0, n)
