@@ -41,7 +41,7 @@ internal class DevSession(
      * Waits for the host to answer a load request. Injected so tests can supply a scripted waiter
      * (the render fixtures don't run a real companion, so a real waiter would block until timeout).
      */
-    internal val loadResultWaiter: LoadResultWaiter = PollingLoadResultWaiter(ui),
+    internal val loadResultWaiter: LoadResultWaiter = socketLoadResultWaiter(),
 ) {
   /**
    * Holds the current config. This is `var` because the reverse-sync of `server.ops` on shutdown
@@ -237,13 +237,13 @@ internal class DevSession(
       serverManager: PaperServerManager,
   ): BuildOutcome {
     val buildStart = System.currentTimeMillis()
-    serverManager.writeCompanionStatus("building")
+    serverManager.sendCompanionStatus("building")
     val buildSuccess = ui.spin("Building...") { gradle.build() }
     val buildDuration = formatDuration(System.currentTimeMillis() - buildStart)
 
     if (!buildSuccess) {
       ui.error("Build failed", buildDuration)
-      serverManager.writeCompanionStatus("error", mapOf("message" to "Build failed"))
+      serverManager.sendCompanionStatus("error", message = "Build failed")
       return BuildOutcome.BuildFailed
     }
     ui.success("Build succeeded", buildDuration)
@@ -370,7 +370,7 @@ internal class DevSession(
    */
   fun handleFixAttempt(serverManager: PaperServerManager?): FixAttempt {
     val buildStart = System.currentTimeMillis()
-    serverManager?.writeCompanionStatus("building")
+    serverManager?.sendCompanionStatus("building")
     val buildSuccess = gradle.build()
     val buildDuration = formatDuration(System.currentTimeMillis() - buildStart)
 
@@ -470,10 +470,6 @@ internal class DevSession(
   ): ServerStartResult {
     serverManager.cleanupStale()
     serverManager.configure(config.server)
-    // Hand the companion its runtime config (leak-diagnostics mode). Written for every mode —
-    // native modes don't act on it, but the companion shouldn't have to guess. Independent of
-    // configure() so its signature stays put.
-    serverManager.writeCompanionConfig(config.dev)
     extraConfigure(serverManager)
     val builtJar = File(projectDir, metadata.jarPath)
     // Deploy differs by mode. Hot-reload stages the jar out of Paper's sight and lets the companion
@@ -495,17 +491,15 @@ internal class DevSession(
         }
     syncDependencyPlugins(serverManager)
 
-    // Clear crashed-session leftovers so the fresh companion doesn't consume a stale request or the
-    // waiter a stale result. Must happen before start() launches the companion's poll loop.
-    clearProtocolFlags(serverManager.serverDir)
-
     val serverStart = System.currentTimeMillis()
+    // start() clears the previous run's handshake file and companion-error flag itself, so a
+    // crashed session's leftovers can't be consumed as fresh.
     serverManager.start(paperJar, jvmArgs, hotReload = hotReload, javaBin = javaBin)
     val ready = ui.spin(spinLabel) { serverManager.waitForReady() }
     val serverDuration = formatDuration(System.currentTimeMillis() - serverStart)
     if (!ready) {
       ui.error("Server failed to start", serverDuration)
-      serverManager.writeCompanionStatus("error", mapOf("message" to "Server failed to start"))
+      serverManager.sendCompanionStatus("error", message = "Server failed to start")
       return ServerStartResult.Aborted
     }
 
@@ -514,7 +508,7 @@ internal class DevSession(
     // whole story.
     if (stagedJarPath == null) {
       ui.success(readyMessage, serverDuration)
-      serverManager.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
+      serverManager.sendCompanionStatus("ready", duration = serverDuration)
       return ServerStartResult.Running(RunningState(metadata, paperJar))
     }
 
@@ -544,28 +538,23 @@ internal class DevSession(
       readyMessage: String,
       serverDuration: String,
   ): ServerStartResult {
-    val requestId = writeInitialLoadRequest(serverManager, metadata, stagedJarPath)
+    val requestId = sendInitialLoadRequest(serverManager, metadata, stagedJarPath)
     val loadResult =
         ui.spin("Loading ${metadata.pluginName}...") {
-          loadResultWaiter.await(
-              serverManager.serverDir,
-              requestId,
-              INITIAL_LOAD_TIMEOUT_MS,
-              serverManager::isRunning,
-          )
+          loadResultWaiter.await(serverManager, requestId, INITIAL_LOAD_TIMEOUT_MS)
         }
     return when (loadResult) {
       is LoadWaitResult.Ok -> {
         ui.renderLeakWarnings(loadResult.report)
         ui.success("Plugin loaded")
         ui.success(readyMessage, serverDuration)
-        serverManager.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
+        serverManager.sendCompanionStatus("ready", duration = serverDuration)
         ServerStartResult.Running(RunningState(metadata, paperJar))
       }
       is LoadWaitResult.Failed -> {
         ui.error("Plugin failed to load: ${loadResult.message}")
         loadFailureHint(loadResult)?.let { ui.status(it) }
-        serverManager.writeCompanionStatus("error", mapOf("message" to "Plugin load failed"))
+        serverManager.sendCompanionStatus("error", message = "Plugin load failed")
         // A rejected load is recoverable via a source/config edit — stop the just-started server so
         // no stale instance lingers while the user fixes it, and let fix recovery keep the session
         // alive (a fresh server is started on the next successful rebuild).
@@ -575,7 +564,7 @@ internal class DevSession(
       LoadWaitResult.TimedOut -> {
         ui.error("Timed out waiting for the plugin to load")
         loadFailureHint(loadResult)?.let { ui.status(it) }
-        serverManager.writeCompanionStatus("error", mapOf("message" to "Plugin load timed out"))
+        serverManager.sendCompanionStatus("error", message = "Plugin load timed out")
         serverManager.stop()
         ServerStartResult.LoadFailed
       }
@@ -588,15 +577,14 @@ internal class DevSession(
     }
   }
 
-  /** Writes the initial [LoadRequest] and returns its requestId for result matching. */
-  private fun writeInitialLoadRequest(
+  /** Sends the initial [LoadRequest] over the companion socket; returns its requestId. */
+  private fun sendInitialLoadRequest(
       serverManager: PaperServerManager,
       metadata: ProjectMetadata,
       stagedJarPath: String,
   ): String {
     val requestId = LoadRequest.newId()
-    LoadRequest.write(
-        serverManager.serverDir,
+    serverManager.sendLoadRequest(
         LoadRequest(
             requestId = requestId,
             jarPath = stagedJarPath,
@@ -604,21 +592,14 @@ internal class DevSession(
             classesDirs = metadata.effectiveClassesDirs,
             resourcesDir = metadata.resourcesDir,
             runtimeClasspath = metadata.runtimeClasspath,
-        ),
+            leakDiagnostics = leakDiagnosticsWireValue(),
+        )
     )
     return requestId
   }
 
-  /**
-   * Deletes the file-protocol flags in `.paperplane/` so a crashed prior session's leftovers can't
-   * be consumed by a fresh companion or the load-result waiter.
-   */
-  private fun clearProtocolFlags(serverDir: File) {
-    LoadRequest.requestPath(serverDir).delete()
-    LoadRequest.completeFlag(serverDir).delete()
-    LoadRequest.failedFlag(serverDir).delete()
-    PaperServerManager.companionErrorFlag(serverDir).delete()
-  }
+  /** The `dev.leak-diagnostics` config value in its wire form, carried on load requests. */
+  internal fun leakDiagnosticsWireValue(): String = config.dev.leakDiagnostics.name.lowercase()
 
   /**
    * Reverse-sync of auto-opped players from the running server's `ops.json` back into

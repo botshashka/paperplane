@@ -59,7 +59,7 @@ class DevSessionFixture(
           downloader = downloader,
           projectDir = projectDir,
           ui = ui,
-          loadResultWaiter = LoadResultWaiter { _, _, _, _ -> loadWaitResult },
+          loadResultWaiter = LoadResultWaiter { _, _, _ -> loadWaitResult },
           pluginResolverFactory =
               pluginResolver?.let { { it } }
                   ?: {

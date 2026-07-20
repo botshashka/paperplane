@@ -1,5 +1,6 @@
 package dev.paperplane.companion.host
 
+import com.google.gson.annotations.SerializedName
 import dev.paperplane.companion.AgentAccess
 import dev.paperplane.companion.DevPluginClassLoader
 import dev.paperplane.companion.PluginInitContext
@@ -20,7 +21,7 @@ import org.bukkit.plugin.java.JavaPlugin
  * The host. Owns the inner plugin's lifecycle from start to finish.
  *
  * Paper auto-loads only the companion. The user's plugin lives in `.paperplane/staged/`, never in
- * `plugins/`. When the CLI signals a load via `load-request.json`, the host:
+ * `plugins/`. When the CLI signals a load via a `load` message on the companion socket, the host:
  *
  * 1. Parses and validates `plugin.yml` (rejects unsupported shapes — `load: STARTUP` etc).
  * 2. Builds a child [DevPluginClassLoader] (a
@@ -804,7 +805,11 @@ open class InnerPluginHost(
   )
 }
 
-/** Mirror of CLI's `LoadRequest` — same JSON shape, no cross-module dependency. */
+/**
+ * Mirror of CLI's `LoadRequest` — same JSON shape, no cross-module dependency. [leakDiagnostics]
+ * carries the CLI's leak-diagnostics mode in wire form; the host is built on the first load
+ * request, so only that request's value takes effect.
+ */
 data class HostLoadRequest(
     val requestId: String = "",
     val jarPath: String = "",
@@ -813,6 +818,7 @@ data class HostLoadRequest(
     val resourcesDir: String = "",
     val runtimeClasspath: List<String> = emptyList(),
     val changedClasses: List<String> = emptyList(),
+    val leakDiagnostics: String = "summary",
 )
 
 /**
@@ -833,14 +839,35 @@ data class LeakSummary(
 )
 
 /**
- * Structured result the host reports back to the CLI (serialized to `.paperplane/load-complete` or
- * `load-failed`). Mirror of the CLI's `LoadReport`. `requestId` echoes the request so the CLI can
- * discard stale/torn results; `strategy` ∈ hotswap|fresh|reload.
+ * Terminal load outcome. Mirror of the CLI's `LoadStatus`; serialized as the lowercase wire value.
+ */
+enum class HostLoadStatus {
+  @SerializedName("ok") OK,
+  @SerializedName("failed") FAILED,
+}
+
+/**
+ * How the host applied a load. Mirror of the CLI's `ReloadStrategy`; typed on both ends of the wire
+ * (strategy used to travel as raw strings).
+ */
+enum class HostReloadStrategy {
+  /** In-place class redefinition via Instrumentation; no host reload. */
+  @SerializedName("hotswap") HOTSWAP,
+  /** First load of the plugin in this server run. */
+  @SerializedName("fresh") FRESH,
+  /** Full unload + reload of an already-loaded plugin. */
+  @SerializedName("reload") RELOAD,
+}
+
+/**
+ * Structured result the host reports back to the CLI (sent over the companion socket as a `report`
+ * message). Mirror of the CLI's `LoadReport`. `requestId` echoes the request so the CLI can discard
+ * stale results.
  */
 data class HostLoadReport(
     val requestId: String,
-    val status: String,
-    val strategy: String,
+    val status: HostLoadStatus,
+    val strategy: HostReloadStrategy,
     val durationMs: Long,
     val pluginName: String,
     val message: String? = null,
@@ -848,12 +875,6 @@ data class HostLoadReport(
     val action: String? = null,
 ) {
   companion object {
-    const val STATUS_OK = "ok"
-    const val STATUS_FAILED = "failed"
-    const val STRATEGY_HOTSWAP = "hotswap"
-    const val STRATEGY_FRESH = "fresh"
-    const val STRATEGY_RELOAD = "reload"
-
     /** `action` value telling the CLI to restart the server to reclaim leaked memory. */
     const val ACTION_RESTART = "restart"
   }

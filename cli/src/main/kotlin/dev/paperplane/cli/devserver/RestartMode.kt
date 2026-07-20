@@ -11,7 +11,12 @@ import java.io.File
 internal open class RestartMode(
     private val session: DevSession,
     private val serverManager: PaperServerManager =
-        PaperServerManager(File(session.ppDir, "server"), session.downloader, session.ui),
+        PaperServerManager(
+            File(session.ppDir, "server"),
+            session.downloader,
+            session.ui,
+            protocolLog = session.config.dev.protocolLog,
+        ),
 ) {
 
   fun run() {
@@ -152,7 +157,7 @@ internal open class RestartMode(
       session.ui.success("Server ready", serverDuration)
       val totalDuration = session.formatDuration(System.currentTimeMillis() - totalStart)
       session.ui.totalTime(totalDuration)
-      serverManager.writeCompanionStatus("ready", mapOf("duration" to totalDuration))
+      serverManager.sendCompanionStatus("ready", duration = totalDuration)
       PhaseEnd.Watching
     } else {
       session.ui.error("Server failed to start", serverDuration)

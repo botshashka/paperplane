@@ -1,14 +1,17 @@
 package dev.paperplane.cli.server
 
 import com.charleskorn.kaml.YamlMap
-import dev.paperplane.cli.config.DevConfig
 import dev.paperplane.cli.config.ServerConfig
+import dev.paperplane.cli.devserver.LoadRequest
+import dev.paperplane.cli.devserver.LoadWaitResult
+import dev.paperplane.cli.ipc.CompanionClient
+import dev.paperplane.cli.ipc.CompanionSocketFile
+import dev.paperplane.cli.ipc.CompanionWire
+import dev.paperplane.cli.ipc.ProtocolTee
 import dev.paperplane.cli.plugins.atomicMoveOrFallback
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import java.io.IOException
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.util.UUID
 
 open class PaperServerManager(
@@ -16,23 +19,23 @@ open class PaperServerManager(
     private val downloader: PaperDownloader,
     private val ui: TerminalUI,
     private val port: Int = DEFAULT_PORT,
+    /** When true, every companion socket message is teed to `.paperplane/protocol-log.ndjson`. */
+    private val protocolLog: Boolean = false,
 ) {
   companion object {
     internal const val DEFAULT_PORT = 25565
     private const val GRACEFUL_STOP_TIMEOUT_SECONDS = 30L
     private const val SIGTERM_TIMEOUT_SECONDS = 5L
     private const val FORCE_STOP_TIMEOUT_SECONDS = 2L
-    private const val SAVE_POLL_INTERVAL_MS = 200L
+    private const val SAVE_TIMEOUT_MS = 10_000L
     /** Highest vanilla op permission level — full command access on the dev server. */
     private const val OP_PERMISSION_LEVEL = 4
     private const val SERVER_READY_TIMEOUT_MS = 120_000L
-    private const val READY_POLL_INTERVAL_MS = 100L
-    /** Schema version of `.paperplane/companion-config.json`; bumped if its shape changes. */
-    private const val COMPANION_CONFIG_VERSION = 1
 
     /**
-     * The flag the companion writes when it fails to enable. Read by [waitForReady]; cleared by the
-     * CLI's stale-flag hygiene before each server start.
+     * The flag the companion writes when it fails to enable — the one companion→CLI signal that
+     * stays on disk, because a companion that failed to construct its socket endpoint has no
+     * connection to report over. Polled by [waitForReady]'s dial loop; cleared before each start.
      */
     internal fun companionErrorFlag(serverDir: File): File =
         File(serverDir, ".paperplane/companion-error")
@@ -40,6 +43,11 @@ open class PaperServerManager(
 
   private var process: Process? = null
   private var processStdin: java.io.OutputStream? = null
+
+  // The socket connection to this server's companion. Created fresh by each start() (the CLI owns
+  // the connection and re-dials per server run); closed by stop(). Null before the first start and
+  // in tests that fake this manager.
+  private var companion: CompanionClient? = null
 
   // True from the moment a stop is requested until the next start. Distinguishes an intentional
   // shutdown (mode-driven restarts, cleanup) from the process dying on its own — see
@@ -157,27 +165,6 @@ open class PaperServerManager(
       return
     }
     file.writeText(gson.toJson(names))
-  }
-
-  /**
-   * Writes the companion's runtime config to `.paperplane/companion-config.json` — currently just
-   * the leak-diagnostics mode, plus a reserved `protocolVersion` field for future shape negotiation
-   * (the companion reads only `leakDiagnostics` today and does not yet enforce the version). Called
-   * on every start (harmless in restart/blue-green: the natively-loaded companion simply doesn't
-   * act on it, but shipping it unconditionally means the companion never has to guess). Written
-   * atomically (tmp + move) so the companion never reads a torn document.
-   */
-  open fun writeCompanionConfig(dev: DevConfig) {
-    val statusDir = File(serverDir, ".paperplane").apply { mkdirs() }
-    val payload =
-        mapOf(
-            "protocolVersion" to COMPANION_CONFIG_VERSION,
-            "leakDiagnostics" to dev.leakDiagnostics.name.lowercase(),
-        )
-    val target = File(statusDir, "companion-config.json")
-    val temp = File(statusDir, ".companion-config.json.tmp")
-    temp.writeText(gson.toJson(payload))
-    atomicMoveOrFallback(temp.toPath(), target.toPath())
   }
 
   /** Deterministic UUID that Minecraft uses for offline-mode players. */
@@ -359,11 +346,20 @@ open class PaperServerManager(
     cmd.addAll(jvmArgs)
     cmd.addAll(listOf("-jar", paperJar.absolutePath, "--nogui"))
 
+    // Clear the previous run's discovery/bootstrap leftovers BEFORE the process launches: a stale
+    // handshake file would let the dial loop connect to a dead (possibly reassigned) port, and a
+    // stale companion-error would abort a perfectly healthy start.
+    CompanionSocketFile.delete(serverDir)
+    companionErrorFlag(serverDir).delete()
+
     val pb = ProcessBuilder(cmd).directory(serverDir).redirectErrorStream(true)
 
     val proc = pb.start()
     process = proc
     processStdin = proc.outputStream
+    companion?.close()
+    companion =
+        CompanionClient(serverDir, if (protocolLog) ProtocolTee.forServer(serverDir) else null)
     // Reset only after the fresh process is published, so a concurrent health check never pairs
     // the old dead process with a cleared flag.
     stopRequested = false
@@ -384,6 +380,10 @@ open class PaperServerManager(
     // Record the intent BEFORE the early returns: a crashed server that cleanup then stop()s
     // must settle to "not unexpected" too.
     stopRequested = true
+    // Drop the companion connection first — the graceful path talks to the server over stdin, and
+    // an intentionally-closed connection must never be read as a crash by an in-flight await.
+    companion?.close()
+    companion = null
     val proc = process ?: return
     if (!proc.isAlive) return
     val unit = java.util.concurrent.TimeUnit.SECONDS
@@ -425,25 +425,16 @@ open class PaperServerManager(
   }
 
   /**
-   * Waits for the companion plugin to complete a save. The CLI writes "saving" to
-   * companion-status.json, the companion does the save via Bukkit API (no broadcast), then writes a
-   * flag file.
+   * Asks the companion to save the world and waits for its `saveComplete` event. The `saving`
+   * status message triggers the save (via Bukkit API, no broadcast) and opens the companion's
+   * save-protection window; any stale completion from a previous save is drained first so it can't
+   * satisfy this wait.
    */
-  open fun waitForSave(timeoutMs: Long = 10_000): Boolean {
-    val flagFile = File(serverDir, ".paperplane/save-complete")
-    flagFile.delete() // Clear any stale flag
-
-    // The companion plugin polls every 1s and saves when it sees "saving" state.
-    // We poll for the flag file it writes on completion.
-    val startTime = System.currentTimeMillis()
-    while (System.currentTimeMillis() - startTime < timeoutMs) {
-      if (flagFile.exists()) {
-        flagFile.delete()
-        return true
-      }
-      Thread.sleep(SAVE_POLL_INTERVAL_MS)
-    }
-    return false
+  open fun saveWorld(timeoutMs: Long = SAVE_TIMEOUT_MS): Boolean {
+    val client = companion ?: return false
+    client.drainSaveCompletions()
+    if (!client.sendStatus(CompanionWire.STATE_SAVING)) return false
+    return client.awaitSaveComplete(timeoutMs)
   }
 
   open fun isRunning(): Boolean = process?.isAlive == true
@@ -460,40 +451,76 @@ open class PaperServerManager(
     return !proc.isAlive && !stopRequested
   }
 
+  /**
+   * Waits for the server to be player-ready: dials the companion socket (discovery via the
+   * handshake file), then awaits the companion's explicit `ready` event. The two signals are
+   * deliberately separate — an established connection proves the companion enabled, and only the
+   * streamed event proves the server finished startup. A companion bootstrap failure (the
+   * `companion-error` file) is surfaced and aborts immediately rather than waiting out the timeout.
+   */
   open fun waitForReady(): Boolean {
     val proc = process ?: return false
-    val flagFile = File(serverDir, ".paperplane/server-ready")
-    val errorFile = companionErrorFlag(serverDir)
-    flagFile.delete() // Clear stale flag
-    val startTime = System.currentTimeMillis()
-    val timeout = SERVER_READY_TIMEOUT_MS
-    while (proc.isAlive && System.currentTimeMillis() - startTime < timeout) {
-      if (flagFile.exists()) {
-        flagFile.delete()
-        return true
-      }
-      // The companion writes this if it fails to enable (e.g. unsupported Paper). Surface it and
-      // abort immediately rather than waiting out the full ready timeout.
-      if (errorFile.exists()) {
-        val message = runCatching { errorFile.readText() }.getOrNull()?.trim().orEmpty()
-        errorFile.delete()
-        ui.error(message.ifEmpty { "PaperPlane companion failed to start." })
+    // start() creates the client for real runs; the lazy fallback keeps waitForReady drivable
+    // in tests that install a process without going through start().
+    val client =
+        companion
+            ?: CompanionClient(
+                    serverDir,
+                    if (protocolLog) ProtocolTee.forServer(serverDir) else null,
+                )
+                .also { companion = it }
+    val start = System.currentTimeMillis()
+    val outcome =
+        client.connect(
+            SERVER_READY_TIMEOUT_MS,
+            isAlive = { proc.isAlive },
+            companionError = { consumeCompanionError() },
+        )
+    when (outcome) {
+      is CompanionClient.ConnectOutcome.CompanionFailed -> {
+        ui.error(outcome.message.ifEmpty { "PaperPlane companion failed to start." })
         return false
       }
-      Thread.sleep(READY_POLL_INTERVAL_MS)
+      CompanionClient.ConnectOutcome.Died,
+      CompanionClient.ConnectOutcome.TimedOut -> return false
+      CompanionClient.ConnectOutcome.Connected -> {}
     }
-    return false
+    val remaining = SERVER_READY_TIMEOUT_MS - (System.currentTimeMillis() - start)
+    return client.awaitServerReady(remaining.coerceAtLeast(0), isAlive = { proc.isAlive })
   }
 
-  open fun writeCompanionStatus(state: String, extra: Map<String, Any> = emptyMap()) {
-    val statusDir = File(serverDir, ".paperplane")
-    statusDir.mkdirs()
-    val statusFile = File(statusDir, "companion-status.json")
-    val map = mutableMapOf<String, Any>("state" to state, "protocolVersion" to 2)
-    map.putAll(extra)
-    val json = gson.toJson(map)
-    val tmpFile = File(statusDir, ".companion-status.tmp")
-    tmpFile.writeText(json)
-    Files.move(tmpFile.toPath(), statusFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+  /** Reads-and-clears the companion's bootstrap failure message, or null when none exists. */
+  private fun consumeCompanionError(): String? {
+    val errorFile = companionErrorFlag(serverDir)
+    if (!errorFile.exists()) return null
+    val message = runCatching { errorFile.readText() }.getOrNull()?.trim().orEmpty()
+    errorFile.delete()
+    return message
   }
+
+  /**
+   * Pushes a build-state update to the companion (chat broadcast + save-protection window on the
+   * server side). Best-effort: with no live connection — server down, or the state is an error
+   * being reported while nothing is running — the update is dropped, which matches its advisory
+   * role.
+   */
+  open fun sendCompanionStatus(state: String, duration: String? = null, message: String? = null) {
+    companion?.sendStatus(state, duration, message)
+  }
+
+  /**
+   * Sends a [LoadRequest] to the companion host. Best-effort like [sendCompanionStatus] — the
+   * caller's [awaitLoadReport] resolves the outcome either way.
+   */
+  open fun sendLoadRequest(request: LoadRequest): Boolean =
+      companion?.sendLoadRequest(request) ?: false
+
+  /**
+   * Waits for the companion's report answering [expectedRequestId]. Resolves
+   * [LoadWaitResult.ServerExited] when the process dies or the connection drops (no client at all —
+   * the server was never started — counts as exited too).
+   */
+  internal open fun awaitLoadReport(expectedRequestId: String, timeoutMs: Long): LoadWaitResult =
+      companion?.awaitReport(expectedRequestId, timeoutMs, isAlive = ::isRunning)
+          ?: LoadWaitResult.ServerExited
 }

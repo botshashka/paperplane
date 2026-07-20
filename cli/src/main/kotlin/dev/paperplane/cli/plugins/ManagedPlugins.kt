@@ -8,7 +8,7 @@ import java.io.File
  * Tracks which plugin JARs in `server/plugins/` are managed by the PaperPlane plugin manager. The
  * manifest (a JSON array of filenames) lives at
  * `.paperplane/<serverDir>/.paperplane/managed-plugins.json` — the same internal-state directory
- * that holds `companion-status.json` and `server-ready`.
+ * that holds the companion socket's handshake file.
  *
  * This solves the "mixed-ownership directory" problem: `server/plugins/` contains the dev plugin
  * jar, the companion jar, plugin data directories, AND dependency jars. Without a manifest, pruning

@@ -5,14 +5,14 @@ import org.bukkit.event.Listener
 import org.bukkit.event.block.BlockBreakEvent
 import org.bukkit.event.block.BlockPlaceEvent
 
-class SaveProtectionListener(private val statusBar: BuildStatusBar) : Listener {
+class SaveProtectionListener(private val handler: CompanionMessageHandler) : Listener {
   @EventHandler
   fun onBlockBreak(event: BlockBreakEvent) {
-    if (statusBar.blockWorldEdits) event.isCancelled = true
+    if (handler.blockWorldEdits) event.isCancelled = true
   }
 
   @EventHandler
   fun onBlockPlace(event: BlockPlaceEvent) {
-    if (statusBar.blockWorldEdits) event.isCancelled = true
+    if (handler.blockWorldEdits) event.isCancelled = true
   }
 }

@@ -254,9 +254,9 @@ class BlueGreenModeRenderTest {
         "active backend must receive the jar in plugins/; calls were ${serverA.calls}",
     )
     assertFalse(serverA.calls.any { it.startsWith("stagePlugin") })
-    assertFalse(
-        File(serverA.serverDir, ".paperplane/load-request.json").exists(),
-        "native modes must not write a load-request.json",
+    assertTrue(
+        serverA.sentLoadRequests.isEmpty(),
+        "native modes must not send a LoadRequest",
     )
     assertTrue(
         serverA.calls.contains("copyCompanion(depend=0,softdepend=0)"),

@@ -170,8 +170,13 @@ class HotReloadModeRenderTest {
         "hot-reload must clear a natively-deployed leftover; calls were ${server.calls}",
     )
     assertTrue(
-        File(server.serverDir, ".paperplane/load-request.json").exists(),
+        server.sentLoadRequests.isNotEmpty(),
         "hot-reload must hand the staged jar to the host via a LoadRequest",
+    )
+    assertEquals(
+        "summary",
+        server.sentLoadRequests.single().leakDiagnostics,
+        "the leak-diagnostics mode must ride the initial load request",
     )
   }
 
@@ -286,31 +291,6 @@ class HotReloadModeRenderTest {
     assertNull(result, "a still-failing load must keep fix recovery waiting (null handoff)")
   }
 
-  // ── Stale protocol flags are cleared before start ──────────────────
-
-  @Test
-  fun `stale protocol flags from a crashed session are cleared before the server starts`() {
-    val fixture = DevSessionFixture(tempDir).withMetadata()
-    val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
-    val ppDir = File(server.serverDir, ".paperplane").apply { mkdirs() }
-    val stale =
-        listOf("load-request.json", "load-complete", "load-failed", "companion-error").map {
-          File(ppDir, it).apply { writeText("stale") }
-        }
-    val mode = TestableHotReloadMode(fixture.session, server)
-
-    mode.runStartup()
-
-    for (file in stale) {
-      // startServerAndReport legitimately writes a fresh load-request.json after clearing, so
-      // assert the stale CONTENT is gone rather than the file: nothing left over may be consumed.
-      assertFalse(
-          file.exists() && file.readText() == "stale",
-          "${file.name} must be cleared so it can't be consumed as fresh",
-      )
-    }
-  }
-
   // ── Rebuild reload-result branches (waitAndReport) ─────────────────
 
   @Test
@@ -361,7 +341,12 @@ class HotReloadModeRenderTest {
   // server and restart it with the SAME hot-reload wiring, then keep watching.
 
   private fun restartReport() =
-      LoadReport(requestId = "r1", status = "ok", strategy = "reload", action = "restart")
+      LoadReport(
+          requestId = "r1",
+          status = LoadStatus.OK,
+          strategy = ReloadStrategy.RELOAD,
+          action = "restart",
+      )
 
   private fun seedRunningState(mode: HotReloadMode, fixture: DevSessionFixture) {
     mode.runningState =
@@ -406,8 +391,8 @@ class HotReloadModeRenderTest {
             "Hot-reload paused: accumulated classloader leaks — restarting server clears them",
             LoadReport(
                 requestId = "r1",
-                status = "failed",
-                strategy = "reload",
+                status = LoadStatus.FAILED,
+                strategy = ReloadStrategy.RELOAD,
                 action = "restart",
             ),
         )

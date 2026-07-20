@@ -117,11 +117,17 @@ data class DevConfig(
     val jbr: String = "auto",
     /**
      * How much classloader-leak diagnostics the hot-reload host emits. Transported to the companion
-     * via `.paperplane/companion-config.json`. See [LeakDiagnosticsMode] for the per-mode
-     * semantics.
+     * on the load request. See [LeakDiagnosticsMode] for the per-mode semantics.
      */
     @SerialName("leak-diagnostics")
     val leakDiagnostics: LeakDiagnosticsMode = LeakDiagnosticsMode.SUMMARY,
+    /**
+     * Debug tee for the CLI↔companion socket protocol: when true, every message crossing the
+     * connection (both directions, including the handshake) is appended to
+     * `.paperplane/protocol-log.ndjson` in the server directory — a byte-faithful record for
+     * forensics and protocol-replay tests.
+     */
+    @SerialName("protocol-log") val protocolLog: Boolean = false,
 )
 
 /**
