@@ -1,6 +1,6 @@
 # 0002 — File-based JSON load protocol
 
-**Status:** Accepted
+**Status:** Superseded by [0004](0004-socket-transport.md)
 **Date:** 2026-07-20
 
 ## Context
