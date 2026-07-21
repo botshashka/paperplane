@@ -61,6 +61,18 @@ class CompanionSocketServer(
   companion object {
     /** Mirror of the CLI's `CompanionSocketFile.PROTOCOL_VERSION`. */
     const val PROTOCOL_VERSION = 3
+
+    // Wire message `type` discriminators. Mirror of the CLI's CompanionWire tags; the modules share
+    // no code, so a tag introduced on one side must be added on the other.
+    private const val TYPE_HELLO = "hello"
+    private const val TYPE_WELCOME = "welcome"
+    private const val TYPE_READY = "ready"
+    private const val TYPE_STATUS = "status"
+    private const val TYPE_LOAD = "load"
+    private const val TYPE_REPORT = "report"
+    private const val TYPE_SAVE_COMPLETE = "saveComplete"
+    private const val TYPE_LOAD_PROGRESS = "loadProgress"
+
     private const val SOCKET_FILE_NAME = "companion-socket.json"
     private const val HANDSHAKE_TIMEOUT_MS = 5_000
     private const val TOKEN_BITS = 128
@@ -113,28 +125,33 @@ class CompanionSocketServer(
 
   /**
    * Latches server readiness (idempotent) and streams the explicit `ready` event. Called from the
-   * `ServerLoadEvent` listener; a client connecting later gets the state via its welcome snapshot.
+   * `ServerLoadEvent` listener. The flag set and the send are held under `writeLock`, the same lock
+   * [handshake] installs the client under, so a connection that races this event either observes
+   * the latched flag in its welcome snapshot or receives the streamed `ready` — the signal is never
+   * lost in the gap between the two.
    */
   fun markServerReady() {
-    serverReady = true
-    sendLine(JsonObject().apply { addProperty("type", "ready") }.toString())
+    synchronized(writeLock) {
+      serverReady = true
+      sendLineLocked(JsonObject().apply { addProperty("type", TYPE_READY) }.toString())
+    }
   }
 
   override fun sendReport(report: HostLoadReport) {
     sendLine(
-        gson.toJsonTree(report).asJsonObject.apply { addProperty("type", "report") }.toString()
+        gson.toJsonTree(report).asJsonObject.apply { addProperty("type", TYPE_REPORT) }.toString()
     )
   }
 
   override fun sendSaveComplete() {
-    sendLine(JsonObject().apply { addProperty("type", "saveComplete") }.toString())
+    sendLine(JsonObject().apply { addProperty("type", TYPE_SAVE_COMPLETE) }.toString())
   }
 
   override fun sendLoadProgress(requestId: String, stage: String) {
     sendLine(
         JsonObject()
             .apply {
-              addProperty("type", "loadProgress")
+              addProperty("type", TYPE_LOAD_PROGRESS)
               addProperty("requestId", requestId)
               addProperty("stage", stage)
             }
@@ -153,7 +170,12 @@ class CompanionSocketServer(
           }
       try {
         handshake(candidate)
-      } catch (e: IOException) {
+      } catch (
+          @Suppress("TooGenericExceptionCaught") // A malformed hello — bad JSON, a non-numeric
+          // protocolVersion (Gson's asInt throws NumberFormatException), a truncated line — must
+          // drop only this connection. Letting it escape would kill the accept loop and leave the
+          // companion permanently undialable, which is exactly the CLI-can't-brick-us invariant.
+          e: Exception) {
         logger.fine("Companion socket handshake failed: ${e.message}")
         try {
           candidate.close()
@@ -174,23 +196,30 @@ class CompanionSocketServer(
     val writer = BufferedWriter(OutputStreamWriter(candidate.getOutputStream(), Charsets.UTF_8))
     val line = reader.readLine() ?: throw IOException("closed before hello")
     validateHello(line)?.let { reason -> throw IOException(reason) }
-    val welcome =
-        JsonObject().apply {
-          addProperty("type", "welcome")
-          addProperty("protocolVersion", PROTOCOL_VERSION)
-          addProperty("serverReady", serverReady)
-        }
-    writer.write(welcome.toString())
-    writer.write("\n")
-    writer.flush()
-    candidate.soTimeout = 0
 
     val previous: Socket?
     synchronized(writeLock) {
+      // Snapshot readiness, write the welcome, and install the writer atomically. markServerReady()
+      // takes the same lock, so it either lands in this snapshot (welcome carries serverReady=true)
+      // or streams `ready` to the writer installed below — and because the welcome is written
+      // before
+      // the writer is published, a concurrent `ready` can never jump ahead of the welcome on the
+      // wire (which would make the CLI read `ready` as its handshake reply and reject it).
+      val welcome =
+          JsonObject().apply {
+            addProperty("type", TYPE_WELCOME)
+            addProperty("protocolVersion", PROTOCOL_VERSION)
+            addProperty("serverReady", serverReady)
+          }
+      writer.write(welcome.toString())
+      writer.write("\n")
+      writer.flush()
       previous = client
       client = candidate
       clientWriter = writer
     }
+    candidate.soTimeout = 0
+
     try {
       previous?.close()
     } catch (_: IOException) {}
@@ -208,13 +237,15 @@ class CompanionSocketServer(
         } catch (e: JsonParseException) {
           return "malformed hello: ${e.message}"
         } ?: return "empty hello"
-    if (hello.get("type")?.takeIf { it.isJsonPrimitive }?.asString != "hello") {
+    if (hello.get("type")?.takeIf { it.isJsonPrimitive }?.asString != TYPE_HELLO) {
       return "first message was not hello"
     }
     if (hello.get("token")?.takeIf { it.isJsonPrimitive }?.asString != token) {
       return "token mismatch"
     }
-    val version = hello.get("protocolVersion")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
+    // Guard the numeric read explicitly: a non-numeric primitive (a string/boolean protocolVersion
+    // from a buggy or skewed CLI) would otherwise make Gson's asInt throw NumberFormatException.
+    val version = hello.get("protocolVersion")?.asJsonPrimitive?.takeIf { it.isNumber }?.asInt ?: 0
     if (version != PROTOCOL_VERSION) {
       return "protocol version $version != $PROTOCOL_VERSION"
     }
@@ -254,7 +285,7 @@ class CompanionSocketServer(
           return
         }
     when (val type = obj.get("type")?.takeIf { it.isJsonPrimitive }?.asString) {
-      "status" ->
+      TYPE_STATUS ->
           onStatus(
               StatusUpdate(
                   state = obj.get("state")?.takeIf { it.isJsonPrimitive }?.asString ?: return,
@@ -262,7 +293,7 @@ class CompanionSocketServer(
                   message = obj.get("message")?.takeIf { it.isJsonPrimitive }?.asString,
               )
           )
-      "load" ->
+      TYPE_LOAD ->
           try {
             onLoadRequest(gson.fromJson(obj, HostLoadRequest::class.java))
           } catch (e: JsonParseException) {
@@ -277,20 +308,23 @@ class CompanionSocketServer(
    * message (and the connection on failure) — the CLI's awaits resolve via their own timeouts.
    */
   private fun sendLine(line: String) {
-    synchronized(writeLock) {
-      val writer = clientWriter ?: return
+    synchronized(writeLock) { sendLineLocked(line) }
+  }
+
+  /** [sendLine]'s body, for callers that already hold [writeLock] (e.g. [markServerReady]). */
+  private fun sendLineLocked(line: String) {
+    val writer = clientWriter ?: return
+    try {
+      writer.write(line)
+      writer.write("\n")
+      writer.flush()
+    } catch (e: IOException) {
+      logger.fine("Companion socket send failed: ${e.message}")
       try {
-        writer.write(line)
-        writer.write("\n")
-        writer.flush()
-      } catch (e: IOException) {
-        logger.fine("Companion socket send failed: ${e.message}")
-        try {
-          client?.close()
-        } catch (_: IOException) {}
-        client = null
-        clientWriter = null
-      }
+        client?.close()
+      } catch (_: IOException) {}
+      client = null
+      clientWriter = null
     }
   }
 

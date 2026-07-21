@@ -215,6 +215,38 @@ class CompanionSocketServerTest {
     assertEquals("welcome", welcome.get("type").asString)
   }
 
+  @Test
+  fun `a non-numeric protocol version is dropped without killing the accept loop`() {
+    server.start(serverRoot)
+    val port = handshakeInfo().get("port").asInt
+    val token = handshakeInfo().get("token").asString
+    val socket = Socket(InetAddress.getLoopbackAddress(), port).also { openSockets += it }
+    socket.soTimeout = 5_000
+    val client = Client(socket)
+    // A string protocolVersion would make Gson's asInt throw NumberFormatException. The accept loop
+    // must drop just this connection — never die and leave the companion permanently undialable.
+    client.send("""{"type":"hello","token":"$token","protocolVersion":"three"}""")
+    assertNull(client.readLine(), "a non-numeric version must be dropped without a welcome")
+
+    val (_, welcome) = connect()
+    assertEquals("welcome", welcome.get("type").asString, "the accept loop must have survived")
+  }
+
+  @Test
+  fun `a client that never sends a hello is dropped on the handshake timeout`() {
+    server.start(serverRoot)
+    val port = handshakeInfo().get("port").asInt
+    val silent = Socket(InetAddress.getLoopbackAddress(), port).also { openSockets += it }
+    silent.soTimeout = 15_000 // Longer than the server's handshake timeout so the read sees EOF.
+    val reader = BufferedReader(InputStreamReader(silent.getInputStream(), Charsets.UTF_8))
+    // Send nothing: the server's handshake read must time out and close the connection rather than
+    // wait forever, and the accept loop must then recover.
+    assertNull(reader.readLine(), "a silent client must be dropped once the handshake times out")
+
+    val (_, welcome) = connect()
+    assertEquals("welcome", welcome.get("type").asString, "the accept loop must have recovered")
+  }
+
   // ── Message dispatch ────────────────────────────────────────────────
 
   @Test
@@ -342,6 +374,58 @@ class CompanionSocketServerTest {
     server.sendSaveComplete()
     server.sendLoadProgress("r1", "loading")
     // Nothing to assert beyond "no exception" — the CLI resolves via its own timeouts.
+  }
+
+  @Test
+  fun `readiness is never lost when markServerReady races the handshake`() {
+    // Regression for the lost-update race: handshake used to read the serverReady snapshot for the
+    // welcome and install the client writer non-atomically, so a markServerReady() landing in the
+    // gap set the flag while clientWriter was still null (the `ready` event dropped) yet after the
+    // snapshot was read (the welcome said not-ready) — the signal vanished. Both are now held under
+    // writeLock, so a racing client must always learn readiness: via the welcome snapshot, or the
+    // streamed `ready` event that follows.
+    repeat(40) { iteration ->
+      val fresh = CompanionSocketServer(Logger.getLogger("test"), onStatus = {}, onLoadRequest = {})
+      val root = File(serverRoot, "race-$iteration").apply { mkdirs() }
+      try {
+        val port = fresh.start(root)
+        val token =
+            gson
+                .fromJson(
+                    File(root, ".paperplane/companion-socket.json").readText(),
+                    JsonObject::class.java,
+                )
+                .get("token")
+                .asString
+
+        val socket = Socket()
+        socket.connect(java.net.InetSocketAddress(InetAddress.getLoopbackAddress(), port), 2_000)
+        socket.soTimeout = 5_000
+        openSockets += socket
+        val client = Client(socket)
+
+        // Fire readiness concurrently with the hello so they interleave around the install.
+        val marker = Thread { fresh.markServerReady() }
+        marker.start()
+        client.send(
+            """{"type":"hello","token":"$token","protocolVersion":${CompanionSocketServer.PROTOCOL_VERSION}}"""
+        )
+        val welcome = gson.fromJson(client.readLine(), JsonObject::class.java)
+        marker.join(2_000)
+
+        val ready =
+            welcome.get("serverReady").asBoolean ||
+                run {
+                  // Not in the snapshot → the streamed `ready` event must arrive.
+                  val next = client.readLine()
+                  next != null &&
+                      gson.fromJson(next, JsonObject::class.java).get("type").asString == "ready"
+                }
+        assertTrue(ready, "iteration $iteration lost the readiness signal")
+      } finally {
+        fresh.close()
+      }
+    }
   }
 
   // ── Single-client policy ────────────────────────────────────────────

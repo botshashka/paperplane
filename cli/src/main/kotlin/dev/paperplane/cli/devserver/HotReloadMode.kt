@@ -6,6 +6,7 @@ import dev.paperplane.cli.gradle.BuildSnapshot
 import dev.paperplane.cli.gradle.ClassChanges
 import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.gradle.ProjectMetadata
+import dev.paperplane.cli.ipc.CompanionWire
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
 import java.io.File
@@ -256,14 +257,14 @@ internal open class HotReloadMode(
 
     if (cachedFastMeta == null) cachedFastMeta = session.gradle.metadataFast().metadataOrNull
 
-    serverManager.sendCompanionStatus("building")
+    serverManager.sendCompanionStatus(CompanionWire.STATE_BUILDING)
     val buildStart = System.currentTimeMillis()
     val buildSuccess = session.gradle.compileOnly()
     val buildDuration = session.formatDuration(System.currentTimeMillis() - buildStart)
 
     if (!buildSuccess) {
       session.ui.error("Build failed", buildDuration)
-      serverManager.sendCompanionStatus("error", message = "Build failed")
+      serverManager.sendCompanionStatus(CompanionWire.STATE_ERROR, message = "Build failed")
       return PhaseEnd.Waiting
     }
     session.ui.success("Build succeeded", buildDuration)
@@ -350,12 +351,15 @@ internal open class HotReloadMode(
             val totalDuration = session.formatDuration(System.currentTimeMillis() - totalStart)
             session.ui.success("Plugin reloaded", reloadDuration)
             session.ui.totalTime(totalDuration)
-            serverManager.sendCompanionStatus("ready", duration = totalDuration)
+            serverManager.sendCompanionStatus(CompanionWire.STATE_READY, duration = totalDuration)
             PhaseEnd.Watching
           }
           is LoadWaitResult.Failed -> {
             session.ui.error("Reload failed: ${result.message}", reloadDuration)
-            serverManager.sendCompanionStatus("error", message = "Hot-reload failed")
+            serverManager.sendCompanionStatus(
+                CompanionWire.STATE_ERROR,
+                message = "Hot-reload failed",
+            )
             PhaseEnd.Watching
           }
           LoadWaitResult.TimedOut -> {
@@ -363,7 +367,10 @@ internal open class HotReloadMode(
                 "Hot-reload failed (server still running with old plugin)",
                 reloadDuration,
             )
-            serverManager.sendCompanionStatus("error", message = "Hot-reload failed")
+            serverManager.sendCompanionStatus(
+                CompanionWire.STATE_ERROR,
+                message = "Hot-reload failed",
+            )
             PhaseEnd.Watching
           }
           LoadWaitResult.ServerExited -> {

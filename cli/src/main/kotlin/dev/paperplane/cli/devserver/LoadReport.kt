@@ -14,8 +14,7 @@ enum class LoadStatus {
 
 /**
  * How the companion host applied a load. Typed on both ends of the wire (the companion mirrors this
- * as `HostReloadStrategy`) — strategy used to travel as raw strings, first via the retired
- * `companion-status.json` channel, then as string constants on the report.
+ * as `HostReloadStrategy`).
  */
 enum class ReloadStrategy {
   /** In-place class redefinition via Instrumentation; no host reload. */

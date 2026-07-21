@@ -13,8 +13,7 @@ import java.util.UUID
  *
  * [leakDiagnostics] carries the host's leak-diagnostics mode (wire values of the CLI's
  * `LeakDiagnosticsMode`). The host is built once, on the first load request, so only the first
- * request's value takes effect — matching the old behavior where the companion read the mode once
- * at enable.
+ * request's value takes effect.
  */
 data class LoadRequest(
     val requestId: String,

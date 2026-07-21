@@ -847,8 +847,8 @@ enum class HostLoadStatus {
 }
 
 /**
- * How the host applied a load. Mirror of the CLI's `ReloadStrategy`; typed on both ends of the wire
- * (strategy used to travel as raw strings).
+ * How the host applied a load. Mirror of the CLI's `ReloadStrategy`; typed on both ends of the
+ * wire.
  */
 enum class HostReloadStrategy {
   /** In-place class redefinition via Instrumentation; no host reload. */

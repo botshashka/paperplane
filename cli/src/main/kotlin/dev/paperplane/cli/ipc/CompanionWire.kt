@@ -25,12 +25,23 @@ internal object CompanionWire {
   const val STATE_READY = "ready"
   const val STATE_ERROR = "error"
 
+  // Wire message `type` discriminators. Mirror of the companion's CompanionSocketServer tags; the
+  // modules share no code, so a tag introduced on one side must be added on the other.
+  private const val TYPE_HELLO = "hello"
+  private const val TYPE_STATUS = "status"
+  private const val TYPE_LOAD = "load"
+  private const val TYPE_WELCOME = "welcome"
+  private const val TYPE_READY = "ready"
+  private const val TYPE_SAVE_COMPLETE = "saveComplete"
+  private const val TYPE_LOAD_PROGRESS = "loadProgress"
+  private const val TYPE_REPORT = "report"
+
   private val gson = Gson()
 
   fun encodeHello(token: String): String =
       JsonObject()
           .apply {
-            addProperty("type", "hello")
+            addProperty("type", TYPE_HELLO)
             addProperty("token", token)
             addProperty("protocolVersion", CompanionSocketFile.PROTOCOL_VERSION)
           }
@@ -39,7 +50,7 @@ internal object CompanionWire {
   fun encodeStatus(state: String, duration: String?, message: String?): String =
       JsonObject()
           .apply {
-            addProperty("type", "status")
+            addProperty("type", TYPE_STATUS)
             addProperty("state", state)
             duration?.let { addProperty("duration", it) }
             message?.let { addProperty("message", it) }
@@ -48,7 +59,7 @@ internal object CompanionWire {
 
   /** Encodes a [LoadRequest] as its plain JSON object plus the `load` type tag. */
   fun encodeLoad(request: LoadRequest): String =
-      gson.toJsonTree(request).asJsonObject.apply { addProperty("type", "load") }.toString()
+      gson.toJsonTree(request).asJsonObject.apply { addProperty("type", TYPE_LOAD) }.toString()
 
   /**
    * Decodes one companion→CLI line. Returns null for unparseable lines and unknown types — the
@@ -63,21 +74,21 @@ internal object CompanionWire {
           return null
         }
     return when (obj.get("type")?.takeIf { it.isJsonPrimitive }?.asString) {
-      "welcome" ->
+      TYPE_WELCOME ->
           CompanionEvent.Welcome(
               protocolVersion =
                   obj.get("protocolVersion")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0,
               serverReady =
                   obj.get("serverReady")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false,
           )
-      "ready" -> CompanionEvent.Ready
-      "saveComplete" -> CompanionEvent.SaveComplete
-      "loadProgress" ->
+      TYPE_READY -> CompanionEvent.Ready
+      TYPE_SAVE_COMPLETE -> CompanionEvent.SaveComplete
+      TYPE_LOAD_PROGRESS ->
           CompanionEvent.LoadProgress(
               requestId = obj.get("requestId")?.takeIf { it.isJsonPrimitive }?.asString ?: "",
               stage = obj.get("stage")?.takeIf { it.isJsonPrimitive }?.asString ?: "",
           )
-      "report" ->
+      TYPE_REPORT ->
           try {
             CompanionEvent.Report(gson.fromJson(obj, LoadReport::class.java))
           } catch (_: JsonParseException) {

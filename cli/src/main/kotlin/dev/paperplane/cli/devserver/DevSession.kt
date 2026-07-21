@@ -6,6 +6,7 @@ import dev.paperplane.cli.config.PaperPlaneConfig
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.gradle.ProjectMetadata
+import dev.paperplane.cli.ipc.CompanionWire
 import dev.paperplane.cli.plugins.ManagedPlugins
 import dev.paperplane.cli.plugins.ModrinthClient
 import dev.paperplane.cli.plugins.PluginCache
@@ -237,13 +238,13 @@ internal class DevSession(
       serverManager: PaperServerManager,
   ): BuildOutcome {
     val buildStart = System.currentTimeMillis()
-    serverManager.sendCompanionStatus("building")
+    serverManager.sendCompanionStatus(CompanionWire.STATE_BUILDING)
     val buildSuccess = ui.spin("Building...") { gradle.build() }
     val buildDuration = formatDuration(System.currentTimeMillis() - buildStart)
 
     if (!buildSuccess) {
       ui.error("Build failed", buildDuration)
-      serverManager.sendCompanionStatus("error", message = "Build failed")
+      serverManager.sendCompanionStatus(CompanionWire.STATE_ERROR, message = "Build failed")
       return BuildOutcome.BuildFailed
     }
     ui.success("Build succeeded", buildDuration)
@@ -370,7 +371,7 @@ internal class DevSession(
    */
   fun handleFixAttempt(serverManager: PaperServerManager?): FixAttempt {
     val buildStart = System.currentTimeMillis()
-    serverManager?.sendCompanionStatus("building")
+    serverManager?.sendCompanionStatus(CompanionWire.STATE_BUILDING)
     val buildSuccess = gradle.build()
     val buildDuration = formatDuration(System.currentTimeMillis() - buildStart)
 
@@ -499,7 +500,10 @@ internal class DevSession(
     val serverDuration = formatDuration(System.currentTimeMillis() - serverStart)
     if (!ready) {
       ui.error("Server failed to start", serverDuration)
-      serverManager.sendCompanionStatus("error", message = "Server failed to start")
+      serverManager.sendCompanionStatus(
+          CompanionWire.STATE_ERROR,
+          message = "Server failed to start",
+      )
       return ServerStartResult.Aborted
     }
 
@@ -508,7 +512,7 @@ internal class DevSession(
     // whole story.
     if (stagedJarPath == null) {
       ui.success(readyMessage, serverDuration)
-      serverManager.sendCompanionStatus("ready", duration = serverDuration)
+      serverManager.sendCompanionStatus(CompanionWire.STATE_READY, duration = serverDuration)
       return ServerStartResult.Running(RunningState(metadata, paperJar))
     }
 
@@ -548,13 +552,13 @@ internal class DevSession(
         ui.renderLeakWarnings(loadResult.report)
         ui.success("Plugin loaded")
         ui.success(readyMessage, serverDuration)
-        serverManager.sendCompanionStatus("ready", duration = serverDuration)
+        serverManager.sendCompanionStatus(CompanionWire.STATE_READY, duration = serverDuration)
         ServerStartResult.Running(RunningState(metadata, paperJar))
       }
       is LoadWaitResult.Failed -> {
         ui.error("Plugin failed to load: ${loadResult.message}")
         loadFailureHint(loadResult)?.let { ui.status(it) }
-        serverManager.sendCompanionStatus("error", message = "Plugin load failed")
+        serverManager.sendCompanionStatus(CompanionWire.STATE_ERROR, message = "Plugin load failed")
         // A rejected load is recoverable via a source/config edit — stop the just-started server so
         // no stale instance lingers while the user fixes it, and let fix recovery keep the session
         // alive (a fresh server is started on the next successful rebuild).
@@ -564,7 +568,10 @@ internal class DevSession(
       LoadWaitResult.TimedOut -> {
         ui.error("Timed out waiting for the plugin to load")
         loadFailureHint(loadResult)?.let { ui.status(it) }
-        serverManager.sendCompanionStatus("error", message = "Plugin load timed out")
+        serverManager.sendCompanionStatus(
+            CompanionWire.STATE_ERROR,
+            message = "Plugin load timed out",
+        )
         serverManager.stop()
         ServerStartResult.LoadFailed
       }

@@ -110,11 +110,24 @@ class CompanionClientTest {
   }
 
   @Test
-  fun `a welcome with the wrong protocol version is rejected and the dial times out`() {
+  fun `a welcome with the wrong protocol version fails fast with a rebuild hint`() {
     FakeCompanionSocket(serverDir, welcomeProtocolVersion = 99).use { companion ->
       companion.start()
       CompanionClient(serverDir).use { client ->
-        assertEquals(CompanionClient.ConnectOutcome.TimedOut, client.connect(500, alive))
+        // A version-skewed companion won't heal by re-dialing, so connect() surfaces it immediately
+        // as CompanionFailed rather than spinning the same mismatch until the timeout.
+        val start = System.currentTimeMillis()
+        val outcome = client.connect(10_000, alive)
+        val failed =
+            assertInstanceOf(CompanionClient.ConnectOutcome.CompanionFailed::class.java, outcome)
+        assertTrue(
+            failed.message.contains("rebuild"),
+            "the message should tell the user to rebuild",
+        )
+        assertTrue(
+            System.currentTimeMillis() - start < 5_000,
+            "a version mismatch must not wait out the connect timeout",
+        )
         assertFalse(client.isConnected)
       }
     }
@@ -399,8 +412,27 @@ class CompanionClientTest {
         companion.awaitConnection()
 
         companion.sendSaveComplete()
-        assertTrue(client.awaitSaveComplete(5_000))
-        assertFalse(client.awaitSaveComplete(200), "the event must be consumed exactly once")
+        assertTrue(client.awaitSaveComplete(5_000, alive))
+        assertFalse(client.awaitSaveComplete(200, alive), "the event must be consumed exactly once")
+      }
+    }
+  }
+
+  @Test
+  fun `awaitSaveComplete short-circuits when the connection drops`() {
+    FakeCompanionSocket(serverDir).use { companion ->
+      companion.start()
+      CompanionClient(serverDir).use { client ->
+        connectOrFail(client)
+        companion.awaitConnection()
+        companion.dropConnection()
+
+        val start = System.currentTimeMillis()
+        assertFalse(client.awaitSaveComplete(10_000, alive))
+        assertTrue(
+            System.currentTimeMillis() - start < 5_000,
+            "a dropped connection must short-circuit the save wait, not block the full timeout",
+        )
       }
     }
   }
@@ -417,7 +449,10 @@ class CompanionClientTest {
 
         client.drainSaveCompletions()
 
-        assertFalse(client.awaitSaveComplete(200), "a stale completion must not satisfy a new save")
+        assertFalse(
+            client.awaitSaveComplete(200, alive),
+            "a stale completion must not satisfy a new save",
+        )
       }
     }
   }
@@ -425,19 +460,19 @@ class CompanionClientTest {
   // ── Progress events ─────────────────────────────────────────────────
 
   @Test
-  fun `streamed load progress is exposed`() {
+  fun `streamed load progress is ignored without dropping the session`() {
     FakeCompanionSocket(serverDir).use { companion ->
       companion.start()
       CompanionClient(serverDir).use { client ->
         connectOrFail(client)
         companion.awaitConnection()
+        // No consumer reads loadProgress yet (Fresh/Instant mode will); the line must be skipped
+        // without wedging the reader, so a following report still arrives.
         companion.send("""{"type":"loadProgress","requestId":"r1","stage":"loading"}""")
+        companion.send("""{"type":"report","requestId":"r1","status":"ok"}""")
 
-        val deadline = System.currentTimeMillis() + 5_000
-        while (client.lastLoadProgress == null && System.currentTimeMillis() < deadline) {
-          Thread.sleep(10)
-        }
-        assertEquals(CompanionEvent.LoadProgress("r1", "loading"), client.lastLoadProgress)
+        assertInstanceOf(LoadWaitResult.Ok::class.java, client.awaitReport("r1", 5_000, alive))
+        assertTrue(client.isConnected)
       }
     }
   }

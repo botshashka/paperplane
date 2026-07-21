@@ -60,6 +60,26 @@ class LeakDiagnosticsConfigTest {
     }
   }
 
+  // ── DevConfig protocolLog field parsing ────────────────────────────
+
+  @Test
+  fun `default DevConfig has protocolLog false`() {
+    assertEquals(false, DevConfig().protocolLog)
+  }
+
+  @Test
+  fun `DevConfig with protocol-log true parses correctly`() {
+    // A typo'd @SerialName would silently disable the tee, so lock the mapping down explicitly.
+    val config = Yaml.default.decodeFromString<DevConfig>("""protocol-log: true""")
+    assertEquals(true, config.protocolLog)
+  }
+
+  @Test
+  fun `DevConfig without protocol-log defaults to false`() {
+    val config = Yaml.default.decodeFromString<DevConfig>("""mode: hot-reload""")
+    assertEquals(false, config.protocolLog)
+  }
+
   // ── Within the full config ─────────────────────────────────────────
 
   @Test
@@ -69,6 +89,7 @@ class LeakDiagnosticsConfigTest {
         dev:
           mode: hot-reload
           leak-diagnostics: full
+          protocol-log: true
           jbr: "on"
         """
             .trimIndent()
@@ -76,6 +97,7 @@ class LeakDiagnosticsConfigTest {
 
     assertEquals(DevMode.HOT_RELOAD, config.dev.mode)
     assertEquals(LeakDiagnosticsMode.FULL, config.dev.leakDiagnostics)
+    assertEquals(true, config.dev.protocolLog)
     assertEquals("on", config.dev.jbr)
   }
 

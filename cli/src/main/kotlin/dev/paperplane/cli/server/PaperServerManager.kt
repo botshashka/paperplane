@@ -49,6 +49,10 @@ open class PaperServerManager(
   // in tests that fake this manager.
   private var companion: CompanionClient? = null
 
+  /** A fresh client for this server's companion, teeing the protocol when `protocolLog` is on. */
+  private fun newCompanionClient(): CompanionClient =
+      CompanionClient(serverDir, if (protocolLog) ProtocolTee.forServer(serverDir) else null)
+
   // True from the moment a stop is requested until the next start. Distinguishes an intentional
   // shutdown (mode-driven restarts, cleanup) from the process dying on its own — see
   // [hasExitedUnexpectedly].
@@ -358,8 +362,7 @@ open class PaperServerManager(
     process = proc
     processStdin = proc.outputStream
     companion?.close()
-    companion =
-        CompanionClient(serverDir, if (protocolLog) ProtocolTee.forServer(serverDir) else null)
+    companion = newCompanionClient()
     // Reset only after the fresh process is published, so a concurrent health check never pairs
     // the old dead process with a cleared flag.
     stopRequested = false
@@ -434,7 +437,7 @@ open class PaperServerManager(
     val client = companion ?: return false
     client.drainSaveCompletions()
     if (!client.sendStatus(CompanionWire.STATE_SAVING)) return false
-    return client.awaitSaveComplete(timeoutMs)
+    return client.awaitSaveComplete(timeoutMs, isAlive = ::isRunning)
   }
 
   open fun isRunning(): Boolean = process?.isAlive == true
@@ -462,13 +465,7 @@ open class PaperServerManager(
     val proc = process ?: return false
     // start() creates the client for real runs; the lazy fallback keeps waitForReady drivable
     // in tests that install a process without going through start().
-    val client =
-        companion
-            ?: CompanionClient(
-                    serverDir,
-                    if (protocolLog) ProtocolTee.forServer(serverDir) else null,
-                )
-                .also { companion = it }
+    val client = companion ?: newCompanionClient().also { companion = it }
     val start = System.currentTimeMillis()
     val outcome =
         client.connect(

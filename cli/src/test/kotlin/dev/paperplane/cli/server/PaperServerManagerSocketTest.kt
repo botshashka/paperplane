@@ -1,6 +1,8 @@
 package dev.paperplane.cli.server
 
 import dev.paperplane.cli.devserver.LoadRequest
+import dev.paperplane.cli.devserver.LoadWaitResult
+import dev.paperplane.cli.devserver.socketLoadResultWaiter
 import dev.paperplane.cli.testing.FakeCompanionSocket
 import dev.paperplane.cli.ui.RecordingTerminal
 import dev.paperplane.cli.ui.TerminalUI
@@ -10,6 +12,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -26,10 +29,62 @@ class PaperServerManagerSocketTest {
   private val terminal = RecordingTerminal()
   private val ui = TerminalUI(terminal)
 
-  private fun createManager(port: Int = 25566): PaperServerManager {
+  private fun createManager(port: Int = 25566, protocolLog: Boolean = false): PaperServerManager {
     val serverDir = File(tempDir, "server-$port")
     val cacheDir = File(tempDir, "cache")
-    return PaperServerManager(serverDir, PaperDownloader(cacheDir), ui, port = port)
+    return PaperServerManager(
+        serverDir,
+        PaperDownloader(cacheDir),
+        ui,
+        port = port,
+        protocolLog = protocolLog,
+    )
+  }
+
+  // ── protocol-log wiring (dev.protocol-log → live tee) ───────────────
+
+  @Test
+  fun `protocolLog true tees the companion protocol to a log file`() {
+    val manager = createManager(protocolLog = true)
+    manager.serverDir.mkdirs()
+    FakeCompanionSocket(manager.serverDir).start().use { companion ->
+      withSleeperProcess(manager) {
+        Thread {
+              companion.awaitConnection()
+              companion.sendReady()
+            }
+            .start()
+        assertTrue(manager.waitForReady())
+      }
+    }
+    val log = File(manager.serverDir, ".paperplane/protocol-log.ndjson")
+    assertTrue(log.exists(), "protocolLog=true must tee the protocol to a log file")
+    val text = log.readText()
+    assertTrue(
+        text.contains("\"dir\":\"send\"") && text.contains("hello"),
+        "the teed log must include the sent handshake; got: $text",
+    )
+    assertTrue(text.contains("\"dir\":\"recv\""), "the teed log must include received lines")
+  }
+
+  @Test
+  fun `protocolLog false writes no protocol log`() {
+    val manager = createManager() // protocolLog defaults to false
+    manager.serverDir.mkdirs()
+    FakeCompanionSocket(manager.serverDir).start().use { companion ->
+      withSleeperProcess(manager) {
+        Thread {
+              companion.awaitConnection()
+              companion.sendReady()
+            }
+            .start()
+        assertTrue(manager.waitForReady())
+      }
+    }
+    assertFalse(
+        File(manager.serverDir, ".paperplane/protocol-log.ndjson").exists(),
+        "protocolLog=false must not create a protocol log",
+    )
   }
 
   // ── Best-effort sends ───────────────────────────────────────────────
@@ -99,6 +154,43 @@ class PaperServerManagerSocketTest {
         assertFalse(manager.saveWorld(timeoutMs = 300), "no saveComplete → timeout")
       }
     }
+  }
+
+  // ── awaitLoadReport / socketLoadResultWaiter ────────────────────────
+
+  @Test
+  fun `awaitLoadReport returns ServerExited without a companion connection`() {
+    val manager = createManager()
+    manager.serverDir.mkdirs()
+    // No connection at all (the server was never started) counts as exited — no report can arrive.
+    assertEquals(LoadWaitResult.ServerExited, manager.awaitLoadReport("r1", 300))
+  }
+
+  @Test
+  fun `awaitLoadReport resolves the companion's matching report`() {
+    val manager = createManager()
+    manager.serverDir.mkdirs()
+    FakeCompanionSocket(manager.serverDir).start().use { companion ->
+      withSleeperProcess(manager) {
+        Thread {
+              companion.awaitConnection()
+              companion.sendReady()
+            }
+            .start()
+        assertTrue(manager.waitForReady())
+
+        companion.send("""{"type":"report","requestId":"r1","status":"ok"}""")
+        assertInstanceOf(LoadWaitResult.Ok::class.java, manager.awaitLoadReport("r1", 5_000))
+      }
+    }
+  }
+
+  @Test
+  fun `socketLoadResultWaiter delegates to the manager's awaitLoadReport`() {
+    val manager = createManager()
+    manager.serverDir.mkdirs()
+    // The production waiter is a thin delegate: with no connection it yields ServerExited too.
+    assertEquals(LoadWaitResult.ServerExited, socketLoadResultWaiter().await(manager, "r1", 300))
   }
 
   // ── waitForReady ────────────────────────────────────────────────────

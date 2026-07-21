@@ -60,10 +60,17 @@ internal class CompanionClient(
     object TimedOut : ConnectOutcome
   }
 
+  /**
+   * Thrown by [performHandshake] when the companion answers with a different protocol version.
+   * Distinct from a transient handshake [IOException] so [connect] can fail fast — re-dialing the
+   * same stale companion jar would only hit the identical mismatch until the timeout.
+   */
+  private class ProtocolMismatchException(message: String) : IOException(message)
+
   private val lock = Any()
   private var socket: Socket? = null
   private var writer: BufferedWriter? = null
-  private var readerThread: Thread? = null
+  @Volatile private var readerThread: Thread? = null
 
   @Volatile private var connected = false
 
@@ -73,11 +80,6 @@ internal class CompanionClient(
    */
   @Volatile
   var serverReady: Boolean = false
-    private set
-
-  /** Last streamed load-progress event, exposed for headless consumers and diagnostics. */
-  @Volatile
-  var lastLoadProgress: CompanionEvent.LoadProgress? = null
     private set
 
   private val saveCompletions = LinkedBlockingQueue<Unit>()
@@ -103,18 +105,34 @@ internal class CompanionClient(
         return ConnectOutcome.CompanionFailed(it)
       }
       if (!isAlive()) return ConnectOutcome.Died
-      val info = CompanionSocketFile.read(serverDir)
-      if (info != null && tryConnect(info)) return ConnectOutcome.Connected
+      CompanionSocketFile.read(serverDir)?.let { info ->
+        attemptDial(info)?.let {
+          return it
+        }
+      }
       Thread.sleep(DIAL_POLL_INTERVAL_MS)
     }
     return ConnectOutcome.TimedOut
   }
 
   /**
-   * One connect + handshake attempt. Any failure — refused connection (stale port file), handshake
-   * timeout (port squatted by something that isn't the companion), token rejection (companion
-   * closes without a welcome), version mismatch — closes the socket and reports false so the dial
-   * loop retries.
+   * One dial attempt: [ConnectOutcome.Connected] on success, [ConnectOutcome.CompanionFailed] on a
+   * fatal version mismatch (won't heal by re-dialing — surface it now so the user gets "rebuild the
+   * companion jar" instead of waiting out the whole timeout), or null to keep retrying.
+   */
+  private fun attemptDial(info: CompanionSocketInfo): ConnectOutcome? =
+      try {
+        if (tryConnect(info)) ConnectOutcome.Connected else null
+      } catch (e: ProtocolMismatchException) {
+        ConnectOutcome.CompanionFailed(e.message ?: "companion protocol mismatch")
+      }
+
+  /**
+   * One connect + handshake attempt. A transient failure — refused connection (stale port file),
+   * handshake timeout (port squatted by something that isn't the companion), token rejection
+   * (companion closes without a welcome) — closes the socket and reports false so the dial loop
+   * retries. A [ProtocolMismatchException] is non-transient: the socket is closed and it propagates
+   * so [connect] can fail fast.
    */
   private fun tryConnect(info: CompanionSocketInfo): Boolean {
     val candidate = Socket()
@@ -140,6 +158,11 @@ internal class CompanionClient(
             start()
           }
       true
+    } catch (e: ProtocolMismatchException) {
+      try {
+        candidate.close()
+      } catch (_: IOException) {}
+      throw e
     } catch (_: IOException) {
       try {
         candidate.close()
@@ -149,8 +172,9 @@ internal class CompanionClient(
   }
 
   /**
-   * Sends the hello and validates the companion's welcome; throws [IOException] on any mismatch so
-   * [tryConnect]'s single failure path closes the socket and the dial loop retries.
+   * Sends the hello and validates the companion's welcome. An unreadable/garbage reply throws
+   * [IOException] (retryable — likely a port squatter); a decodable welcome with the wrong protocol
+   * version throws [ProtocolMismatchException] (non-retryable — the companion jar is stale).
    */
   private fun performHandshake(
       info: CompanionSocketInfo,
@@ -164,9 +188,19 @@ internal class CompanionClient(
     tee?.record(ProtocolTee.SEND, hello)
     val line = reader.readLine() ?: throw IOException("companion closed during handshake")
     tee?.record(ProtocolTee.RECV, line)
-    val welcome = CompanionWire.decode(line) as? CompanionEvent.Welcome
-    if (welcome == null || welcome.protocolVersion != CompanionSocketFile.PROTOCOL_VERSION) {
-      throw IOException("invalid handshake reply: $line")
+    return parseWelcome(line)
+  }
+
+  /** Decodes and version-checks the welcome line. See [performHandshake] for the throw contract. */
+  private fun parseWelcome(line: String): CompanionEvent.Welcome {
+    val welcome =
+        CompanionWire.decode(line) as? CompanionEvent.Welcome
+            ?: throw IOException("invalid handshake reply: $line")
+    if (welcome.protocolVersion != CompanionSocketFile.PROTOCOL_VERSION) {
+      throw ProtocolMismatchException(
+          "companion speaks protocol ${welcome.protocolVersion}, this CLI speaks " +
+              "${CompanionSocketFile.PROTOCOL_VERSION} — rebuild to refresh the companion jar"
+      )
     }
     return welcome
   }
@@ -184,15 +218,25 @@ internal class CompanionClient(
           is CompanionEvent.Ready -> serverReady = true
           is CompanionEvent.SaveComplete -> saveCompletions.put(Unit)
           is CompanionEvent.Report -> reports.put(event.report)
-          is CompanionEvent.LoadProgress -> lastLoadProgress = event
+          // LoadProgress is a streamed stage with no consumer yet (Fresh/Instant mode will read
+          // it); a Welcome outside the handshake and an unknown line are likewise ignored.
+          is CompanionEvent.LoadProgress,
           is CompanionEvent.Welcome,
-          null -> {} // Welcome outside the handshake / unknown line — ignore.
+          null -> {}
         }
       }
     } catch (_: IOException) {
       // Fall through to the disconnect mark.
+    } finally {
+      connected = false
+      // Release the fd promptly on EOF/crash instead of leaving it in CLOSE_WAIT until the next
+      // start()/stop() calls close(). close() is idempotent, so the later close is harmless.
+      synchronized(lock) {
+        try {
+          socket?.close()
+        } catch (_: IOException) {}
+      }
     }
-    connected = false
   }
 
   /** Sends one raw line, best-effort. A send failure marks the connection dropped. */
@@ -241,8 +285,23 @@ internal class CompanionClient(
     saveCompletions.clear()
   }
 
-  fun awaitSaveComplete(timeoutMs: Long): Boolean =
-      saveCompletions.poll(timeoutMs, TimeUnit.MILLISECONDS) != null
+  /**
+   * Waits for the companion's `saveComplete`. Like [awaitReport], the queue is polled before the
+   * liveness checks so a completion that lands exactly as the process dies still wins, and a
+   * dropped connection or dead process short-circuits the wait instead of blocking the whole
+   * timeout.
+   */
+  fun awaitSaveComplete(timeoutMs: Long, isAlive: () -> Boolean): Boolean {
+    val deadline = System.currentTimeMillis() + timeoutMs
+    while (true) {
+      val remaining = deadline - System.currentTimeMillis()
+      val completed =
+          saveCompletions.poll(remaining.coerceIn(0, AWAIT_POLL_INTERVAL_MS), TimeUnit.MILLISECONDS)
+      if (completed != null) return true
+      if (!connected || !isAlive()) return false
+      if (remaining <= 0) return false
+    }
+  }
 
   /**
    * Waits for the companion's [LoadReport] answering [expectedRequestId]. Reports for other request

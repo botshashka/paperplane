@@ -37,6 +37,13 @@ class CompanionMessageHandler(
   companion object {
     /** Streamed stage sent when a load request is accepted for dispatch. */
     const val STAGE_LOADING = "loading"
+
+    // Build-state wire values carried by the CLI's `status` message (mirror of the CLI's
+    // CompanionWire.STATE_*; the modules share no code).
+    private const val STATE_SAVING = "saving"
+    private const val STATE_BUILDING = "building"
+    private const val STATE_READY = "ready"
+    private const val STATE_ERROR = "error"
   }
 
   private var hotSwapper: HotSwapper? = null
@@ -74,18 +81,18 @@ class CompanionMessageHandler(
    * `saveComplete`.
    */
   fun handleStatus(update: StatusUpdate) {
-    blockWorldEdits = update.state == "saving" || update.state == "building"
+    blockWorldEdits = update.state == STATE_SAVING || update.state == STATE_BUILDING
     when (update.state) {
-      "saving" -> {
+      STATE_SAVING -> {
         broadcast(Component.text("Saving world...", NamedTextColor.GOLD))
         performSave()
       }
-      "building" -> broadcast(Component.text("Rebuilding...", NamedTextColor.YELLOW))
-      "ready" -> {
+      STATE_BUILDING -> broadcast(Component.text("Rebuilding...", NamedTextColor.YELLOW))
+      STATE_READY -> {
         val duration = update.duration ?: ""
         broadcast(Component.text("Ready $duration", NamedTextColor.GREEN))
       }
-      "error" -> {
+      STATE_ERROR -> {
         val message = update.message ?: "Build error"
         broadcast(Component.text(message, NamedTextColor.RED))
       }

@@ -24,10 +24,15 @@ internal class ProtocolTee(private val file: File) {
         ProtocolTee(File(serverDir, ".paperplane/$FILE_NAME"))
   }
 
+  init {
+    // Create the log's parent once here rather than per message; a message-time mkdirs would be a
+    // syscall on every teed line.
+    file.parentFile?.mkdirs()
+  }
+
   @Synchronized
   fun record(direction: String, rawLine: String) {
     try {
-      file.parentFile?.mkdirs()
       val entry =
           JsonObject().apply {
             addProperty("at", System.currentTimeMillis())
