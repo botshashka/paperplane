@@ -472,55 +472,72 @@ class CompanionMessageHandlerTest {
     assertTrue(report.message!!.contains("helpMap resolution blew up"))
   }
 
-  // ── Hot-swap fast-path eligibility ──────────────────────────────────
-  // tryHotSwap needs live instrumentation that isn't available in tests, so drive the pure
-  // eligibility predicate directly.
+  // ── Instant swaps ───────────────────────────────────────────────────
+  // A real redefinition needs live instrumentation that isn't available under MockBukkit, so
+  // these pin the refusal ladder — every request is ANSWERED with a reason, never silent.
+
+  private fun instantRequest(id: String, pluginName: String = "Sample") =
+      HostInstantSwapRequest(
+          requestId = id,
+          pluginName = pluginName,
+          classes =
+              listOf(
+                  HostInstantClassEntry(
+                      fqcn = "com.example.Foo",
+                      expectedCrc32 = 42L,
+                      data = java.util.Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3)),
+                  )
+              ),
+      )
 
   @Test
-  fun `hot-swap is eligible for a method-body edit on a loaded plugin below the leak limit`() {
+  fun `an instant swap for an unloaded plugin is refused with the reason echoed on the id`() {
+    handler.handleInstantSwap(instantRequest("i1"))
+
+    val report = ipc.instantReports.single()
+    assertEquals("i1", report.requestId, "the report must echo the request id for CLI matching")
+    assertEquals(HostInstantSwapStatus.REFUSED, report.status)
     assertTrue(
-        handler.hotSwapEligible(
-            wasLoaded = true,
-            leakLimitReached = false,
-            changedClasses = listOf("com.example.Plugin"),
-            classesDirs = listOf("/build/classes"),
-        )
+        report.reason!!.contains("not loaded"),
+        "the refusal must say why; got: ${report.reason}",
     )
   }
 
   @Test
-  fun `hot-swap is ineligible once the leak limit is reached`() {
-    // The regression: a method-body edit while leakLimitReached would take the fast path
-    // and report Ok with no action, deferring the leak-restart forever. It must fall
-    // through to the full reload so the host's refusal carries action=restart.
-    assertFalse(
-        handler.hotSwapEligible(
-            wasLoaded = true,
-            leakLimitReached = true,
-            changedClasses = listOf("com.example.Plugin"),
-            classesDirs = listOf("/build/classes"),
-        )
+  fun `an instant swap past the leak limit is refused so the restart signal is not starved`() {
+    // Past the limit, a patch would report Ok with no `action`, deferring the leak-restart
+    // indefinitely; the refusal routes the change through the full reload whose report carries
+    // action=restart.
+    val trippedHost =
+        object : RecordingHost(fakeServer, javaClass.classLoader, probe) {
+          override val leakLimitReached: Boolean = true
+        }
+    val trippedHandler = CompanionMessageHandler(hostingPlugin, { trippedHost }, ipc, serverRoot)
+    trippedHandler.handleLoadRequest(request("r1")) // memoizes the host
+    ipc.instantReports.clear()
+
+    trippedHandler.handleInstantSwap(instantRequest("i2"))
+
+    val report = ipc.instantReports.single()
+    assertEquals(HostInstantSwapStatus.REFUSED, report.status)
+    assertTrue(
+        report.reason!!.contains("leak limit"),
+        "the refusal must name the leak limit; got: ${report.reason}",
     )
   }
 
   @Test
-  fun `hot-swap is ineligible on a fresh load, a structural change, or a jar-only reload`() {
-    assertFalse(
-        handler.hotSwapEligible(
-            false,
-            false,
-            listOf("com.example.Plugin"),
-            listOf("/build/classes"),
-        ),
-        "not yet loaded → fresh load, not a swap",
-    )
-    assertFalse(
-        handler.hotSwapEligible(true, false, emptyList(), listOf("/build/classes")),
-        "no changed classes → structural change, needs a full reload",
-    )
-    assertFalse(
-        handler.hotSwapEligible(true, false, listOf("com.example.Plugin"), emptyList()),
-        "no classes dir → jar fallback, nothing to redefine from",
+  fun `an instant swap without instrumentation is refused, never silent`() {
+    MockBukkit.createMockPlugin("Sample") // loaded natively, so the loader resolves
+
+    handler.handleInstantSwap(instantRequest("i3"))
+
+    val report = ipc.instantReports.single()
+    assertEquals("i3", report.requestId)
+    assertEquals(HostInstantSwapStatus.REFUSED, report.status)
+    assertTrue(
+        report.reason!!.contains("instrumentation"),
+        "the refusal must name the missing agent; got: ${report.reason}",
     )
   }
 
@@ -584,6 +601,7 @@ class CompanionMessageHandlerTest {
   /** Records everything the handler sends, plus the relative ordering of sends. */
   private class RecordingIpc : CompanionIpc {
     val reports = mutableListOf<HostLoadReport>()
+    val instantReports = mutableListOf<HostInstantSwapReport>()
     val progress = mutableListOf<Pair<String, String>>()
     var saveCompletions = 0
     val order = mutableListOf<String>()
@@ -591,6 +609,11 @@ class CompanionMessageHandlerTest {
     override fun sendReport(report: HostLoadReport) {
       reports += report
       order += "report"
+    }
+
+    override fun sendInstantReport(report: HostInstantSwapReport) {
+      instantReports += report
+      order += "instantReport"
     }
 
     override fun sendSaveComplete() {

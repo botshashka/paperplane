@@ -33,6 +33,12 @@ class CompanionPlugin : JavaPlugin() {
                     Runnable { messageHandler.handleLoadRequest(request) },
                 )
               },
+              onInstantSwap = { request ->
+                server.scheduler.runTask(
+                    this,
+                    Runnable { messageHandler.handleInstantSwap(request) },
+                )
+              },
           )
       // The host is built lazily on the first load request (hot-reload only). Probing Paper
       // internals here would fail-fast the whole companion on Paper versions that predate the
@@ -57,6 +63,9 @@ class CompanionPlugin : JavaPlugin() {
               ipc = socket,
           )
       socketServer = socket
+      // A previous run's spliced new-class overlay is stale bytecode by now; this server's own
+      // loads must never resolve against it.
+      File(serverRoot(), ".paperplane/instant-overlay").deleteRecursively()
       socket.start(serverRoot())
 
       server.pluginManager.registerEvents(errorCatcher, this)

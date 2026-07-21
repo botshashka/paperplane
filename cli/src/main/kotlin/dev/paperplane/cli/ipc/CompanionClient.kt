@@ -1,9 +1,13 @@
 package dev.paperplane.cli.ipc
 
+import dev.paperplane.cli.devserver.InstantSwapReport
+import dev.paperplane.cli.devserver.InstantSwapRequest
+import dev.paperplane.cli.devserver.InstantWaitResult
 import dev.paperplane.cli.devserver.LoadReport
 import dev.paperplane.cli.devserver.LoadRequest
 import dev.paperplane.cli.devserver.LoadStatus
 import dev.paperplane.cli.devserver.LoadWaitResult
+import dev.paperplane.cli.devserver.instant.RedefineCapability
 import java.io.BufferedReader
 import java.io.BufferedWriter
 import java.io.File
@@ -82,8 +86,17 @@ internal class CompanionClient(
   var serverReady: Boolean = false
     private set
 
+  /**
+   * The live JVM's redefine capability, from the welcome handshake. [RedefineCapability.NONE]
+   * until authenticated — an unreachable server can't patch anything.
+   */
+  @Volatile
+  var capability: RedefineCapability = RedefineCapability.NONE
+    private set
+
   private val saveCompletions = LinkedBlockingQueue<Unit>()
   private val reports = LinkedBlockingQueue<LoadReport>()
+  private val instantReports = LinkedBlockingQueue<InstantSwapReport>()
 
   val isConnected: Boolean
     get() = connected
@@ -152,6 +165,12 @@ internal class CompanionClient(
         connected = true
       }
       if (welcome.serverReady) serverReady = true
+      capability =
+          when {
+            !welcome.agent -> RedefineCapability.NONE
+            welcome.enhanced -> RedefineCapability.ADDITIVE
+            else -> RedefineCapability.BODY_ONLY
+          }
       readerThread =
           Thread({ readLoop(reader) }, "companion-ipc-reader").apply {
             isDaemon = true
@@ -218,8 +237,9 @@ internal class CompanionClient(
           is CompanionEvent.Ready -> serverReady = true
           is CompanionEvent.SaveComplete -> saveCompletions.put(Unit)
           is CompanionEvent.Report -> reports.put(event.report)
-          // LoadProgress is a streamed stage with no consumer yet (Fresh/Instant mode will read
-          // it); a Welcome outside the handshake and an unknown line are likewise ignored.
+          is CompanionEvent.InstantReport -> instantReports.put(event.report)
+          // LoadProgress is a streamed stage with no consumer yet (Fresh mode will read it); a
+          // Welcome outside the handshake and an unknown line are likewise ignored.
           is CompanionEvent.LoadProgress,
           is CompanionEvent.Welcome,
           null -> {}
@@ -261,6 +281,9 @@ internal class CompanionClient(
       send(CompanionWire.encodeStatus(state, duration, message))
 
   fun sendLoadRequest(request: LoadRequest): Boolean = send(CompanionWire.encodeLoad(request))
+
+  fun sendInstantSwap(request: InstantSwapRequest): Boolean =
+      send(CompanionWire.encodeInstantSwap(request))
 
   /**
    * Waits for the explicit server-readiness event. Readiness already streamed (or snapshotted in
@@ -325,6 +348,30 @@ internal class CompanionClient(
       }
       if (!connected || !isAlive()) return LoadWaitResult.ServerExited
       if (remaining <= 0) return LoadWaitResult.TimedOut
+    }
+  }
+
+  /**
+   * Waits for the [InstantSwapReport] answering [expectedRequestId]. Same contract as
+   * [awaitReport]: stale requestIds are dropped, the queue is drained before the liveness checks,
+   * and a dropped connection or dead process short-circuits the wait.
+   */
+  fun awaitInstantReport(
+      expectedRequestId: String,
+      timeoutMs: Long,
+      isAlive: () -> Boolean,
+  ): InstantWaitResult {
+    val deadline = System.currentTimeMillis() + timeoutMs
+    while (true) {
+      val remaining = deadline - System.currentTimeMillis()
+      val report =
+          instantReports.poll(remaining.coerceIn(0, AWAIT_POLL_INTERVAL_MS), TimeUnit.MILLISECONDS)
+      if (report != null) {
+        if (report.requestId == expectedRequestId) return InstantWaitResult.Answered(report)
+        continue // Stale requestId — drop and keep waiting.
+      }
+      if (!connected || !isAlive()) return InstantWaitResult.ServerExited
+      if (remaining <= 0) return InstantWaitResult.TimedOut
     }
   }
 

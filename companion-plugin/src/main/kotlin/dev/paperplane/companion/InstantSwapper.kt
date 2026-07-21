@@ -1,0 +1,203 @@
+package dev.paperplane.companion
+
+import java.io.File
+import java.lang.instrument.ClassDefinition
+import java.lang.instrument.Instrumentation
+import java.lang.instrument.UnmodifiableClassException
+import java.lang.reflect.InaccessibleObjectException
+import java.net.URL
+import java.net.URLClassLoader
+import java.util.Base64
+import java.util.Collections
+import java.util.WeakHashMap
+import java.util.logging.Logger
+import java.util.zip.CRC32
+
+/**
+ * Applies an instant patch: verifies, then redefines the request's classes in the live server and
+ * makes its new classes loadable. Replaces the old `HotSwapper`.
+ *
+ * The safety split with the CLI: the CLI's classifier decides *whether* a change-set is safe to
+ * patch; this class verifies the CLI's premise — that the server is actually running the bytes
+ * the CLI diffed against. The verification source is the agent's load-hook CRC registry
+ * ([AgentAccess.loadedCrc]): the filesystem is already overwritten by verify time, and
+ * retransform-capture is byte-unfaithful (HotSpot reconstitutes class files for retransformers),
+ * so the bytes recorded at definition time are the only truthful record. Any mismatch refuses the
+ * whole request. The JVM's own [UnmodifiableClassException]/[UnsupportedOperationException] veto
+ * stays as the final backstop, and `redefineClasses` is all-or-nothing, so a failure never leaves
+ * half a patch applied. (New classes made loadable before a vetoed redefine remain defined but
+ * unreferenced — old code never names them — so that residue is inert.)
+ */
+class InstantSwapper(
+    private val logger: Logger,
+    private val overlayDir: File,
+    private val instrumentationProvider: () -> Instrumentation? = { AgentAccess.instrumentation() },
+    private val loadedCrcProvider: (ClassLoader, String) -> Long = AgentAccess::loadedCrc,
+    private val crcUpdater: (ClassLoader, String, Long) -> Unit = AgentAccess::updateCrc,
+) {
+  sealed class Outcome {
+    /** Everything applied. [patched] counts redefined + already-current classes. */
+    data class Applied(val patched: Int, val defined: Int) : Outcome()
+
+    /** A precondition or verification check said no; nothing was touched. */
+    data class Refused(val reason: String) : Outcome()
+
+    /** The redefine attempt itself errored (JVM veto included); nothing was applied. */
+    data class Failed(val reason: String) : Outcome()
+  }
+
+  // Loaders whose URL list already contains the overlay dir. Weak so a torn-down plugin
+  // incarnation's loader doesn't pin.
+  private val splicedLoaders: MutableSet<ClassLoader> =
+      Collections.newSetFromMap(WeakHashMap())
+
+  fun apply(request: HostInstantSwapRequest, pluginClassLoader: ClassLoader): Outcome {
+    val inst =
+        instrumentationProvider() ?: return Outcome.Refused("instrumentation agent not loaded")
+    if (!inst.isRedefineClassesSupported) {
+      return Outcome.Refused("JVM does not support class redefinition")
+    }
+
+    val patches = decode(request.classes) ?: return Outcome.Failed("undecodable class payload")
+    val additions = decode(request.newClasses) ?: return Outcome.Failed("undecodable class payload")
+
+    val definitions = mutableListOf<ClassDefinition>()
+    var alreadyCurrent = 0
+    for ((entry, newBytes) in patches) {
+      // Force-load a changed-but-unloaded class (no initialization) so a jar-backed loader's
+      // stale bytes are in the redefinition batch too — otherwise a later lazy load would
+      // resurrect the old bytes from the jar. The load also populates the agent's CRC registry.
+      val cls =
+          try {
+            Class.forName(entry.fqcn, false, pluginClassLoader)
+          } catch (e: ClassNotFoundException) {
+            return Outcome.Refused("class ${entry.fqcn} is not loadable in the live server")
+          } catch (e: LinkageError) {
+            return Outcome.Refused("class ${entry.fqcn} failed to link: ${e.message}")
+          }
+      // Verify against the loader that actually DEFINED the class (delegation may have resolved
+      // it elsewhere — patching a parent-owned class is never what the CLI vouched for).
+      val definingLoader =
+          cls.classLoader
+              ?: return Outcome.Refused("class ${entry.fqcn} resolved from the bootstrap loader")
+
+      when (val loadedCrc = loadedCrcProvider(definingLoader, entry.fqcn)) {
+        AgentAccess.UNKNOWN_CRC ->
+            return Outcome.Refused("no load record for ${entry.fqcn} — cannot verify")
+        // A freshly force-loaded class on a directory-backed loader already read the new bytes.
+        crc32(newBytes) -> alreadyCurrent++
+        entry.expectedCrc32 -> definitions += ClassDefinition(cls, newBytes)
+        else -> {
+          logger.fine(
+              "Instant verify mismatch on ${entry.fqcn}: loaded=$loadedCrc " +
+                  "expected=${entry.expectedCrc32} new=${crc32(newBytes)}"
+          )
+          return Outcome.Refused(
+              "baseline drift on ${entry.fqcn} — the server is not running the bytes " +
+                  "the CLI diffed against"
+          )
+        }
+      }
+    }
+
+    var defined = 0
+    for ((entry, bytes) in additions) {
+      makeLoadable(pluginClassLoader, entry.fqcn, bytes)?.let {
+        return Outcome.Refused(it)
+      }
+      defined++
+    }
+
+    if (definitions.isNotEmpty()) {
+      try {
+        inst.redefineClasses(*definitions.toTypedArray())
+      } catch (e: UnsupportedOperationException) {
+        return Outcome.Failed("JVM rejected redefinition: ${e.message}")
+      } catch (e: UnmodifiableClassException) {
+        return Outcome.Failed("JVM rejected redefinition: ${e.message}")
+      } catch (
+          @Suppress("TooGenericExceptionCaught") // Any escape here would leave the CLI's await
+          // hanging until timeout with no reason; report it as the failed outcome instead.
+          e: Exception) {
+        return Outcome.Failed("redefinition failed: ${e.javaClass.simpleName}: ${e.message}")
+      }
+      // The redefinition landed — the registry must now say the new bytes are what's running.
+      // (The load hook records only initial definitions, so this is the one write path for
+      // patches.)
+      for (definition in definitions) {
+        crcUpdater(
+            definition.definitionClass.classLoader,
+            definition.definitionClass.name,
+            crc32(definition.definitionClassFile),
+        )
+      }
+    }
+    return Outcome.Applied(patched = definitions.size + alreadyCurrent, defined = defined)
+  }
+
+  /** Decodes base64 payloads; null on any malformed entry. */
+  private fun decode(
+      entries: List<HostInstantClassEntry>
+  ): List<Pair<HostInstantClassEntry, ByteArray>>? =
+      try {
+        entries.map { it to Base64.getDecoder().decode(it.data) }
+      } catch (e: IllegalArgumentException) {
+        logger.warning("Instant swap payload not decodable: ${e.message}")
+        null
+      }
+
+  /**
+   * Makes a new class loadable through [loader]. Returns null on success, or a user-facing
+   * refusal reason. Prefers doing nothing (the loader already sees the class — directory-backed
+   * loaders read the CLI's build output), then [DevPluginClassLoader.defineNew] (works with no
+   * shared filesystem), then the overlay-dir `addURL` splice for Paper's jar-backed
+   * `PluginClassLoader`.
+   */
+  private fun makeLoadable(loader: ClassLoader, fqcn: String, bytes: ByteArray): String? {
+    try {
+      Class.forName(fqcn, false, loader)
+      return null
+    } catch (_: ClassNotFoundException) {} catch (e: LinkageError) {
+      return "new class $fqcn failed to link: ${e.message}"
+    }
+    return when (loader) {
+      is DevPluginClassLoader ->
+          try {
+            loader.defineNew(fqcn, bytes)
+            null
+          } catch (e: LinkageError) {
+            "new class $fqcn could not be defined: ${e.message}"
+          }
+      is URLClassLoader -> spliceOverlay(loader, fqcn, bytes)
+      else ->
+          "plugin classloader ${loader.javaClass.name} cannot receive new classes — " +
+              "full swap required"
+    }
+  }
+
+  /**
+   * Writes [bytes] under [overlayDir] and reflectively `addURL`s the overlay onto [loader] (once
+   * per loader). Requires the server JVM to be launched with
+   * `--add-opens java.base/java.net=ALL-UNNAMED` — which the CLI's LaunchSpec always adds.
+   */
+  private fun spliceOverlay(loader: URLClassLoader, fqcn: String, bytes: ByteArray): String? {
+    val target = File(overlayDir, fqcn.replace('.', '/') + ".class")
+    target.parentFile.mkdirs()
+    target.writeBytes(bytes)
+    if (loader in splicedLoaders) return null
+    return try {
+      val addUrl = URLClassLoader::class.java.getDeclaredMethod("addURL", URL::class.java)
+      addUrl.isAccessible = true
+      addUrl.invoke(loader, overlayDir.toURI().toURL())
+      splicedLoaders.add(loader)
+      null
+    } catch (e: InaccessibleObjectException) {
+      "cannot splice new classes into ${loader.javaClass.simpleName} " +
+          "(server JVM launched without --add-opens java.base/java.net) — full swap required"
+    } catch (e: ReflectiveOperationException) {
+      "cannot splice new classes: ${e.javaClass.simpleName}: ${e.message} — full swap required"
+    }
+  }
+
+  private fun crc32(bytes: ByteArray): Long = CRC32().apply { update(bytes) }.value
+}

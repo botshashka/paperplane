@@ -61,6 +61,15 @@ class DevPluginClassLoader(
   // overflow.
   private val crossPluginInProgress = ThreadLocal.withInitial { HashSet<String>() }
 
+  /**
+   * Defines a brand-new class from bytes received over the socket — the instant tier's new-class
+   * path for when the build output is not visible on this loader's URLs (no shared filesystem
+   * with the CLI, e.g. a containerized server). Throws [LinkageError] if the name is already
+   * defined; callers treat that as a refusal.
+   */
+  fun defineNew(fqcn: String, bytes: ByteArray): Class<*> =
+      synchronized(getClassLoadingLock(fqcn)) { defineClass(fqcn, bytes, 0, bytes.size) }
+
   override fun loadClass(name: String, resolve: Boolean): Class<*> {
     synchronized(getClassLoadingLock(name)) {
       // 1. Check already loaded

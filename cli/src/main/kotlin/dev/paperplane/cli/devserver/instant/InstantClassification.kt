@@ -62,11 +62,14 @@ data class Escalation(val kind: EscalationKind, val description: String)
  * the patches to apply if the lane runs, and the named reasons if it must not.
  *
  * Invariants: [escalations] is non-empty iff [requirement] is UNSAFE; [patches]/[newClasses] are
- * only meaningful below UNSAFE (an UNSAFE change-set is never partially applied).
+ * only meaningful below UNSAFE (an UNSAFE change-set is never partially applied). [additiveNotes]
+ * names what pushed the requirement to ADDITIVE ("new class Foo", "method added on Bar") so a
+ * capability shortfall on a stock JVM can escalate with a reason as specific as an UNSAFE one.
  */
 class InstantClassification(
     val requirement: RedefineRequirement,
     val patches: List<ClassPatch>,
     val newClasses: List<ClassPatch>,
     val escalations: List<Escalation>,
+    val additiveNotes: List<String> = emptyList(),
 )

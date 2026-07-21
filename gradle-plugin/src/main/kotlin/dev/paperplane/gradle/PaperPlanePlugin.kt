@@ -2,11 +2,21 @@ package dev.paperplane.gradle
 
 import org.gradle.api.Plugin
 import org.gradle.api.Project
+import org.gradle.api.tasks.bundling.Jar
 
 class PaperPlanePlugin : Plugin<Project> {
   override fun apply(project: Project) {
     val extension =
         project.extensions.create("paperplane", PaperPlaneExtension::class.java, project)
+
+    // Plugins built against paper-api are Mojang-mapped; without this manifest attribute Paper
+    // 1.20.5+ assumes Spigot mappings and rewrites the jar through its remapper at load time.
+    // Skipping the remap keeps loads fast AND keeps loaded bytecode byte-identical to the build
+    // output — which the instant tier's loaded-CRC verification depends on in native modes.
+    // withType covers shadowJar too (it extends Jar).
+    project.tasks.withType(Jar::class.java).configureEach { jar ->
+      jar.manifest.attributes["paperweight-mappings-namespace"] = "mojang"
+    }
 
     project.tasks.register("ppGeneratePluginYml", PluginYmlGenerateTask::class.java) { task ->
       task.group = "paperplane"

@@ -12,12 +12,41 @@ import java.lang.instrument.Instrumentation
  * still work.
  */
 object AgentAccess {
+  /** Mirror of the agent's `UNKNOWN_CRC` sentinel — the class was never seen by the load hook. */
+  const val UNKNOWN_CRC = -1L
+
   fun instrumentation(): Instrumentation? =
       try {
-        val agentClass =
-            ClassLoader.getSystemClassLoader().loadClass("dev.paperplane.agent.PaperPlaneAgent")
-        agentClass.getMethod("getInstrumentation").invoke(null) as? Instrumentation
+        agentClass().getMethod("getInstrumentation").invoke(null) as? Instrumentation
       } catch (_: ReflectiveOperationException) {
         null
       }
+
+  /**
+   * The CRC32 of the bytes [loader] actually defined [binaryName] from, per the agent's load-hook
+   * registry — the instant tier's verification ground truth. [UNKNOWN_CRC] when unrecorded or the
+   * agent is absent.
+   */
+  fun loadedCrc(loader: ClassLoader, binaryName: String): Long =
+      try {
+        agentClass()
+            .getMethod("getLoadedCrc", ClassLoader::class.java, String::class.java)
+            .invoke(null, loader, binaryName) as Long
+      } catch (_: ReflectiveOperationException) {
+        UNKNOWN_CRC
+      }
+
+  /** Records a successful in-place redefinition in the agent's registry. */
+  fun updateCrc(loader: ClassLoader, binaryName: String, crc: Long) {
+    try {
+      agentClass()
+          .getMethod("updateCrc", ClassLoader::class.java, String::class.java, Long::class.java)
+          .invoke(null, loader, binaryName, crc)
+    } catch (_: ReflectiveOperationException) {
+      // Agent absent — the patcher refuses before ever reaching an update.
+    }
+  }
+
+  private fun agentClass(): Class<*> =
+      ClassLoader.getSystemClassLoader().loadClass("dev.paperplane.agent.PaperPlaneAgent")
 }

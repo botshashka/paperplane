@@ -102,8 +102,15 @@ internal class DevSession(
         buildConfigFiles.map { FileWatcher.normalizePath(it.absolutePath) }.toSet()
     if (changedFiles.any { it in buildConfigPaths }) {
       gradle.close()
+      buildConfigChangeListeners.forEach { it() }
     }
   }
+
+  /**
+   * Fired whenever a build-config change invalidates the Gradle connection. The instant lane
+   * registers here to drop its cached fast metadata — classes-dir layout may have changed.
+   */
+  val buildConfigChangeListeners = mutableListOf<() -> Unit>()
 
   /**
    * The live server + metadata pair shared between startup, fix recovery, and the main watch loop.
@@ -313,11 +320,18 @@ internal class DevSession(
    * function commits whatever the phase has emitted so far (build/server-ready lines) into a
    * separate visual sub-block above, then appends the info lines into a fresh sub-block.
    */
-  fun showServerInfo(metadata: ProjectMetadata, serverAddress: String, modeLabel: String) {
+  fun showServerInfo(
+      metadata: ProjectMetadata,
+      serverAddress: String,
+      modeLabel: String,
+      instantLabel: String? = null,
+  ) {
     ui.nextSection()
     ui.info("Server:", serverAddress)
     ui.info("Plugin:", "${metadata.pluginName} v${metadata.version}")
     ui.info("Mode:", modeLabel)
+    // Always report the instant tier's ceiling and why — the honesty floor for the fast lane.
+    instantLabel?.let { ui.info("Instant:", it) }
   }
 
   /**
@@ -401,24 +415,35 @@ internal class DevSession(
    * Blocks on the main file watcher. On every change, wraps [onChanged] in a phase with an
    * automatic "Change detected" prefix. [healthCheck] runs between phases and can emit an error
    * into the pinned watching footer if it decides to exit the loop.
+   *
+   * [onForceSwap] is the instant tier's manual escape hatch: when non-null, a line-buffered stdin
+   * listener runs alongside the watcher, and typing `s`⏎ triggers a full swap of the current
+   * build — the user-side reset to ground truth when in-place patches leave them in doubt.
+   * Rebuilds are serialized on one lock, so a forced swap and a file-change rebuild can never
+   * interleave their phases.
    */
   fun runMainWatchLoop(
       onChanged: TerminalUI.(changedFiles: List<String>) -> PhaseEnd,
       healthCheck: () -> Boolean,
       cleanup: () -> Unit,
+      onForceSwap: (TerminalUI.() -> PhaseEnd)? = null,
   ) {
     val srcDir = File(projectDir, "src")
+    val rebuildLock = Any()
     val watcher =
         FileWatcher(srcDir, config.dev.debounceMs, extraFiles = buildConfigFiles) { changedFiles ->
-          maybeInvalidateGradleConnection(changedFiles)
-          ui.phase {
-            val shortName = changedFiles.firstOrNull()?.let { File(it).name } ?: "files"
-            val extra = if (changedFiles.size > 1) " (+${changedFiles.size - 1} more)" else ""
-            change("Change detected: $shortName$extra")
-            onChanged(changedFiles)
+          synchronized(rebuildLock) {
+            maybeInvalidateGradleConnection(changedFiles)
+            ui.phase {
+              val shortName = changedFiles.firstOrNull()?.let { File(it).name } ?: "files"
+              val extra = if (changedFiles.size > 1) " (+${changedFiles.size - 1} more)" else ""
+              change("Change detected: $shortName$extra")
+              onChanged(changedFiles)
+            }
           }
         }
     watcher.start()
+    if (onForceSwap != null) startForceSwapListener(rebuildLock, onForceSwap)
 
     try {
       while (true) {
@@ -432,6 +457,38 @@ internal class DevSession(
       cleanup()
       ui.clearPinnedFooter()
     }
+  }
+
+  /**
+   * Daemon thread reading stdin line-buffered (`s`⏎ — no raw mode, so Ctrl+C keeps working). EOF
+   * (closed stdin — piped/headless runs) ends the listener quietly. The thread is a daemon and
+   * blocks harmlessly on stdin across the session; it dies with the process.
+   */
+  private fun startForceSwapListener(rebuildLock: Any, onForceSwap: TerminalUI.() -> PhaseEnd) {
+    Thread(
+            {
+              try {
+                while (true) {
+                  val line = readlnOrNull() ?: break
+                  if (line.trim().equals("s", ignoreCase = true)) {
+                    synchronized(rebuildLock) {
+                      ui.phase {
+                        change("Manual full swap requested")
+                        onForceSwap()
+                      }
+                    }
+                  }
+                }
+              } catch (_: Exception) {
+                // Detached/unreadable stdin — the escape hatch just isn't available.
+              }
+            },
+            "instant-force-swap",
+        )
+        .apply {
+          isDaemon = true
+          start()
+        }
   }
 
   /**

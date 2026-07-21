@@ -2,8 +2,11 @@ package dev.paperplane.cli.server
 
 import com.charleskorn.kaml.YamlMap
 import dev.paperplane.cli.config.ServerConfig
+import dev.paperplane.cli.devserver.InstantSwapRequest
+import dev.paperplane.cli.devserver.InstantWaitResult
 import dev.paperplane.cli.devserver.LoadRequest
 import dev.paperplane.cli.devserver.LoadWaitResult
+import dev.paperplane.cli.devserver.instant.RedefineCapability
 import dev.paperplane.cli.ipc.CompanionClient
 import dev.paperplane.cli.ipc.CompanionSocketFile
 import dev.paperplane.cli.ipc.CompanionWire
@@ -526,4 +529,23 @@ open class PaperServerManager(
   internal open fun awaitLoadReport(expectedRequestId: String, timeoutMs: Long): LoadWaitResult =
       companion?.awaitReport(expectedRequestId, timeoutMs, isAlive = ::isRunning)
           ?: LoadWaitResult.ServerExited
+
+  /**
+   * The live server JVM's redefine capability from the companion's welcome handshake.
+   * [RedefineCapability.NONE] when no connection is up — an unreachable server can't be patched.
+   */
+  internal open fun redefineCapability(): RedefineCapability =
+      companion?.takeIf { it.isConnected }?.capability ?: RedefineCapability.NONE
+
+  /** Sends an [InstantSwapRequest], best-effort like [sendLoadRequest]. */
+  internal open fun sendInstantSwap(request: InstantSwapRequest): Boolean =
+      companion?.sendInstantSwap(request) ?: false
+
+  /** Waits for the instant report answering [expectedRequestId]; see [awaitLoadReport]. */
+  internal open fun awaitInstantReport(
+      expectedRequestId: String,
+      timeoutMs: Long,
+  ): InstantWaitResult =
+      companion?.awaitInstantReport(expectedRequestId, timeoutMs, isAlive = ::isRunning)
+          ?: InstantWaitResult.ServerExited
 }

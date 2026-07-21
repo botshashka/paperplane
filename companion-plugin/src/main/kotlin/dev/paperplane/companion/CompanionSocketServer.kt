@@ -27,6 +27,9 @@ interface CompanionIpc {
   /** Terminal answer to a `load` request. */
   fun sendReport(report: HostLoadReport)
 
+  /** Terminal answer to an `instantSwap` request. */
+  fun sendInstantReport(report: HostInstantSwapReport)
+
   /** The world save requested by a `saving` status finished. */
   fun sendSaveComplete()
 
@@ -57,10 +60,16 @@ class CompanionSocketServer(
     private val logger: Logger,
     private val onStatus: (StatusUpdate) -> Unit,
     private val onLoadRequest: (HostLoadRequest) -> Unit,
+    private val onInstantSwap: (HostInstantSwapRequest) -> Unit = {},
+    /**
+     * The JVM's redefine capabilities, stamped into every welcome so the CLI knows the instant
+     * tier's ceiling for this server. Detected once — capability is a process property.
+     */
+    private val capabilities: RedefineCapabilities.Capability = RedefineCapabilities.detect(),
 ) : CompanionIpc, AutoCloseable {
   companion object {
     /** Mirror of the CLI's `CompanionSocketFile.PROTOCOL_VERSION`. */
-    const val PROTOCOL_VERSION = 3
+    const val PROTOCOL_VERSION = 4
 
     // Wire message `type` discriminators. Mirror of the CLI's CompanionWire tags; the modules share
     // no code, so a tag introduced on one side must be added on the other.
@@ -69,7 +78,9 @@ class CompanionSocketServer(
     private const val TYPE_READY = "ready"
     private const val TYPE_STATUS = "status"
     private const val TYPE_LOAD = "load"
+    private const val TYPE_INSTANT_SWAP = "instantSwap"
     private const val TYPE_REPORT = "report"
+    private const val TYPE_INSTANT_REPORT = "instantReport"
     private const val TYPE_SAVE_COMPLETE = "saveComplete"
     private const val TYPE_LOAD_PROGRESS = "loadProgress"
 
@@ -143,6 +154,16 @@ class CompanionSocketServer(
     )
   }
 
+  override fun sendInstantReport(report: HostInstantSwapReport) {
+    sendLine(
+        gson
+            .toJsonTree(report)
+            .asJsonObject
+            .apply { addProperty("type", TYPE_INSTANT_REPORT) }
+            .toString()
+    )
+  }
+
   override fun sendSaveComplete() {
     sendLine(JsonObject().apply { addProperty("type", TYPE_SAVE_COMPLETE) }.toString())
   }
@@ -210,6 +231,13 @@ class CompanionSocketServer(
             addProperty("type", TYPE_WELCOME)
             addProperty("protocolVersion", PROTOCOL_VERSION)
             addProperty("serverReady", serverReady)
+            add(
+                "capabilities",
+                JsonObject().apply {
+                  addProperty("agent", capabilities.agent)
+                  addProperty("enhanced", capabilities.enhanced)
+                },
+            )
           }
       writer.write(welcome.toString())
       writer.write("\n")
@@ -298,6 +326,12 @@ class CompanionSocketServer(
             onLoadRequest(gson.fromJson(obj, HostLoadRequest::class.java))
           } catch (e: JsonParseException) {
             logger.warning("Invalid load request: ${e.message}")
+          }
+      TYPE_INSTANT_SWAP ->
+          try {
+            onInstantSwap(gson.fromJson(obj, HostInstantSwapRequest::class.java))
+          } catch (e: JsonParseException) {
+            logger.warning("Invalid instant swap request: ${e.message}")
           }
       else -> logger.fine("Unknown companion socket message type: $type")
     }

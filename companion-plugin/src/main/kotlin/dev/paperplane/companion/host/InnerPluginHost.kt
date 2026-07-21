@@ -817,7 +817,6 @@ data class HostLoadRequest(
     val classesDirs: List<String> = emptyList(),
     val resourcesDir: String = "",
     val runtimeClasspath: List<String> = emptyList(),
-    val changedClasses: List<String> = emptyList(),
     val leakDiagnostics: String = "summary",
 )
 
@@ -851,8 +850,6 @@ enum class HostLoadStatus {
  * wire.
  */
 enum class HostReloadStrategy {
-  /** In-place class redefinition via Instrumentation; no host reload. */
-  @SerializedName("hotswap") HOTSWAP,
   /** First load of the plugin in this server run. */
   @SerializedName("fresh") FRESH,
   /** Full unload + reload of an already-loaded plugin. */

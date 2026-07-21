@@ -35,6 +35,7 @@ class ChangeClassifier {
     val escalations = mutableListOf<Escalation>()
     val patches = mutableListOf<ClassPatch>()
     val newClasses = mutableListOf<ClassPatch>()
+    val additiveNotes = mutableListOf<String>()
     var requirement = RedefineRequirement.NONE
 
     fun raise(level: RedefineRequirement) {
@@ -61,6 +62,7 @@ class ChangeClassifier {
       val oldBytes = baseline.classes[fqcn]
       if (oldBytes == null) {
         newClasses += ClassPatch(fqcn, 0L, newBytes)
+        additiveNotes += "new class ${simple(fqcn)}"
         raise(RedefineRequirement.ADDITIVE)
         continue
       }
@@ -68,6 +70,7 @@ class ChangeClassifier {
 
       val verdict = analyzeClass(fqcn, oldBytes, newBytes, mainClass)
       escalations += verdict.escalations
+      additiveNotes += verdict.additiveNotes
       raise(verdict.level)
       if (
           verdict.level == RedefineRequirement.BODY_ONLY ||
@@ -84,12 +87,17 @@ class ChangeClassifier {
         patches = if (unsafe) emptyList() else patches,
         newClasses = if (unsafe) emptyList() else newClasses,
         escalations = escalations,
+        additiveNotes = additiveNotes,
     )
   }
 
   // ── Per-class analysis ──────────────────────────────────────────────
 
-  private class ClassVerdict(val level: RedefineRequirement, val escalations: List<Escalation>)
+  private class ClassVerdict(
+      val level: RedefineRequirement,
+      val escalations: List<Escalation>,
+      val additiveNotes: List<String> = emptyList(),
+  )
 
   private fun analyzeClass(
       fqcn: String,
@@ -110,6 +118,7 @@ class ChangeClassifier {
     }
 
     val escalations = mutableListOf<Escalation>()
+    val additiveNotes = mutableListOf<String>()
     var level = RedefineRequirement.NONE
     fun raise(l: RedefineRequirement) {
       if (l > level) level = l
@@ -141,16 +150,17 @@ class ChangeClassifier {
     }
 
     compareFields(oldNode, newNode, name, escalations, ::raise)
-    compareMethods(oldNode, newNode, fqcn, name, mainClass, escalations, ::raise)
+    compareMethods(oldNode, newNode, fqcn, name, mainClass, escalations, additiveNotes, ::raise)
 
     // Adding a nested/anonymous class rewrites the outer class's InnerClasses/NestMembers
     // attributes; the stock JVM rejects redefinition on a nest-attribute change, so this needs
     // the ADDITIVE tier even when every retained body is untouched.
     if (nestFingerprint(oldNode) != nestFingerprint(newNode)) {
+      additiveNotes += "nested-class change on $name"
       raise(RedefineRequirement.ADDITIVE)
     }
 
-    return ClassVerdict(level, escalations)
+    return ClassVerdict(level, escalations, additiveNotes)
   }
 
   private fun compareFields(
@@ -184,6 +194,7 @@ class ChangeClassifier {
       name: String,
       mainClass: String,
       escalations: MutableList<Escalation>,
+      additiveNotes: MutableList<String>,
       raise: (RedefineRequirement) -> Unit,
   ) {
     val oldMethods = oldNode.methods.associateBy { it.name + it.desc }
@@ -204,6 +215,7 @@ class ChangeClassifier {
                 )
             raise(RedefineRequirement.UNSAFE)
           } else {
+            additiveNotes += "method ${m.name} added on $name"
             raise(RedefineRequirement.ADDITIVE)
           }
         }
@@ -216,6 +228,7 @@ class ChangeClassifier {
                 )
             raise(RedefineRequirement.UNSAFE)
           } else {
+            additiveNotes += "method ${old.name} removed on $name"
             raise(RedefineRequirement.ADDITIVE)
           }
         }

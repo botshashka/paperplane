@@ -59,7 +59,6 @@ class CompanionWireTest {
             classesDirs = listOf("/c"),
             resourcesDir = "/r",
             runtimeClasspath = listOf("/lib.jar"),
-            changedClasses = listOf("com.example.Foo"),
             leakDiagnostics = "full",
         )
 
@@ -72,8 +71,90 @@ class CompanionWireTest {
     assertEquals("/c", obj.getAsJsonArray("classesDirs").single().asString)
     assertEquals("/r", obj.get("resourcesDir").asString)
     assertEquals("/lib.jar", obj.getAsJsonArray("runtimeClasspath").single().asString)
-    assertEquals("com.example.Foo", obj.getAsJsonArray("changedClasses").single().asString)
     assertEquals("full", obj.get("leakDiagnostics").asString)
+  }
+
+  @Test
+  fun `encodeInstantSwap flattens the request beside the type tag`() {
+    val request =
+        dev.paperplane.cli.devserver.InstantSwapRequest(
+            requestId = "i1",
+            pluginName = "Sample",
+            classes =
+                listOf(
+                    dev.paperplane.cli.devserver.InstantClassEntry(
+                        fqcn = "com.example.Foo",
+                        expectedCrc32 = 42L,
+                        data = "QUJD",
+                    )
+                ),
+            newClasses =
+                listOf(
+                    dev.paperplane.cli.devserver.InstantClassEntry(
+                        fqcn = "com.example.New",
+                        data = "REVG",
+                    )
+                ),
+        )
+
+    val obj = parse(CompanionWire.encodeInstantSwap(request))
+
+    assertEquals("instantSwap", obj.get("type").asString)
+    assertEquals("i1", obj.get("requestId").asString)
+    assertEquals("Sample", obj.get("pluginName").asString)
+    val entry = obj.getAsJsonArray("classes").single().asJsonObject
+    assertEquals("com.example.Foo", entry.get("fqcn").asString)
+    assertEquals(42L, entry.get("expectedCrc32").asLong)
+    assertEquals("QUJD", entry.get("data").asString)
+    val newEntry = obj.getAsJsonArray("newClasses").single().asJsonObject
+    assertEquals("com.example.New", newEntry.get("fqcn").asString)
+    assertEquals(0L, newEntry.get("expectedCrc32").asLong)
+  }
+
+  @Test
+  fun `decodes an instantReport into the typed event`() {
+    val event =
+        CompanionWire.decode(
+            """{"type":"instantReport","requestId":"i1","status":"ok","patched":2,""" +
+                """"defined":1,"durationMs":12}"""
+        )
+
+    val report = (event as CompanionEvent.InstantReport).report
+    assertEquals("i1", report.requestId)
+    assertEquals(dev.paperplane.cli.devserver.InstantSwapStatus.OK, report.status)
+    assertEquals(2, report.patched)
+    assertEquals(1, report.defined)
+    assertEquals(12L, report.durationMs)
+  }
+
+  @Test
+  fun `decodes a refused instantReport with its reason`() {
+    val event =
+        CompanionWire.decode(
+            """{"type":"instantReport","requestId":"i2","status":"refused",""" +
+                """"reason":"baseline drift on com.example.Foo"}"""
+        )
+
+    val report = (event as CompanionEvent.InstantReport).report
+    assertEquals(dev.paperplane.cli.devserver.InstantSwapStatus.REFUSED, report.status)
+    assertEquals("baseline drift on com.example.Foo", report.reason)
+  }
+
+  @Test
+  fun `decodes welcome capabilities and defaults them to false when absent`() {
+    val with =
+        CompanionWire.decode(
+            """{"type":"welcome","protocolVersion":4,"serverReady":true,""" +
+                """"capabilities":{"agent":true,"enhanced":true}}"""
+        ) as CompanionEvent.Welcome
+    assertEquals(true, with.agent)
+    assertEquals(true, with.enhanced)
+
+    val without =
+        CompanionWire.decode("""{"type":"welcome","protocolVersion":4,"serverReady":false}""")
+            as CompanionEvent.Welcome
+    assertEquals(false, without.agent)
+    assertEquals(false, without.enhanced)
   }
 
   @Test

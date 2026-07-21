@@ -11,9 +11,11 @@ import java.io.OutputStreamWriter
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.Base64
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.logging.Logger
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -49,11 +51,13 @@ class ProtocolLogReplayTest {
   fun `the companion parses and dispatches a real CLI session verbatim`() {
     val statuses = CopyOnWriteArrayList<StatusUpdate>()
     val loads = CopyOnWriteArrayList<HostLoadRequest>()
+    val instantSwaps = CopyOnWriteArrayList<HostInstantSwapRequest>()
     val server =
         CompanionSocketServer(
             Logger.getLogger("replay"),
             onStatus = { statuses += it },
             onLoadRequest = { loads += it },
+            onInstantSwap = { instantSwaps += it },
         )
     try {
       server.start(serverRoot)
@@ -83,6 +87,7 @@ class ProtocolLogReplayTest {
         writer.flush()
         val welcome = gson.fromJson(reader.readLine(), JsonObject::class.java)
         assertEquals("welcome", welcome.get("type").asString)
+        assertTrue(welcome.has("capabilities"), "v4 welcomes advertise redefine capabilities")
 
         // Everything after the hello, byte-for-byte as the real CLI sent it.
         for (line in sends.drop(1)) {
@@ -92,33 +97,45 @@ class ProtocolLogReplayTest {
         writer.flush()
 
         val deadline = System.currentTimeMillis() + 5_000
-        while ((statuses.size < 5 || loads.size < 3) && System.currentTimeMillis() < deadline) {
+        while (
+            (statuses.size < 11 || loads.size < 3 || instantSwaps.size < 2) &&
+                System.currentTimeMillis() < deadline
+        ) {
           Thread.sleep(10)
         }
       }
 
-      // The session's CLI-side arc: post-load ready, then building→ready per rebuild.
+      // The session's CLI-side arc: post-load ready, then building→ready per rebuild (reload,
+      // instant patch, reload, instant patch, no-change).
       assertEquals(
-          listOf("ready", "building", "ready", "building", "ready"),
+          listOf(
+              "ready", "building", "ready", "building", "ready", "building", "ready", "building",
+              "ready", "building", "ready",
+          ),
           statuses.map { it.state },
       )
-      assertEquals("14.6s", statuses.first().duration, "the real ready status carried a duration")
+      assertNotNull(statuses.first().duration, "the real ready status carried a duration")
 
-      // Three load requests: initial (no changed classes) then two edits carrying the diff.
+      // Three load requests: the initial fresh load and the two structural edits' full reloads.
       assertEquals(3, loads.size)
-      assertTrue(loads.all { it.pluginName == "Smoketest" })
+      assertTrue(loads.all { it.pluginName == "smoketest" })
       assertTrue(loads.all { it.requestId.isNotEmpty() })
       assertTrue(loads.all { it.jarPath.endsWith("smoketest-1.0.0.jar") })
       assertTrue(loads.all { it.classesDirs.isNotEmpty() })
       assertTrue(loads.all { it.leakDiagnostics == "summary" })
-      assertEquals(
-          listOf(
-              emptyList(),
-              listOf("me.dev.smoketest.Smoketest"),
-              listOf("me.dev.smoketest.Smoketest"),
-          ),
-          loads.map { it.changedClasses },
-      )
+
+      // Two instant patches: the body edits, carrying decodable class bytes and expected CRCs.
+      assertEquals(2, instantSwaps.size)
+      for (swap in instantSwaps) {
+        assertEquals("smoketest", swap.pluginName)
+        assertTrue(swap.requestId.isNotEmpty())
+        assertTrue(swap.classes.isNotEmpty())
+        for (entry in swap.classes) {
+          assertTrue(entry.fqcn.isNotEmpty())
+          assertTrue(entry.expectedCrc32 != 0L)
+          assertTrue(Base64.getDecoder().decode(entry.data).isNotEmpty())
+        }
+      }
     } finally {
       server.close()
     }

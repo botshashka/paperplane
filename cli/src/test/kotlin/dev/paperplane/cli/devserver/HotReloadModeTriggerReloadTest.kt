@@ -1,6 +1,5 @@
 package dev.paperplane.cli.devserver
 
-import dev.paperplane.cli.gradle.ClassChanges
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.testing.DevSessionFixture
 import dev.paperplane.cli.testing.FakePaperServerManager
@@ -33,8 +32,6 @@ class HotReloadModeTriggerReloadTest {
           version = "1.0.0",
       )
 
-  private val noChanges = ClassChanges(emptyList(), emptyList(), emptyList())
-
   private fun fixtureAndMode(): Pair<DevSessionFixture, HotReloadMode> {
     val fixture = DevSessionFixture(tempDir)
     val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
@@ -61,7 +58,7 @@ class HotReloadModeTriggerReloadTest {
     createBuiltJar()
     mode.cachedFastMeta = null // JAR fallback: the staged jar is the only thing the host loads.
 
-    mode.triggerReload(metadata, noChanges)
+    mode.triggerReload(metadata)
 
     assertTrue(fixture.gradle.calls.contains("build"), "JAR mode must regenerate the jar")
   }
@@ -72,7 +69,7 @@ class HotReloadModeTriggerReloadTest {
     createBuiltJar()
     mode.cachedFastMeta = dirModeMeta()
 
-    mode.triggerReload(metadata, noChanges)
+    mode.triggerReload(metadata)
 
     assertFalse(
         fixture.gradle.calls.contains("build"),
@@ -86,7 +83,7 @@ class HotReloadModeTriggerReloadTest {
     // No built jar on disk this time.
     mode.cachedFastMeta = dirModeMeta()
 
-    mode.triggerReload(metadata, noChanges)
+    mode.triggerReload(metadata)
 
     assertTrue(
         fixture.gradle.calls.contains("build"),

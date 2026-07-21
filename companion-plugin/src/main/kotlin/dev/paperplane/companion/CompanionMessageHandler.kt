@@ -46,7 +46,7 @@ class CompanionMessageHandler(
     private const val STATE_ERROR = "error"
   }
 
-  private var hotSwapper: HotSwapper? = null
+  private var instantSwapper: InstantSwapper? = null
   private var agentWarningLogged = false
 
   // Lazily built by [resolveHost] on the first load request. Null until then (native modes never
@@ -159,7 +159,7 @@ class CompanionMessageHandler(
 
     if (!agentWarningLogged && AgentAccess.instrumentation() == null) {
       plugin.logger.warning(
-          "PaperPlane agent not loaded — hot-swap tier and NMS detection disabled; " +
+          "PaperPlane agent not loaded — instant tier and NMS detection disabled; " +
               "full reloads still work."
       )
     }
@@ -170,32 +170,6 @@ class CompanionMessageHandler(
     // Captured before dispatch so the report's strategy reflects whether this was the first load
     // (fresh) or a reload of an already-loaded plugin.
     val wasLoaded = host.isLoaded()
-
-    // Try in-place class redefinition first if HotSwapper is available and the change is
-    // method-body-only. Skips the full host reload entirely.
-    if (
-        hotSwapEligible(
-            wasLoaded,
-            host.leakLimitReached,
-            request.changedClasses,
-            request.classesDirs,
-        )
-    ) {
-      if (tryHotSwap(host, request)) {
-        ipc.sendReport(
-            HostLoadReport(
-                requestId = request.requestId,
-                status = HostLoadStatus.OK,
-                strategy = HostReloadStrategy.HOTSWAP,
-                durationMs = 0,
-                pluginName = request.pluginName,
-            )
-        )
-        broadcast(Component.text("${request.pluginName} hot-swapped!", NamedTextColor.GREEN))
-        return
-      }
-    }
-
     val strategy = if (wasLoaded) HostReloadStrategy.RELOAD else HostReloadStrategy.FRESH
     val result = host.handleRequest(request)
     ipc.sendReport(reportFor(request, strategy, result))
@@ -222,21 +196,70 @@ class CompanionMessageHandler(
     }
   }
 
+  // ── Instant swaps (`instantSwap` messages) ─────────────────────────
+
   /**
-   * Hot-swap fast-path eligibility. A method-body-only edit (changed classes, no structural change)
-   * on an already-loaded plugin can be redefined in place, skipping the full host reload — but only
-   * while the host hasn't tripped its leak limit. Once it has, the fast path would report Ok with
-   * no `action`, deferring the leak-restart indefinitely (the CLI may have missed the tripping Ok);
-   * falling through to the full reload lets the host's refusal carry the restart action. Pure so it
-   * can be unit-tested without instrumentation, which [tryHotSwap] requires.
+   * Applies an instant patch (in-place class redefinition) to the live plugin and answers with an
+   * `instantReport`. Refusals are cheap and honest — the CLI falls through to the active mode's
+   * full swap path with the reason surfaced.
+   *
+   * The leak-limit refusal keeps the leak-restart signal flowing: past the limit, patches would
+   * report Ok with no `action`, deferring the restart indefinitely (the CLI may have missed the
+   * tripping Ok); refusing routes the next change through the full reload, whose report carries
+   * [HostLoadReport.ACTION_RESTART].
    */
-  internal fun hotSwapEligible(
-      wasLoaded: Boolean,
-      leakLimitReached: Boolean,
-      changedClasses: List<String>,
-      classesDirs: List<String>,
-  ): Boolean =
-      wasLoaded && !leakLimitReached && changedClasses.isNotEmpty() && classesDirs.isNotEmpty()
+  fun handleInstantSwap(request: HostInstantSwapRequest) {
+    val start = System.currentTimeMillis()
+
+    fun answer(status: HostInstantSwapStatus, patched: Int = 0, defined: Int = 0, reason: String? = null) {
+      ipc.sendInstantReport(
+          HostInstantSwapReport(
+              requestId = request.requestId,
+              status = status,
+              patched = patched,
+              defined = defined,
+              reason = reason,
+              durationMs = System.currentTimeMillis() - start,
+          )
+      )
+    }
+
+    if (host?.leakLimitReached == true) {
+      answer(
+          HostInstantSwapStatus.REFUSED,
+          reason = "leak limit reached — a full reload must carry the restart signal",
+      )
+      return
+    }
+    val classLoader = resolveInstantLoader(request.pluginName)
+    if (classLoader == null) {
+      answer(HostInstantSwapStatus.REFUSED, reason = "plugin ${request.pluginName} is not loaded")
+      return
+    }
+    val swapper =
+        instantSwapper
+            ?: InstantSwapper(plugin.logger, File(serverRoot, ".paperplane/instant-overlay"))
+                .also { instantSwapper = it }
+
+    when (val outcome = swapper.apply(request, classLoader)) {
+      is InstantSwapper.Outcome.Applied -> {
+        answer(HostInstantSwapStatus.OK, patched = outcome.patched, defined = outcome.defined)
+        broadcast(Component.text("${request.pluginName} patched!", NamedTextColor.GREEN))
+      }
+      is InstantSwapper.Outcome.Refused ->
+          answer(HostInstantSwapStatus.REFUSED, reason = outcome.reason)
+      is InstantSwapper.Outcome.Failed ->
+          answer(HostInstantSwapStatus.FAILED, reason = outcome.reason)
+    }
+  }
+
+  /**
+   * The live plugin's classloader: the host's inner plugin in hot-reload mode, or the natively
+   * loaded plugin (Paper's own `PluginClassLoader`) in restart/blue-green.
+   */
+  private fun resolveInstantLoader(pluginName: String): ClassLoader? =
+      host?.current()?.javaClass?.classLoader
+          ?: plugin.server.pluginManager.getPlugin(pluginName)?.javaClass?.classLoader
 
   /**
    * Schedules the deferred leak dumps — but only in [LeakDiagnosticsMode.FULL] and only when the
@@ -288,21 +311,6 @@ class CompanionMessageHandler(
                 action = result.action,
             )
       }
-
-  private fun tryHotSwap(host: InnerPluginHost, request: HostLoadRequest): Boolean {
-    val inner = host.current() ?: return false
-    if (hotSwapper == null) hotSwapper = HotSwapper(plugin.logger)
-    if (!hotSwapper!!.isAvailable()) return false
-    val classLoader = inner.javaClass.classLoader
-    val result = hotSwapper!!.redefine(request.changedClasses, classLoader, request.classesDirs)
-    return when (result) {
-      HotSwapResult.SUCCESS -> true
-      else -> {
-        plugin.logger.fine("Hot-swap returned $result — falling back to full host reload")
-        false
-      }
-    }
-  }
 
   // ── Helpers ────────────────────────────────────────────────────────
 

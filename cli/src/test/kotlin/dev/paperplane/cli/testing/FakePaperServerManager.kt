@@ -113,4 +113,42 @@ class FakePaperServerManager(
     sentLoadRequests += request
     return true
   }
+
+  /** Scripted redefine capability the fake's "server" advertises. */
+  var capability: dev.paperplane.cli.devserver.instant.RedefineCapability =
+      dev.paperplane.cli.devserver.instant.RedefineCapability.BODY_ONLY
+
+  /** Scripted answer for [awaitInstantReport]; echoes the awaited requestId when OK. */
+  internal var instantWaitResult: (String) -> dev.paperplane.cli.devserver.InstantWaitResult = { id ->
+    dev.paperplane.cli.devserver.InstantWaitResult.Answered(
+        dev.paperplane.cli.devserver.InstantSwapReport(
+            requestId = id,
+            status = dev.paperplane.cli.devserver.InstantSwapStatus.OK,
+            patched = 1,
+        )
+    )
+  }
+
+  /** Every [dev.paperplane.cli.devserver.InstantSwapRequest] handed to [sendInstantSwap]. */
+  internal val sentInstantSwaps: MutableList<dev.paperplane.cli.devserver.InstantSwapRequest> =
+      mutableListOf()
+
+  override fun redefineCapability(): dev.paperplane.cli.devserver.instant.RedefineCapability {
+    calls += "redefineCapability"
+    return capability
+  }
+
+  override fun sendInstantSwap(request: dev.paperplane.cli.devserver.InstantSwapRequest): Boolean {
+    calls += "sendInstantSwap(${request.pluginName})"
+    sentInstantSwaps += request
+    return true
+  }
+
+  override fun awaitInstantReport(
+      expectedRequestId: String,
+      timeoutMs: Long,
+  ): dev.paperplane.cli.devserver.InstantWaitResult {
+    calls += "awaitInstantReport"
+    return instantWaitResult(expectedRequestId)
+  }
 }

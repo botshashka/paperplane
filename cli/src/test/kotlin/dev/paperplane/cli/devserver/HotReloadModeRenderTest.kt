@@ -509,11 +509,11 @@ class HotReloadModeRenderTest {
         "the awaiting-fix rebuild must skip waitAndReport; got: ${fixture.terminal.writes}",
     )
     assertTrue(fixture.terminal.writes.any { it.contains("Plugin loaded") })
-    // The diff baseline must still be refreshed even though the reload path was skipped —
-    // otherwise the first reload after recovery diffs against the pre-failure build.
-    assertNotNull(
-        mode.lastPostBuildSnapshot,
-        "the awaiting-fix rebuild must record the post-build snapshot",
+    // The instant baseline must be reseeded by the confirmed cold-start — otherwise the first
+    // lane attempt after recovery would diff against the pre-failure build.
+    assertTrue(
+        mode.baseline.seeded,
+        "the awaiting-fix cold-start must reseed the instant baseline",
     )
   }
 
