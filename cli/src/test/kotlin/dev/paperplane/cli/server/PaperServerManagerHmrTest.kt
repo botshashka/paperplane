@@ -1,11 +1,8 @@
 package dev.paperplane.cli.server
 
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import dev.paperplane.cli.ui.RecordingTerminal
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
-import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -21,96 +18,6 @@ class PaperServerManagerHmrTest {
     val cacheDir = File(tempDir, "cache")
     val downloader = PaperDownloader(cacheDir)
     return PaperServerManager(serverDir, downloader, ui, port = port)
-  }
-
-  private fun parseJson(json: String): Map<String, Any> {
-    val type = object : TypeToken<Map<String, Any>>() {}.type
-    return Gson().fromJson(json, type)
-  }
-
-  // ── writeCompanionStatus ──────────────────────────────────────────
-
-  @Test
-  fun `writeCompanionStatus with string values produces valid JSON`() {
-    val manager = createManager()
-    manager.serverDir.mkdirs()
-    manager.writeCompanionStatus("building")
-
-    val statusFile = File(manager.serverDir, ".paperplane/companion-status.json")
-    val parsed = parseJson(statusFile.readText())
-
-    assertEquals("building", parsed["state"])
-  }
-
-  @Test
-  fun `writeCompanionStatus with list values produces valid JSON array`() {
-    val manager = createManager()
-    manager.serverDir.mkdirs()
-    val dirs = listOf("/tmp/classes/kotlin/main", "/tmp/resources")
-    manager.writeCompanionStatus("reloading", mapOf("buildOutputDirs" to dirs))
-
-    val statusFile = File(manager.serverDir, ".paperplane/companion-status.json")
-    val parsed = parseJson(statusFile.readText())
-
-    @Suppress("UNCHECKED_CAST") val outputDirs = parsed["buildOutputDirs"] as List<String>
-    assertEquals(2, outputDirs.size)
-    assertEquals("/tmp/classes/kotlin/main", outputDirs[0])
-    assertEquals("/tmp/resources", outputDirs[1])
-  }
-
-  @Test
-  fun `writeCompanionStatus includes protocolVersion 2`() {
-    val manager = createManager()
-    manager.serverDir.mkdirs()
-    manager.writeCompanionStatus("ready")
-
-    val statusFile = File(manager.serverDir, ".paperplane/companion-status.json")
-    val parsed = parseJson(statusFile.readText())
-
-    // Gson deserializes numbers as Double by default
-    assertEquals(2.0, parsed["protocolVersion"])
-  }
-
-  @Test
-  fun `writeCompanionStatus with empty extra map has only state and protocolVersion`() {
-    val manager = createManager()
-    manager.serverDir.mkdirs()
-    manager.writeCompanionStatus("idle", emptyMap())
-
-    val statusFile = File(manager.serverDir, ".paperplane/companion-status.json")
-    val parsed = parseJson(statusFile.readText())
-
-    assertEquals(2, parsed.size, "Should contain only state and protocolVersion, got: $parsed")
-    assertEquals("idle", parsed["state"])
-    assertNotNull(parsed["protocolVersion"])
-  }
-
-  @Test
-  fun `atomic write leaves no temp file after completion`() {
-    val manager = createManager()
-    manager.serverDir.mkdirs()
-    manager.writeCompanionStatus("building")
-
-    val ppDir = File(manager.serverDir, ".paperplane")
-    val tempFiles = ppDir.listFiles()?.filter { it.name.endsWith(".tmp") } ?: emptyList()
-    assertTrue(
-        tempFiles.isEmpty(),
-        "No .tmp files should remain, found: ${tempFiles.map { it.name }}",
-    )
-  }
-
-  @Test
-  fun `writeCompanionStatus overwrites previous status`() {
-    val manager = createManager()
-    manager.serverDir.mkdirs()
-    manager.writeCompanionStatus("building")
-    manager.writeCompanionStatus("ready", mapOf("duration" to "1.5s"))
-
-    val statusFile = File(manager.serverDir, ".paperplane/companion-status.json")
-    val parsed = parseJson(statusFile.readText())
-
-    assertEquals("ready", parsed["state"])
-    assertEquals("1.5s", parsed["duration"])
   }
 
   // ── extractAgent ──────────────────────────────────────────────────

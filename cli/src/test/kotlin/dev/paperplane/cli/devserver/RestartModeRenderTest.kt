@@ -180,7 +180,7 @@ class RestartModeRenderTest {
   // ── native deploy: jar into plugins/, no LoadRequest ───────────────
   // Restart is a "compatible with everything" mode: it drops the jar into plugins/ and lets Paper
   // load it natively. There is no companion host to send a LoadRequest to, so — unlike hot-reload —
-  // startServerAndReport never stages, never writes load-request.json, and never awaits a load
+  // startServerAndReport never stages, never sends a LoadRequest, and never awaits a load
   // result (so it can never return LoadFailed for restart).
 
   @Test
@@ -204,9 +204,9 @@ class RestartModeRenderTest {
         server.calls.contains("copyCompanion(depend=0,softdepend=0)"),
         "native deploy must not rewrite the companion's depends; calls were ${server.calls}",
     )
-    assertFalse(
-        File(server.serverDir, ".paperplane/load-request.json").exists(),
-        "native modes must not write a load-request.json",
+    assertTrue(
+        server.sentLoadRequests.isEmpty(),
+        "native modes must not send a LoadRequest",
     )
   }
 

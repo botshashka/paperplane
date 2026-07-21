@@ -4,6 +4,7 @@ import dev.paperplane.cli.devserver.DevSession.RunningState
 import dev.paperplane.cli.devserver.DevSession.StartupOutcome
 import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.gradle.ProjectMetadata
+import dev.paperplane.cli.ipc.CompanionWire
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.server.ServerSync
 import dev.paperplane.cli.server.VelocityDownloader
@@ -22,6 +23,7 @@ internal open class BlueGreenMode(
                     session.downloader,
                     session.ui,
                     Slot.SERVER.port,
+                    protocolLog = session.config.dev.protocolLog,
                 ),
             Slot.SWAP to
                 PaperServerManager(
@@ -29,6 +31,7 @@ internal open class BlueGreenMode(
                     session.downloader,
                     session.ui,
                     Slot.SWAP.port,
+                    protocolLog = session.config.dev.protocolLog,
                 ),
         ),
     private val velocityDownloader: VelocityDownloader =
@@ -296,12 +299,13 @@ internal open class BlueGreenMode(
     preWarmThread?.join()
     preWarmThread = null
 
-    active.writeCompanionStatus("saving")
-    session.ui.spin("Saving world...") { active.waitForSave() }
+    // saveWorld sends the `saving` status (which also opens the companion's save-protection
+    // window) and awaits the saveComplete event.
+    session.ui.spin("Saving world...") { active.saveWorld() }
 
     if (standby.isRunning()) standby.stop()
 
-    active.writeCompanionStatus("building")
+    active.sendCompanionStatus(CompanionWire.STATE_BUILDING)
     val buildStart = System.currentTimeMillis()
 
     val syncThread =
@@ -317,7 +321,7 @@ internal open class BlueGreenMode(
 
     if (!buildSuccess) {
       session.ui.error("Build failed", buildDuration)
-      active.writeCompanionStatus("error", mapOf("message" to "Build failed"))
+      active.sendCompanionStatus(CompanionWire.STATE_ERROR, message = "Build failed")
       return false
     }
     session.ui.success("Build succeeded", buildDuration)
@@ -352,7 +356,7 @@ internal open class BlueGreenMode(
     if (!ready) {
       session.ui.error("Standby server failed to start", serverDuration)
       standby.stop()
-      active.writeCompanionStatus("error", mapOf("message" to "Standby failed to start"))
+      active.sendCompanionStatus(CompanionWire.STATE_ERROR, message = "Standby failed to start")
       return false
     }
 
@@ -362,7 +366,7 @@ internal open class BlueGreenMode(
     Thread.sleep(TRANSFER_SETTLE_DELAY_MS)
 
     val totalDuration = session.formatDuration(System.currentTimeMillis() - totalStart)
-    standby.writeCompanionStatus("ready", mapOf("duration" to totalDuration))
+    standby.sendCompanionStatus(CompanionWire.STATE_READY, duration = totalDuration)
 
     session.ui.success("Server ready (${standbySlot.serverName})", serverDuration)
     session.ui.totalTime(totalDuration)
@@ -424,7 +428,7 @@ internal open class BlueGreenMode(
     val serverDuration = session.formatDuration(System.currentTimeMillis() - serverStart)
     return if (ready) {
       session.ui.success("Server ready", serverDuration)
-      blue.writeCompanionStatus("ready", mapOf("duration" to serverDuration))
+      blue.sendCompanionStatus(CompanionWire.STATE_READY, duration = serverDuration)
       velocityManager.writeActiveServer("server")
       RunningState(metadata, paperJar)
     } else {

@@ -1,7 +1,7 @@
 package dev.paperplane.cli.testing
 
-import dev.paperplane.cli.config.DevConfig
 import dev.paperplane.cli.config.ServerConfig
+import dev.paperplane.cli.devserver.LoadRequest
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.TerminalUI
@@ -9,9 +9,10 @@ import java.io.File
 
 /**
  * Test fake [PaperServerManager] that records every invocation and never spawns a real Paper
- * process. The fake's [start] synchronously emits the configured [simulatedLogs] via
- * [ui]`.serverLog(...)` so dev-server tests can verify how log lines interleave above the pinned
- * footer. [waitForReady] returns [readyResult]; [isRunning] returns [runningResult].
+ * process (or dials a real companion socket). The fake's [start] synchronously emits the configured
+ * [simulatedLogs] via [ui]`.serverLog(...)` so dev-server tests can verify how log lines interleave
+ * above the pinned footer. [waitForReady] returns [readyResult]; [isRunning] returns
+ * [runningResult]. Load requests are captured in [sentLoadRequests].
  *
  * Override the public state by reassigning the fields between phases of a multi-step test.
  */
@@ -28,16 +29,15 @@ class FakePaperServerManager(
   /** Ordered log of every method call for assertions. */
   val calls: MutableList<String> = mutableListOf()
 
+  /** Every [LoadRequest] handed to [sendLoadRequest], in order. */
+  val sentLoadRequests: MutableList<LoadRequest> = mutableListOf()
+
   override fun cleanupStale() {
     calls += "cleanupStale"
   }
 
   override fun configure(serverConfig: ServerConfig) {
     calls += "configure"
-  }
-
-  override fun writeCompanionConfig(dev: DevConfig) {
-    calls += "writeCompanionConfig(${dev.leakDiagnostics.name.lowercase()})"
   }
 
   override fun configureVelocityForwarding(secret: String) {
@@ -87,8 +87,8 @@ class FakePaperServerManager(
     return readyResult
   }
 
-  override fun waitForSave(timeoutMs: Long): Boolean {
-    calls += "waitForSave"
+  override fun saveWorld(timeoutMs: Long): Boolean {
+    calls += "saveWorld"
     return true
   }
 
@@ -96,7 +96,13 @@ class FakePaperServerManager(
     calls += "sendCommand($command)"
   }
 
-  override fun writeCompanionStatus(state: String, extra: Map<String, Any>) {
-    calls += "writeCompanionStatus($state)"
+  override fun sendCompanionStatus(state: String, duration: String?, message: String?) {
+    calls += "sendCompanionStatus($state)"
+  }
+
+  override fun sendLoadRequest(request: LoadRequest): Boolean {
+    calls += "sendLoadRequest(${request.pluginName})"
+    sentLoadRequests += request
+    return true
   }
 }

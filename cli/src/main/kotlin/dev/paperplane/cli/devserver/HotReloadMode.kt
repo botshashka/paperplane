@@ -6,6 +6,7 @@ import dev.paperplane.cli.gradle.BuildSnapshot
 import dev.paperplane.cli.gradle.ClassChanges
 import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.gradle.ProjectMetadata
+import dev.paperplane.cli.ipc.CompanionWire
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
 import java.io.File
@@ -13,7 +14,12 @@ import java.io.File
 internal open class HotReloadMode(
     private val session: DevSession,
     private val serverManager: PaperServerManager =
-        PaperServerManager(File(session.ppDir, "server"), session.downloader, session.ui),
+        PaperServerManager(
+            File(session.ppDir, "server"),
+            session.downloader,
+            session.ui,
+            protocolLog = session.config.dev.protocolLog,
+        ),
 ) {
   internal companion object {
     private const val RELOAD_TIMEOUT_MS = 10_000L
@@ -34,6 +40,7 @@ internal open class HotReloadMode(
         fastMeta: ProjectMetadata?,
         changes: ClassChanges,
         stagedJarPath: String,
+        leakDiagnostics: String = "summary",
     ): LoadRequest {
       val classesDirs: List<String>
       val resourcesDir: String
@@ -62,6 +69,7 @@ internal open class HotReloadMode(
           resourcesDir = resourcesDir,
           runtimeClasspath = runtimeClasspath,
           changedClasses = changedClasses,
+          leakDiagnostics = leakDiagnostics,
       )
     }
 
@@ -249,14 +257,14 @@ internal open class HotReloadMode(
 
     if (cachedFastMeta == null) cachedFastMeta = session.gradle.metadataFast().metadataOrNull
 
-    serverManager.writeCompanionStatus("building")
+    serverManager.sendCompanionStatus(CompanionWire.STATE_BUILDING)
     val buildStart = System.currentTimeMillis()
     val buildSuccess = session.gradle.compileOnly()
     val buildDuration = session.formatDuration(System.currentTimeMillis() - buildStart)
 
     if (!buildSuccess) {
       session.ui.error("Build failed", buildDuration)
-      serverManager.writeCompanionStatus("error", mapOf("message" to "Build failed"))
+      serverManager.sendCompanionStatus(CompanionWire.STATE_ERROR, message = "Build failed")
       return PhaseEnd.Waiting
     }
     session.ui.success("Build succeeded", buildDuration)
@@ -293,15 +301,10 @@ internal open class HotReloadMode(
   }
 
   /**
-   * Writes the reload request and returns its requestId so [waitAndReport] can match the result.
-   * Internal so tests can drive the JAR-(re)build decision directly.
+   * Sends the reload request over the companion socket and returns its requestId so [waitAndReport]
+   * can match the result. Internal so tests can drive the JAR-(re)build decision directly.
    */
   internal fun triggerReload(metadata: ProjectMetadata, changes: ClassChanges): String {
-    val ppDir = File(serverManager.serverDir, ".paperplane")
-    ppDir.mkdirs()
-    LoadRequest.completeFlag(serverManager.serverDir).delete()
-    LoadRequest.failedFlag(serverManager.serverDir).delete()
-
     // Restage the user JAR. It is load-bearing only in JAR-fallback mode, and rebuild() ran
     // `classes`, not `jar`, so (re)build the artifact whenever the host will actually load it —
     // otherwise a stale first-build JAR is staged and the reload silently runs old code. See
@@ -310,14 +313,21 @@ internal open class HotReloadMode(
     if (needsJarBuild(cachedFastMeta, builtJar.exists())) session.gradle.build()
     val stagedJarPath = serverManager.stagePlugin(builtJar)
 
-    val request = buildLoadRequest(metadata, cachedFastMeta, changes, stagedJarPath)
+    val request =
+        buildLoadRequest(
+            metadata,
+            cachedFastMeta,
+            changes,
+            stagedJarPath,
+            session.leakDiagnosticsWireValue(),
+        )
     when {
       request.classesDirs.isEmpty() -> session.ui.info("Strategy:", "jar (fallback)")
       request.changedClasses.isNotEmpty() ->
           session.ui.info("Strategy:", "hotswap (${changes.modified.size} modified)")
       else -> session.ui.info("Strategy:", "directory reload")
     }
-    LoadRequest.write(serverManager.serverDir, request)
+    serverManager.sendLoadRequest(request)
     return request.requestId
   }
 
@@ -330,12 +340,7 @@ internal open class HotReloadMode(
     val reloadStart = System.currentTimeMillis()
     val result =
         session.ui.spin("Reloading ${metadata.pluginName}...") {
-          session.loadResultWaiter.await(
-              serverManager.serverDir,
-              requestId,
-              timeoutMs = RELOAD_TIMEOUT_MS,
-              isAlive = serverManager::isRunning,
-          )
+          session.loadResultWaiter.await(serverManager, requestId, RELOAD_TIMEOUT_MS)
         }
     val reloadDuration = session.formatDuration(System.currentTimeMillis() - reloadStart)
 
@@ -346,12 +351,15 @@ internal open class HotReloadMode(
             val totalDuration = session.formatDuration(System.currentTimeMillis() - totalStart)
             session.ui.success("Plugin reloaded", reloadDuration)
             session.ui.totalTime(totalDuration)
-            serverManager.writeCompanionStatus("ready", mapOf("duration" to totalDuration))
+            serverManager.sendCompanionStatus(CompanionWire.STATE_READY, duration = totalDuration)
             PhaseEnd.Watching
           }
           is LoadWaitResult.Failed -> {
             session.ui.error("Reload failed: ${result.message}", reloadDuration)
-            serverManager.writeCompanionStatus("error", mapOf("message" to "Hot-reload failed"))
+            serverManager.sendCompanionStatus(
+                CompanionWire.STATE_ERROR,
+                message = "Hot-reload failed",
+            )
             PhaseEnd.Watching
           }
           LoadWaitResult.TimedOut -> {
@@ -359,7 +367,10 @@ internal open class HotReloadMode(
                 "Hot-reload failed (server still running with old plugin)",
                 reloadDuration,
             )
-            serverManager.writeCompanionStatus("error", mapOf("message" to "Hot-reload failed"))
+            serverManager.sendCompanionStatus(
+                CompanionWire.STATE_ERROR,
+                message = "Hot-reload failed",
+            )
             PhaseEnd.Watching
           }
           LoadWaitResult.ServerExited -> {

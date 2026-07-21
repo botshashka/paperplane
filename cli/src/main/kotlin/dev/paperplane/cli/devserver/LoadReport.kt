@@ -1,21 +1,43 @@
 package dev.paperplane.cli.devserver
 
+import com.google.gson.annotations.SerializedName
 import dev.paperplane.cli.ui.TerminalUI
 
 /**
- * Mirror of the companion's `HostLoadReport` — same JSON shape, no cross-module dependency. Written
- * by the companion to `.paperplane/load-complete` (status `ok`) or `load-failed`, read by
- * [LoadResultWaiter]. All fields default so a torn or partial document deserializes without
- * throwing.
+ * Terminal load outcome, `ok` or `failed`. Serialized as the lowercase wire value; an unrecognized
+ * value deserializes to null (Gson's unknown-enum behavior), which the waiter treats as a failure.
+ */
+enum class LoadStatus {
+  @SerializedName("ok") OK,
+  @SerializedName("failed") FAILED,
+}
+
+/**
+ * How the companion host applied a load. Typed on both ends of the wire (the companion mirrors this
+ * as `HostReloadStrategy`).
+ */
+enum class ReloadStrategy {
+  /** In-place class redefinition via Instrumentation; no host reload. */
+  @SerializedName("hotswap") HOTSWAP,
+  /** First load of the plugin in this server run. */
+  @SerializedName("fresh") FRESH,
+  /** Full unload + reload of an already-loaded plugin. */
+  @SerializedName("reload") RELOAD,
+}
+
+/**
+ * Mirror of the companion's `HostLoadReport` — same JSON shape, no cross-module dependency. Arrives
+ * over the companion socket as a `report` message, consumed by [LoadResultWaiter]. All fields
+ * default so an unexpected document shape deserializes without throwing.
  *
  * `requestId` echoes the CLI's `LoadRequest.requestId` so the waiter can discard stale results from
- * a previous reload. `strategy` ∈ hotswap|fresh|reload. `leaks`/`action` are populated by the
- * host's leak-detection path and are absent on a clean load.
+ * a previous reload. `leaks`/`action` are populated by the host's leak-detection path and are
+ * absent on a clean load.
  */
 data class LoadReport(
     val requestId: String = "",
-    val status: String = "",
-    val strategy: String = "",
+    val status: LoadStatus? = null,
+    val strategy: ReloadStrategy? = null,
     val durationMs: Long = 0,
     val pluginName: String = "",
     val message: String? = null,

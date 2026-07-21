@@ -310,29 +310,6 @@ class PaperServerManagerTest {
   }
 
   @Test
-  fun `writeCompanionStatus creates json file`() {
-    val manager = createManager()
-    manager.serverDir.mkdirs()
-    manager.writeCompanionStatus("building")
-
-    val statusFile = File(manager.serverDir, ".paperplane/companion-status.json")
-    assertTrue(statusFile.exists())
-    val json = statusFile.readText()
-    assertTrue(json.contains("\"state\":\"building\""))
-  }
-
-  @Test
-  fun `writeCompanionStatus includes extra fields`() {
-    val manager = createManager()
-    manager.serverDir.mkdirs()
-    manager.writeCompanionStatus("ready", mapOf("duration" to "2.5s"))
-
-    val json = File(manager.serverDir, ".paperplane/companion-status.json").readText()
-    assertTrue(json.contains("\"state\":\"ready\""))
-    assertTrue(json.contains("\"duration\":\"2.5s\""))
-  }
-
-  @Test
   fun `hasExitedUnexpectedly is false before any start`() {
     assertFalse(createManager().hasExitedUnexpectedly())
   }
@@ -394,60 +371,6 @@ class PaperServerManagerTest {
     val manager = createManager()
     // Should not throw
     manager.sendCommand("test")
-  }
-
-  @Test
-  fun `waitForSave returns true when flag file appears`() {
-    val manager = createManager()
-    manager.serverDir.mkdirs()
-    File(manager.serverDir, ".paperplane").mkdirs()
-
-    // Simulate companion writing the flag after a short delay
-    Thread {
-          Thread.sleep(100)
-          File(manager.serverDir, ".paperplane/save-complete").writeText("done")
-        }
-        .start()
-
-    val result = manager.waitForSave(timeoutMs = 3000)
-    assertTrue(result)
-    // Flag file should be cleaned up
-    assertFalse(File(manager.serverDir, ".paperplane/save-complete").exists())
-  }
-
-  @Test
-  fun `waitForSave returns false on timeout`() {
-    val manager = createManager()
-    manager.serverDir.mkdirs()
-    File(manager.serverDir, ".paperplane").mkdirs()
-
-    val start = System.currentTimeMillis()
-    val result = manager.waitForSave(timeoutMs = 300)
-    val elapsed = System.currentTimeMillis() - start
-
-    assertFalse(result)
-    assertTrue(elapsed >= 250, "Should have waited close to timeout, waited ${elapsed}ms")
-  }
-
-  @Test
-  fun `waitForSave clears stale flag file`() {
-    val manager = createManager()
-    manager.serverDir.mkdirs()
-    val flagFile = File(manager.serverDir, ".paperplane/save-complete")
-    flagFile.parentFile.mkdirs()
-    flagFile.writeText("stale")
-
-    // Should clear stale flag and then timeout (no new flag written)
-    val result = manager.waitForSave(timeoutMs = 300)
-    // The stale flag was cleared, and no new flag appeared, so it should timeout
-    assertFalse(result)
-  }
-
-  @Test
-  fun `waitForReady returns false when not started`() {
-    val manager = createManager()
-    val result = manager.waitForReady()
-    assertFalse(result)
   }
 
   // ── stagePlugin tests (hot-reload deploy) ───────────────────────────
@@ -640,102 +563,5 @@ class PaperServerManagerTest {
         tempFiles.isEmpty(),
         "No .tmp files should remain, found: ${tempFiles.map { it.name }}",
     )
-  }
-
-  // ── waitForReady tests ──────────────────────────────────────────────
-
-  @Test
-  fun `waitForReady detects flag file from companion`() {
-    val manager = createManager()
-    manager.serverDir.mkdirs()
-    File(manager.serverDir, ".paperplane").mkdirs()
-
-    // Start a dummy process so waitForReady doesn't bail early
-    val proc = ProcessBuilder("sleep", "10").start()
-    // Use reflection to set the process field
-    val processField = PaperServerManager::class.java.getDeclaredField("process")
-    processField.isAccessible = true
-    processField.set(manager, proc)
-
-    try {
-      // Write flag file from background thread
-      Thread {
-            Thread.sleep(100)
-            val flagFile = File(manager.serverDir, ".paperplane/server-ready")
-            flagFile.parentFile.mkdirs()
-            flagFile.writeText("ready")
-          }
-          .start()
-
-      val result = manager.waitForReady()
-      assertTrue(result)
-    } finally {
-      proc.destroyForcibly()
-    }
-  }
-
-  @Test
-  fun `waitForReady surfaces companion-error and returns false`() {
-    val manager = createManager()
-    manager.serverDir.mkdirs()
-    File(manager.serverDir, ".paperplane").mkdirs()
-
-    val proc = ProcessBuilder("sleep", "10").start()
-    val processField = PaperServerManager::class.java.getDeclaredField("process")
-    processField.isAccessible = true
-    processField.set(manager, proc)
-
-    val errorFile = File(manager.serverDir, ".paperplane/companion-error")
-    try {
-      Thread {
-            Thread.sleep(100)
-            errorFile.parentFile.mkdirs()
-            errorFile.writeText("Unsupported Paper version (Paper 1.18)\n")
-          }
-          .start()
-
-      val result = manager.waitForReady()
-
-      assertFalse(result, "companion-error must make waitForReady fail")
-      assertFalse(errorFile.exists(), "companion-error flag must be consumed (deleted)")
-      assertTrue(
-          terminal.raw.contains("Unsupported Paper version (Paper 1.18)"),
-          "the companion's error message must be surfaced to the user, got: ${terminal.raw}",
-      )
-    } finally {
-      proc.destroyForcibly()
-    }
-  }
-
-  @Test
-  fun `waitForReady shows a fallback message when companion-error is empty`() {
-    val manager = createManager()
-    manager.serverDir.mkdirs()
-    File(manager.serverDir, ".paperplane").mkdirs()
-
-    val proc = ProcessBuilder("sleep", "10").start()
-    val processField = PaperServerManager::class.java.getDeclaredField("process")
-    processField.isAccessible = true
-    processField.set(manager, proc)
-
-    try {
-      Thread {
-            Thread.sleep(100)
-            val errorFile = File(manager.serverDir, ".paperplane/companion-error")
-            errorFile.parentFile.mkdirs()
-            errorFile.writeText("   ")
-          }
-          .start()
-
-      val result = manager.waitForReady()
-
-      assertFalse(result)
-      assertTrue(
-          terminal.raw.contains("PaperPlane companion failed to start"),
-          "an empty error flag must still surface a fallback message, got: ${terminal.raw}",
-      )
-    } finally {
-      proc.destroyForcibly()
-    }
   }
 }

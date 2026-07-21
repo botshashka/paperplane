@@ -83,14 +83,14 @@ class LoadReportTest {
 
   @Test
   fun `report without leaks renders nothing`() {
-    ui.renderLeakWarnings(LoadReport(requestId = "r1", status = "ok"))
+    ui.renderLeakWarnings(LoadReport(requestId = "r1", status = LoadStatus.OK))
     assertTrue(terminal.writes.isEmpty())
   }
 
   @Test
   fun `report with an empty attribution list renders nothing`() {
     ui.renderLeakWarnings(
-        LoadReport(requestId = "r1", status = "ok", leaks = LeakSummary(consecutive = 1))
+        LoadReport(requestId = "r1", status = LoadStatus.OK, leaks = LeakSummary(consecutive = 1))
     )
     assertTrue(terminal.writes.isEmpty())
   }
@@ -100,7 +100,7 @@ class LoadReportTest {
     ui.renderLeakWarnings(
         LoadReport(
             requestId = "r1",
-            status = "ok",
+            status = LoadStatus.OK,
             leaks =
                 LeakSummary(
                     consecutive = 1,

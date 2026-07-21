@@ -4,6 +4,7 @@ import dev.paperplane.cli.devserver.DevSession.RunningState
 import dev.paperplane.cli.devserver.DevSession.StartupOutcome
 import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.gradle.ProjectMetadata
+import dev.paperplane.cli.ipc.CompanionWire
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
 import java.io.File
@@ -11,7 +12,12 @@ import java.io.File
 internal open class RestartMode(
     private val session: DevSession,
     private val serverManager: PaperServerManager =
-        PaperServerManager(File(session.ppDir, "server"), session.downloader, session.ui),
+        PaperServerManager(
+            File(session.ppDir, "server"),
+            session.downloader,
+            session.ui,
+            protocolLog = session.config.dev.protocolLog,
+        ),
 ) {
 
   fun run() {
@@ -152,7 +158,7 @@ internal open class RestartMode(
       session.ui.success("Server ready", serverDuration)
       val totalDuration = session.formatDuration(System.currentTimeMillis() - totalStart)
       session.ui.totalTime(totalDuration)
-      serverManager.writeCompanionStatus("ready", mapOf("duration" to totalDuration))
+      serverManager.sendCompanionStatus(CompanionWire.STATE_READY, duration = totalDuration)
       PhaseEnd.Watching
     } else {
       session.ui.error("Server failed to start", serverDuration)

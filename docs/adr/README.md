@@ -11,8 +11,9 @@ even after the code moves on.
 ## Index
 
 - [0001 — Companion-as-host plugin loading](0001-companion-as-host.md)
-- [0002 — File-based JSON load protocol](0002-file-based-json-load-protocol.md)
+- [0002 — File-based JSON load protocol](0002-file-based-json-load-protocol.md) *(superseded by 0004)*
 - [0003 — Leak containment over leak prevention](0003-leak-containment.md)
+- [0004 — Localhost TCP socket transport for the CLI↔companion protocol](0004-socket-transport.md)
 
 ## Format
 
