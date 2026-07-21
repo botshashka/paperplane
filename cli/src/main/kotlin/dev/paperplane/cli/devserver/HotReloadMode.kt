@@ -95,7 +95,6 @@ internal open class HotReloadMode(
   internal var cachedFastMeta: ProjectMetadata? = null
   // Baseline for the next rebuild's class diff. Internal so tests can verify it stays current.
   internal var lastPostBuildSnapshot: Map<String, Long>? = null
-  private val javaRuntime by lazy { session.resolveJava() }
 
   // The live server state, set once startup succeeds and refreshed on each leak-restart. Held in a
   // field (not just a run() local) so waitAndReport can restart the server with the same paperJar.
@@ -185,9 +184,7 @@ internal open class HotReloadMode(
                       serverManager = serverManager,
                       metadata = metadata,
                       paperJar = paperJar,
-                      jvmArgs = hotReloadJvmArgs(),
                       hotReload = true,
-                      javaBin = javaRuntime.bin,
                   )
           ) {
             is DevSession.ServerStartResult.Running -> result.state
@@ -200,17 +197,13 @@ internal open class HotReloadMode(
       session.showServerInfo(
           metadata,
           "localhost:${PaperServerManager.DEFAULT_PORT}",
-          if (javaRuntime.isJbr) "hot-reload (enhanced — JBR)" else "hot-reload",
+          if (session.launchSpec.isJbr) "hot-reload (enhanced — JBR)" else "hot-reload",
       )
       outcome = StartupOutcome.Running(state)
       PhaseEnd.Watching
     }
     return outcome
   }
-
-  private fun hotReloadJvmArgs(): List<String> =
-      if (javaRuntime.isJbr) session.config.server.jvmArgs + "-XX:+AllowEnhancedClassRedefinition"
-      else session.config.server.jvmArgs
 
   /**
    * Blocks on the fix-recovery file watcher. Returns the recovered [RunningState] on a successful
@@ -231,9 +224,10 @@ internal open class HotReloadMode(
       }
 
   /**
-   * Starts the server after a successful fix-recovery rebuild. Must mirror [runStartup]'s startup
-   * args — the agent/JBR wiring (`hotReload = true`, [hotReloadJvmArgs], the JBR [javaBin]) — so a
-   * recovered server isn't silently downgraded to a plain JVM without the redefinition agent.
+   * Starts the server after a successful fix-recovery rebuild. The JVM launch identity (agent/JBR
+   * wiring) comes from the session-wide [DevSession.launchSpec] like every other start; what this
+   * call must still mirror from [runStartup] is `hotReload = true` — the staged-deploy strategy —
+   * so the recovered server host-loads the plugin instead of leaving a stale jar in `plugins/`.
    * Returns null on a still-failing load so the fix-recovery loop keeps waiting for the next edit.
    */
   internal fun startAfterFix(attempt: DevSession.FixAttempt.Success): RunningState? =
@@ -242,9 +236,7 @@ internal open class HotReloadMode(
               serverManager = serverManager,
               metadata = attempt.metadata,
               paperJar = attempt.paperJar,
-              jvmArgs = hotReloadJvmArgs(),
               hotReload = true,
-              javaBin = javaRuntime.bin,
           )
           .stateOrNull
 
@@ -447,18 +439,16 @@ internal open class HotReloadMode(
       }
 
   /**
-   * Starts (or restarts) the server with the same hot-reload wiring initial startup uses —
-   * `hotReload = true`, the JBR-aware [hotReloadJvmArgs], and the JBR [javaBin] — reusing the last
-   * good [runningState]'s paperJar. Shared by the leak-restart and awaiting-fix cold-start paths so
-   * neither can silently drop the redefinition agent.
+   * Starts (or restarts) the server with the same staged-deploy wiring initial startup uses
+   * (`hotReload = true`), reusing the last good [runningState]'s paperJar. The JVM launch identity
+   * comes from the session-wide [DevSession.launchSpec]. Shared by the leak-restart and
+   * awaiting-fix cold-start paths so neither can silently deploy differently than startup did.
    */
   private fun startHotReloadServer(metadata: ProjectMetadata): DevSession.ServerStartResult =
       session.startServerAndReport(
           serverManager = serverManager,
           metadata = metadata,
           paperJar = runningState!!.paperJar,
-          jvmArgs = hotReloadJvmArgs(),
           hotReload = true,
-          javaBin = javaRuntime.bin,
       )
 }

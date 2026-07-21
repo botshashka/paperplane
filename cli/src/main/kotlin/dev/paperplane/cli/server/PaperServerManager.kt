@@ -305,8 +305,9 @@ open class PaperServerManager(
   }
 
   /**
-   * Extracts the PaperPlane Java agent JAR from CLI resources. Used for HMR Level 2
-   * (instrumentation-based hot-swap).
+   * Extracts the PaperPlane Java agent JAR from CLI resources. Attached to every dev-server JVM
+   * (all modes) so the instant tier's in-place class redefinition is available wherever the
+   * classifier admits a change.
    */
   fun extractAgent(): File {
     val agentJar = File(serverDir, ".paperplane/paperplane-agent.jar")
@@ -323,13 +324,18 @@ open class PaperServerManager(
     stream.use { input -> target.outputStream().use { output -> input.copyTo(output) } }
   }
 
+  /**
+   * Launches the server with the session-wide [LaunchSpec] — the single source of truth for
+   * javaBin/JVM args in every mode and recovery path. [attachAgent] exists for tests that launch
+   * throwaway real JVMs without the CLI resources on the classpath; production callers always
+   * attach.
+   */
   open fun start(
       paperJar: File,
-      jvmArgs: List<String>,
-      hotReload: Boolean = false,
-      javaBin: String = "java",
+      launch: LaunchSpec,
+      attachAgent: Boolean = true,
   ) {
-    val cmd = mutableListOf(javaBin)
+    val cmd = mutableListOf(launch.javaBin)
     // Fast startup flags
     cmd.addAll(
         listOf(
@@ -342,12 +348,12 @@ open class PaperServerManager(
         )
     )
 
-    if (hotReload) {
+    if (attachAgent) {
       val agentJar = extractAgent()
       cmd.add("-javaagent:${agentJar.absolutePath}")
     }
 
-    cmd.addAll(jvmArgs)
+    cmd.addAll(launch.jvmArgs)
     cmd.addAll(listOf("-jar", paperJar.absolutePath, "--nogui"))
 
     // Clear the previous run's discovery/bootstrap leftovers BEFORE the process launches: a stale

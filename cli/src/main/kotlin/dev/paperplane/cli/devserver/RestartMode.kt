@@ -150,7 +150,7 @@ internal open class RestartMode(
     serverManager.copyCompanion()
 
     val serverStart = System.currentTimeMillis()
-    serverManager.start(paperJar, session.config.server.jvmArgs)
+    serverManager.start(paperJar, session.launchSpec)
     val ready = serverManager.waitForReady()
     val serverDuration = session.formatDuration(System.currentTimeMillis() - serverStart)
 

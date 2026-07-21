@@ -13,6 +13,7 @@ import dev.paperplane.cli.plugins.PluginCache
 import dev.paperplane.cli.plugins.PluginLockfile
 import dev.paperplane.cli.plugins.PluginResolver
 import dev.paperplane.cli.server.JbrDownloader
+import dev.paperplane.cli.server.LaunchSpec
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.TerminalUI
@@ -446,11 +447,10 @@ internal class DevSession(
    * the jar is dropped into `plugins/` ([PaperServerManager.copyPluginToPluginsDir]) and Paper
    * loads it natively; no LoadRequest is written and the ready signal is the whole story.
    *
+   * The JVM launch itself always uses the session-wide [launchSpec] — javaBin, JBR flags, and the
+   * redefinition agent are identical for every server in every mode by construction.
+   *
    * Optional parameters let each mode tailor the flow:
-   * - [jvmArgs] defaults to [config].server.jvmArgs; HotReloadMode appends
-   *   `-XX:+AllowEnhancedClassRedefinition` when JBR is active.
-   * - [hotReload] and [javaBin] are forwarded to [PaperServerManager.start] — HotReloadMode sets
-   *   them so the agent gets wired up and the JBR java binary is used.
    * - [extraConfigure] runs immediately after [PaperServerManager.configure] and before the plugin
    *   deploy. BlueGreenMode uses it to inject [PaperServerManager.configureVelocityForwarding],
    *   which must overwrite paper-global.yml that `configure()` just wrote.
@@ -462,9 +462,7 @@ internal class DevSession(
       serverManager: PaperServerManager,
       metadata: ProjectMetadata,
       paperJar: File,
-      jvmArgs: List<String> = config.server.jvmArgs,
       hotReload: Boolean = false,
-      javaBin: String = "java",
       spinLabel: String = "Starting Paper ${resolveMcVersion(metadata)} server...",
       readyMessage: String = "Paper ${resolveMcVersion(metadata)} server ready",
       extraConfigure: (PaperServerManager) -> Unit = {},
@@ -495,7 +493,7 @@ internal class DevSession(
     val serverStart = System.currentTimeMillis()
     // start() clears the previous run's handshake file and companion-error flag itself, so a
     // crashed session's leftovers can't be consumed as fresh.
-    serverManager.start(paperJar, jvmArgs, hotReload = hotReload, javaBin = javaBin)
+    serverManager.start(paperJar, launchSpec)
     val ready = ui.spin(spinLabel) { serverManager.waitForReady() }
     val serverDuration = formatDuration(System.currentTimeMillis() - serverStart)
     if (!ready) {
@@ -638,6 +636,17 @@ internal class DevSession(
   }
 
   fun formatDuration(ms: Long): String = formatDurationMs(ms)
+
+  /**
+   * The launch identity for every server this session starts, in every mode and every recovery
+   * path. Built lazily exactly once ([resolveJava] may download JBR under `jbr: on`, so it must
+   * not run before the first server actually starts) and never rebuilt — the structural form of
+   * the "mirror the args" invariant that previously lived in three HotReloadMode call sites.
+   */
+  val launchSpec: LaunchSpec by lazy {
+    val runtime = resolveJava()
+    LaunchSpec.build(runtime.bin, runtime.isJbr, config.server.jvmArgs)
+  }
 
   data class JavaRuntime(val bin: String, val isJbr: Boolean)
 

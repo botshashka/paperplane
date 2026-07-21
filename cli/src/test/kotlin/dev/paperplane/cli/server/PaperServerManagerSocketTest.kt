@@ -320,7 +320,11 @@ class PaperServerManagerSocketTest {
     manager.serverDir.mkdirs()
     // A process that exits immediately: java with a nonexistent jar.
     val javaBin = File(File(System.getProperty("java.home"), "bin"), "java").absolutePath
-    manager.start(File(tempDir, "missing.jar"), emptyList(), javaBin = javaBin)
+    manager.start(
+        File(tempDir, "missing.jar"),
+        LaunchSpec(javaBin, isJbr = false, jvmArgs = emptyList()),
+        attachAgent = false,
+    )
     val deadline = System.currentTimeMillis() + 30_000
     while (manager.isRunning()) {
       if (System.currentTimeMillis() > deadline) throw AssertionError("process never exited")
@@ -349,7 +353,11 @@ class PaperServerManagerSocketTest {
     val staleError = File(ppDir, "companion-error").apply { writeText("stale") }
 
     val javaBin = File(File(System.getProperty("java.home"), "bin"), "java").absolutePath
-    manager.start(File(tempDir, "missing.jar"), emptyList(), javaBin = javaBin)
+    manager.start(
+        File(tempDir, "missing.jar"),
+        LaunchSpec(javaBin, isJbr = false, jvmArgs = emptyList()),
+        attachAgent = false,
+    )
     manager.stop()
 
     assertFalse(staleSocket.exists(), "a stale handshake file could dial a reassigned port")

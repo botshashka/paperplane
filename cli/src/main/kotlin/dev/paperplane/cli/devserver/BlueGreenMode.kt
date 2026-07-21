@@ -348,7 +348,7 @@ internal open class BlueGreenMode(
     standby.cleanupStale()
 
     val serverStart = System.currentTimeMillis()
-    standby.start(paperJar, session.config.server.jvmArgs)
+    standby.start(paperJar, session.launchSpec)
     val ready =
         session.ui.spin("Starting ${standbySlot.serverName} server...") { standby.waitForReady() }
     val serverDuration = session.formatDuration(System.currentTimeMillis() - serverStart)
@@ -390,7 +390,7 @@ internal open class BlueGreenMode(
       standby.copyCompanion()
       // Pre-warmed standby runs silently — its logs would interleave with the active server's.
       standby.logSuppressed = true
-      standby.start(paperJar, session.config.server.jvmArgs)
+      standby.start(paperJar, session.launchSpec)
       standby.waitForReady()
     } catch (_: Exception) {
       // Pre-warm is best-effort; failure here doesn't affect the active server
@@ -423,7 +423,7 @@ internal open class BlueGreenMode(
     blue.copyCompanion()
 
     val serverStart = System.currentTimeMillis()
-    blue.start(paperJar, session.config.server.jvmArgs)
+    blue.start(paperJar, session.launchSpec)
     val ready = blue.waitForReady()
     val serverDuration = session.formatDuration(System.currentTimeMillis() - serverStart)
     return if (ready) {

@@ -247,8 +247,9 @@ class HotReloadModeRenderTest {
 
   // ── Fix-recovery restart preserves hot-reload wiring ───────────────
   // Regression: HotReloadMode's fix-recovery restart previously called startServerAndReport with
-  // default args, silently dropping hotReload=true / JBR java / the redefinition agent. The
-  // recovered server must start with the same hot-reload wiring the initial startup uses.
+  // default args, silently dropping the staged-deploy strategy and the agent/JBR wiring. The
+  // launch identity is now structural (every start records the session-wide LaunchSpec); what
+  // recovery must still mirror is the staged deploy (stagePlugin, not plugins/).
 
   @Test
   fun `fix-recovery restart preserves the hot-reload agent wiring`() {
@@ -264,10 +265,15 @@ class HotReloadModeRenderTest {
       PhaseEnd.None
     }
 
-    // The recovered server must start with hotReload=true, not the default false.
+    // The recovered server must start with the session-wide launch spec and the staged deploy.
     assertTrue(
-        server.calls.any { it.startsWith("start(") && it.contains("hotReload=true") },
-        "recovered server must keep the hot-reload agent wiring, got: ${server.calls}",
+        server.launchSpecs.isNotEmpty() &&
+            server.launchSpecs.all { it == fixture.session.launchSpec },
+        "recovered server must launch with the session LaunchSpec, got: ${server.launchSpecs}",
+    )
+    assertTrue(
+        server.calls.any { it.startsWith("stagePlugin(") },
+        "recovered server must keep the staged-deploy strategy, got: ${server.calls}",
     )
     assertNotNull(result, "a successful recovered load must hand back a RunningState")
     assertTrue(fixture.terminal.writes.any { it.contains("Plugin loaded") })
@@ -376,8 +382,10 @@ class HotReloadModeRenderTest {
         "the server must be stopped before restarting; calls were ${server.calls}",
     )
     assertTrue(
-        server.calls.any { it.startsWith("start(") && it.contains("hotReload=true") },
-        "the restart must keep the hot-reload agent wiring; calls were ${server.calls}",
+        server.launchSpecs.isNotEmpty() &&
+            server.launchSpecs.all { it == fixture.session.launchSpec } &&
+            server.calls.any { it.startsWith("stagePlugin(") },
+        "the restart must keep the launch spec + staged deploy; calls were ${server.calls}",
     )
   }
 
@@ -408,7 +416,11 @@ class HotReloadModeRenderTest {
     // (its health check treats the deliberate downtime as healthy) until the next rebuild recovers.
     assertEquals(PhaseEnd.Waiting, end)
     assertTrue(server.calls.contains("stop"))
-    assertTrue(server.calls.any { it.startsWith("start(") && it.contains("hotReload=true") })
+    assertTrue(
+        server.launchSpecs.isNotEmpty() &&
+            server.launchSpecs.all { it == fixture.session.launchSpec } &&
+            server.calls.any { it.startsWith("stagePlugin(") }
+    )
     assertTrue(mode.serverDownAwaitingFix, "a failed restart must latch the awaiting-fix state")
   }
 
@@ -479,8 +491,10 @@ class HotReloadModeRenderTest {
         "a successful cold-start clears the awaiting-fix latch",
     )
     assertTrue(
-        server.calls.any { it.startsWith("start(") && it.contains("hotReload=true") },
-        "the cold-start must keep the hot-reload agent wiring; calls were ${server.calls}",
+        server.launchSpecs.isNotEmpty() &&
+            server.launchSpecs.all { it == fixture.session.launchSpec } &&
+            server.calls.any { it.startsWith("stagePlugin(") },
+        "the cold-start must keep the launch spec + staged deploy; calls were ${server.calls}",
     )
     // The reload path is skipped — there's no live server to answer a reload request — so
     // triggerReload must not run. Its absence is asserted via the "Strategy:" line it always

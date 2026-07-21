@@ -2,6 +2,7 @@ package dev.paperplane.cli.testing
 
 import dev.paperplane.cli.config.ServerConfig
 import dev.paperplane.cli.devserver.LoadRequest
+import dev.paperplane.cli.server.LaunchSpec
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.TerminalUI
@@ -32,6 +33,12 @@ class FakePaperServerManager(
   /** Every [LoadRequest] handed to [sendLoadRequest], in order. */
   val sentLoadRequests: MutableList<LoadRequest> = mutableListOf()
 
+  /**
+   * Every [LaunchSpec] handed to [start], in order. Tests assert that all entries are the same
+   * session-wide spec — the structural "mirror the args" invariant.
+   */
+  val launchSpecs: MutableList<LaunchSpec> = mutableListOf()
+
   override fun cleanupStale() {
     calls += "cleanupStale"
   }
@@ -61,8 +68,9 @@ class FakePaperServerManager(
     calls += "copyCompanion(depend=${depend.size},softdepend=${softdepend.size})"
   }
 
-  override fun start(paperJar: File, jvmArgs: List<String>, hotReload: Boolean, javaBin: String) {
-    calls += "start(${paperJar.name}, hotReload=$hotReload)"
+  override fun start(paperJar: File, launch: LaunchSpec, attachAgent: Boolean) {
+    calls += "start(${paperJar.name})"
+    launchSpecs += launch
     // Stream the simulated server output through ui.serverLog so tests can verify the log lines
     // interleave correctly above the pinned footer (the most fragile rendering path).
     for (line in simulatedLogs) ui.serverLog(line)
