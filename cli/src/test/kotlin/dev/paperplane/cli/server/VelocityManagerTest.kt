@@ -58,7 +58,8 @@ class VelocityManagerTest {
     manager.configure(serverPort = 25566, swapPort = 25567, proxyPort = 25565)
 
     val json = File(tempDir, "active-server.json").readText()
-    assertTrue(json.contains("\"active\":\"blue\""))
+    // Must name a registered backend — the transfer plugin ignores unknown names.
+    assertTrue(json.contains("\"active\":\"server\""))
     assertTrue(json.contains("\"transfer\":false"))
   }
 
