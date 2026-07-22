@@ -4,6 +4,7 @@ import java.io.File
 import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -88,5 +89,58 @@ class PaperPlanePluginTest {
 
     val result = runTask("ppGeneratePluginYml")
     assertTrue(result.output.contains("Manual plugin.yml found"))
+  }
+
+  // ── paperweight-mappings-namespace ──────────────────────────────────
+  //
+  // The attribute is a claim about the jar's bytecode and it ships in whatever the project
+  // publishes, so both the positive and the negative case are load-bearing: stamping a
+  // non-paper-api project would make Paper skip a remap the jar actually needs.
+
+  private fun builtManifest(): String {
+    val srcDir = File(projectDir, "src/main/java/com/example")
+    srcDir.mkdirs()
+    File(srcDir, "TestPlugin.java").writeText("package com.example;\npublic class TestPlugin {}\n")
+    runTask("jar")
+    val jar = File(projectDir, "build/libs/test-plugin-1.0.0.jar")
+    assertTrue(jar.exists(), "expected built jar at ${jar.path}")
+    return java.util.zip.ZipFile(jar).use { zip ->
+      val entry = checkNotNull(zip.getEntry("META-INF/MANIFEST.MF")) { "jar has no manifest" }
+      zip.getInputStream(entry).bufferedReader().readText()
+    }
+  }
+
+  @Test
+  fun `stamps mojang mappings namespace on a paper-api project`() {
+    setupProject(baseBuildScript)
+    assertTrue(
+        builtManifest().contains("paperweight-mappings-namespace: mojang"),
+        "a paper-api project is Mojang-mapped and must declare it so Paper skips the remap",
+    )
+  }
+
+  @Test
+  fun `does not stamp mappings namespace without a paper-api dependency`() {
+    setupProject(
+        """
+        plugins {
+            java
+            id("dev.paperplane")
+        }
+        group = "com.example"
+        version = "1.0.0"
+        repositories { mavenCentral() }
+        paperplane {
+            mainClass.set("com.example.TestPlugin")
+            pluginName.set("TestPlugin")
+            apiVersion.set("1.21")
+        }
+        """
+            .trimIndent()
+    )
+    assertFalse(
+        builtManifest().contains("paperweight-mappings-namespace"),
+        "claiming Mojang mappings on a non-paper-api jar makes Paper skip a remap it needs",
+    )
   }
 }

@@ -9,15 +9,6 @@ class PaperPlanePlugin : Plugin<Project> {
     val extension =
         project.extensions.create("paperplane", PaperPlaneExtension::class.java, project)
 
-    // Plugins built against paper-api are Mojang-mapped; without this manifest attribute Paper
-    // 1.20.5+ assumes Spigot mappings and rewrites the jar through its remapper at load time.
-    // Skipping the remap keeps loads fast AND keeps loaded bytecode byte-identical to the build
-    // output — which the instant tier's loaded-CRC verification depends on in native modes.
-    // withType covers shadowJar too (it extends Jar).
-    project.tasks.withType(Jar::class.java).configureEach { jar ->
-      jar.manifest.attributes["paperweight-mappings-namespace"] = "mojang"
-    }
-
     project.tasks.register("ppGeneratePluginYml", PluginYmlGenerateTask::class.java) { task ->
       task.group = "paperplane"
       task.description = "Generates plugin.yml from PaperPlane extension configuration"
@@ -64,6 +55,8 @@ class PaperPlanePlugin : Plugin<Project> {
       // Prefer shadowJar (fat jar) when available — ensures bundled dependencies are deployed.
       val jarDep = if (project.tasks.findByName("shadowJar") != null) "shadowJar" else "jar"
       project.tasks.named("ppMetadata") { task -> task.dependsOn(jarDep) }
+
+      configureMappingsNamespace(project)
     }
 
     project.tasks.register("ppMetadataFast", MetadataTask::class.java) { task ->
@@ -130,6 +123,27 @@ class PaperPlanePlugin : Plugin<Project> {
     task.projectVersion.set(project.provider { project.version.toString() })
     task.depend.set(extension.depend)
     task.softDepend.set(extension.softDepend)
+  }
+
+  /**
+   * Declares the jar Mojang-mapped, so Paper 1.20.5+ skips its load-time remap. That keeps loads
+   * fast and keeps loaded bytecode byte-identical to the build output — which the instant tier's
+   * loaded-CRC verification depends on in native modes. `withType` covers shadowJar (it extends
+   * Jar).
+   *
+   * Gated, because the attribute is a **claim about the bytecode** and it rides into whatever the
+   * project publishes. `ppl init` applies this plugin to any project it is pointed at, so stamping
+   * unconditionally would mislabel a Spigot-mapped or reobf'd jar: Paper would skip a remap the jar
+   * actually needs and NMS calls would fail at runtime — in the user's release build, not just
+   * under `ppl dev`. Only a project compiling against paper-api is known Mojang-mapped, and
+   * paperweight-userdev manages the attribute itself.
+   */
+  private fun configureMappingsNamespace(project: Project) {
+    if (project.plugins.hasPlugin("io.papermc.paperweight.userdev")) return
+    if (detectPaperApiVersion(project) == null) return
+    project.tasks.withType(Jar::class.java).configureEach { jar ->
+      jar.manifest.attributes["paperweight-mappings-namespace"] = "mojang"
+    }
   }
 
   private fun detectPaperApiVersion(project: Project): String? {
