@@ -5,8 +5,8 @@ import org.junit.jupiter.api.Test
 
 /**
  * The capability matrix: enhanced redefinition must require agent AND JBR AND the actual launch
- * flag. Vendor alone over-reporting was the shipped behavior this replaces — a JBR without the
- * flag behaves like a stock JVM.
+ * flag. Vendor alone over-reporting was the shipped behavior this replaces — a JBR without the flag
+ * behaves like a stock JVM.
  */
 class RedefineCapabilitiesTest {
 
@@ -29,13 +29,20 @@ class RedefineCapabilitiesTest {
   fun `no agent means no capability at all`() {
     assertEquals(
         RedefineCapabilities.Capability(agent = false, enhanced = false),
-        detect(agent = false, vendor = "JetBrains s.r.o.", args = listOf(RedefineCapabilities.ENHANCED_FLAG)),
+        detect(
+            agent = false,
+            vendor = "JetBrains s.r.o.",
+            args = listOf(RedefineCapabilities.ENHANCED_FLAG),
+        ),
     )
   }
 
   @Test
   fun `agent on a stock JVM is body-only`() {
-    assertEquals(RedefineCapabilities.Capability(agent = true, enhanced = false), detect(agent = true))
+    assertEquals(
+        RedefineCapabilities.Capability(agent = true, enhanced = false),
+        detect(agent = true),
+    )
   }
 
   @Test

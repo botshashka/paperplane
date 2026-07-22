@@ -11,6 +11,7 @@ import dev.paperplane.companion.host.LeakDiagnosticsMode
 import dev.paperplane.companion.host.UnsupportedPaperVersionException
 import java.io.File
 import java.io.IOException
+import java.util.logging.Level
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.plugin.java.JavaPlugin
@@ -211,13 +212,20 @@ class CompanionMessageHandler(
   fun handleInstantSwap(request: HostInstantSwapRequest) {
     val start = System.currentTimeMillis()
 
-    fun answer(status: HostInstantSwapStatus, patched: Int = 0, defined: Int = 0, reason: String? = null) {
+    fun answer(
+        status: HostInstantSwapStatus,
+        patched: Int = 0,
+        defined: Int = 0,
+        appliedClasses: List<String> = emptyList(),
+        reason: String? = null,
+    ) {
       ipc.sendInstantReport(
           HostInstantSwapReport(
               requestId = request.requestId,
               status = status,
               patched = patched,
               defined = defined,
+              appliedClasses = appliedClasses,
               reason = reason,
               durationMs = System.currentTimeMillis() - start,
           )
@@ -238,12 +246,29 @@ class CompanionMessageHandler(
     }
     val swapper =
         instantSwapper
-            ?: InstantSwapper(plugin.logger, File(serverRoot, ".paperplane/instant-overlay"))
-                .also { instantSwapper = it }
+            ?: InstantSwapper(plugin.logger, File(serverRoot, ".paperplane/instant-overlay")).also {
+              instantSwapper = it
+            }
 
-    when (val outcome = swapper.apply(request, classLoader)) {
+    // Last-resort net for the whole patch pipeline, mirroring the load path's. The CLI blocks on a
+    // report; anything that escapes here would strand it until timeout and surface as "no patch
+    // answer from the companion", burying the real cause in a scheduler stack trace.
+    val outcome =
+        try {
+          swapper.apply(request, classLoader)
+        } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
+          plugin.logger.log(Level.WARNING, "Instant swap failed unexpectedly", e)
+          InstantSwapper.Outcome.Failed("${e.javaClass.simpleName}: ${e.message}")
+        }
+
+    when (outcome) {
       is InstantSwapper.Outcome.Applied -> {
-        answer(HostInstantSwapStatus.OK, patched = outcome.patched, defined = outcome.defined)
+        answer(
+            HostInstantSwapStatus.OK,
+            patched = outcome.patched,
+            defined = outcome.defined,
+            appliedClasses = outcome.appliedClasses,
+        )
         broadcast(Component.text("${request.pluginName} patched!", NamedTextColor.GREEN))
       }
       is InstantSwapper.Outcome.Refused ->

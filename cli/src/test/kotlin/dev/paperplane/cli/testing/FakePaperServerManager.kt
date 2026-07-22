@@ -118,16 +118,28 @@ class FakePaperServerManager(
   var capability: dev.paperplane.cli.devserver.instant.RedefineCapability =
       dev.paperplane.cli.devserver.instant.RedefineCapability.BODY_ONLY
 
-  /** Scripted answer for [awaitInstantReport]; echoes the awaited requestId when OK. */
-  internal var instantWaitResult: (String) -> dev.paperplane.cli.devserver.InstantWaitResult = { id ->
-    dev.paperplane.cli.devserver.InstantWaitResult.Answered(
-        dev.paperplane.cli.devserver.InstantSwapReport(
-            requestId = id,
-            status = dev.paperplane.cli.devserver.InstantSwapStatus.OK,
-            patched = 1,
+  /**
+   * Scripted answer for [awaitInstantReport]; echoes the awaited requestId when OK, and reports
+   * every requested class as applied — what a real companion does when nothing is skipped.
+   */
+  internal var instantWaitResult: (String) -> dev.paperplane.cli.devserver.InstantWaitResult =
+      { id ->
+        val requested = sentInstantSwaps.lastOrNull()
+        dev.paperplane.cli.devserver.InstantWaitResult.Answered(
+            dev.paperplane.cli.devserver.InstantSwapReport(
+                requestId = id,
+                status = dev.paperplane.cli.devserver.InstantSwapStatus.OK,
+                patched = 1,
+                appliedClasses =
+                    (requested?.classes.orEmpty() + requested?.newClasses.orEmpty()).map {
+                      it.fqcn
+                    },
+            )
         )
-    )
-  }
+      }
+
+  /** Whether [sendInstantSwap] reports the request as delivered. */
+  internal var sendInstantSwapResult: Boolean = true
 
   /** Every [dev.paperplane.cli.devserver.InstantSwapRequest] handed to [sendInstantSwap]. */
   internal val sentInstantSwaps: MutableList<dev.paperplane.cli.devserver.InstantSwapRequest> =
@@ -141,7 +153,7 @@ class FakePaperServerManager(
   override fun sendInstantSwap(request: dev.paperplane.cli.devserver.InstantSwapRequest): Boolean {
     calls += "sendInstantSwap(${request.pluginName})"
     sentInstantSwaps += request
-    return true
+    return sendInstantSwapResult
   }
 
   override fun awaitInstantReport(

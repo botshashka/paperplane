@@ -8,13 +8,14 @@ import java.util.jar.JarFile
 /**
  * Scriptable [Instrumentation] for [InstantSwapper] tests. [retransformClasses] feeds every
  * registered transformer the scripted [loadedBytesByClass] — simulating what a real JVM hands the
- * capture transformer as the class's current definition — and [redefineClasses] records (or
- * throws, when [redefineThrows] is set, simulating the JVM veto).
+ * capture transformer as the class's current definition — and [redefineClasses] records (or throws,
+ * when [redefineThrows] is set, simulating the JVM veto).
  */
 class FakeInstrumentation(
     val loadedBytesByClass: MutableMap<String, ByteArray> = mutableMapOf(),
     var redefineThrows: Throwable? = null,
     var retransformSupported: Boolean = true,
+    var redefineSupported: Boolean = true,
 ) : Instrumentation {
   val transformers = mutableListOf<ClassFileTransformer>()
   val redefined = mutableListOf<ClassDefinition>()
@@ -48,7 +49,7 @@ class FakeInstrumentation(
     }
   }
 
-  override fun isRedefineClassesSupported(): Boolean = true
+  override fun isRedefineClassesSupported(): Boolean = redefineSupported
 
   override fun redefineClasses(vararg definitions: ClassDefinition) {
     redefineThrows?.let { throw it }

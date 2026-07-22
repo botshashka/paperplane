@@ -7,6 +7,7 @@ import dev.paperplane.cli.devserver.InstantWaitResult
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.ipc.CompanionWire
 import dev.paperplane.cli.server.PaperServerManager
+import dev.paperplane.cli.ui.TerminalUI.PhaseEnd
 import java.io.File
 
 /**
@@ -34,9 +35,9 @@ internal sealed class InstantOutcome {
  * Everything else escalates with a named reason; escalation costs exactly one normal swap.
  *
  * One lane per server manager (blue-green constructs one per slot pair — the [BaselineTracker]
- * passed to [attempt] is per-slot). Owns the cached fast metadata; a build-config change (via
- * [DevSession.buildConfigChangeListeners]) drops the cache so a changed classes-dir layout can't
- * classify against stale paths.
+ * passed to [attempt] is per-slot). Build paths come from [DevSession.fastMetadata], which a
+ * build-config change invalidates, so a changed classes-dir layout can't classify against stale
+ * paths.
  */
 internal class InstantLane(private val session: DevSession) {
 
@@ -46,16 +47,11 @@ internal class InstantLane(private val session: DevSession) {
   }
 
   private val classifier = ChangeClassifier()
-  private var cachedFastMeta: ProjectMetadata? = null
-
-  init {
-    session.buildConfigChangeListeners += { cachedFastMeta = null }
-  }
 
   /**
    * Runs one fast-lane attempt: compile (`classes` only — the jar is skipped entirely on the
-   * patched path), classify, and patch or escalate. Emits the standard build success/failure
-   * lines; the mode emits the outcome lines.
+   * patched path), classify, and patch or escalate. Emits the standard build success/failure lines;
+   * the mode emits the outcome lines.
    */
   fun attempt(
       serverManager: PaperServerManager,
@@ -74,33 +70,85 @@ internal class InstantLane(private val session: DevSession) {
     session.ui.success("Build succeeded", buildDuration)
 
     if (!session.config.dev.instant) return InstantOutcome.Escalate(null)
-    if (!serverManager.isRunning()) return InstantOutcome.Escalate("server not running")
-    if (!baseline.seeded) return InstantOutcome.Escalate("no confirmed baseline yet")
-    val fastMeta = fastMeta() ?: return InstantOutcome.Escalate("build metadata unavailable")
-    if (fastMeta.effectiveClassesDirs.isEmpty()) {
-      return InstantOutcome.Escalate("no class output dirs in build metadata")
+    val fastMeta = fastMeta()
+    preconditionFailure(serverManager, baseline, fastMeta)?.let {
+      return InstantOutcome.Escalate(it)
     }
     val (capability, capNote) = effectiveCapability(serverManager, metadata)
-    if (capability == RedefineCapability.NONE) {
-      return InstantOutcome.Escalate("server JVM reports no redefine capability")
+    return if (capability == RedefineCapability.NONE) {
+      InstantOutcome.Escalate("server JVM reports no redefine capability")
+    } else {
+      classifyAndSend(serverManager, metadata, baseline, fastMeta!!, capability, capNote)
     }
-
-    val candidate = capture(fastMeta)
-    val classification =
-        classifier.classify(baseline.baseline!!, candidate, metadata.mainClass)
-
-    if (classification.requirement == RedefineRequirement.NONE) return InstantOutcome.NoChange
-    if (classification.requirement == RedefineRequirement.UNSAFE) {
-      return InstantOutcome.Escalate(classification.escalations.first().description)
-    }
-    if (!fitsWithin(classification.requirement, capability)) {
-      val what = classification.additiveNotes.firstOrNull() ?: "structural change"
-      val why = capNote ?: "needs JBR enhanced redefinition (dev.jbr: on)"
-      return InstantOutcome.Escalate("$what — $why")
-    }
-
-    return sendAndAwait(serverManager, metadata, baseline, candidate, classification)
   }
+
+  private fun classifyAndSend(
+      serverManager: PaperServerManager,
+      metadata: ProjectMetadata,
+      baseline: BaselineTracker,
+      fastMeta: ProjectMetadata,
+      capability: RedefineCapability,
+      capNote: String?,
+  ): InstantOutcome {
+    val candidate = capture(fastMeta)
+    val classification = classifier.classify(baseline.baseline!!, candidate, metadata.mainClass)
+    return when {
+      classification.requirement == RedefineRequirement.NONE -> InstantOutcome.NoChange
+      classification.requirement == RedefineRequirement.UNSAFE ->
+          InstantOutcome.Escalate(
+              classification.escalations.firstOrNull()?.description ?: "unsafe change"
+          )
+      !fitsWithin(classification.requirement, capability) ->
+          InstantOutcome.Escalate(
+              (classification.additiveNotes.firstOrNull() ?: "structural change") +
+                  " — " +
+                  (capNote ?: "needs JBR enhanced redefinition (dev.jbr: on)")
+          )
+      else -> sendAndAwait(serverManager, metadata, baseline, candidate, classification)
+    }
+  }
+
+  /** The user-facing reason the lane can't run at all, or null when every precondition holds. */
+  private fun preconditionFailure(
+      serverManager: PaperServerManager,
+      baseline: BaselineTracker,
+      fastMeta: ProjectMetadata?,
+  ): String? =
+      when {
+        !serverManager.isRunning() -> "server not running"
+        !baseline.seeded -> "no confirmed baseline yet"
+        fastMeta == null -> "build metadata unavailable"
+        fastMeta.effectiveClassesDirs.isEmpty() -> "no class output dirs in build metadata"
+        else -> null
+      }
+
+  /**
+   * One attempt plus its reporting, shared by every mode: a terminal [PhaseEnd] when the lane
+   * handled the rebuild, or null meaning "escalate — run your full swap path". [fallbackLabel]
+   * names that path in the escalation line ("full restart", "full swap", "full reload").
+   */
+  fun runOrEscalate(
+      serverManager: PaperServerManager,
+      metadata: ProjectMetadata,
+      baseline: BaselineTracker,
+      totalStart: Long,
+      fallbackLabel: String,
+  ): PhaseEnd? =
+      when (val outcome = attempt(serverManager, metadata, baseline)) {
+        is InstantOutcome.Patched -> {
+          reportPatched(serverManager, outcome, totalStart)
+          PhaseEnd.Watching
+        }
+        InstantOutcome.NoChange -> {
+          reportNoChange(serverManager)
+          PhaseEnd.Watching
+        }
+        InstantOutcome.CompileFailed -> PhaseEnd.Waiting
+        is InstantOutcome.Escalate -> {
+          outcome.reason?.let { session.ui.info("Instant:", "$it — $fallbackLabel") }
+          null
+        }
+      }
 
   /** Requirement-vs-capability lattice: patch iff the live JVM admits everything in the set. */
   private fun fitsWithin(
@@ -140,12 +188,7 @@ internal class InstantLane(private val session: DevSession) {
       is InstantWaitResult.Answered ->
           when (result.report.status) {
             InstantSwapStatus.OK -> {
-              // The baseline advances for exactly the classes the companion confirmed applied.
-              baseline.confirmPatched(
-                  candidate,
-                  classification.patches.map { it.fqcn } +
-                      classification.newClasses.map { it.fqcn },
-              )
+              baseline.confirmPatched(candidate, result.report.appliedClasses)
               InstantOutcome.Patched(
                   patchedCount = result.report.patched,
                   definedCount = result.report.defined,
@@ -186,11 +229,15 @@ internal class InstantLane(private val session: DevSession) {
 
   /**
    * Captures the current build output and promotes it to [baseline]'s confirmed state. Modes call
-   * this at their existing full-swap success points (server ready, reload Ok, fix recovered) —
-   * the moments the server is verifiably running the current build.
+   * this at their existing full-swap success points (server ready, reload Ok, fix recovered) — the
+   * moments the server is verifiably running the current build.
    */
   fun confirmFullSwap(baseline: BaselineTracker) {
-    val fastMeta = fastMeta() ?: return
+    // No metadata means we cannot capture what the server just loaded. Silently returning would
+    // leave the tracker vouching for the PREVIOUS build while the server runs this one — the
+    // classifier would then diff against bytes nobody is running. Drop to unseeded instead: the
+    // next rebuild escalates with "no confirmed baseline yet", which is the safe direction.
+    val fastMeta = fastMeta() ?: return baseline.reset()
     baseline.confirmFullSwap(capture(fastMeta))
   }
 
@@ -210,8 +257,8 @@ internal class InstantLane(private val session: DevSession) {
   }
 
   /**
-   * The live JVM's capability, capped to body-only when a curated reflection-discovery framework
-   * is present (see [ReflectionFrameworkList]); the note says why so the cap is never silent.
+   * The live JVM's capability, capped to body-only when a curated reflection-discovery framework is
+   * present (see [ReflectionFrameworkList]); the note says why so the cap is never silent.
    */
   private fun effectiveCapability(
       serverManager: PaperServerManager,
@@ -224,8 +271,7 @@ internal class InstantLane(private val session: DevSession) {
     else RedefineCapability.BODY_ONLY to "capped: $hit discovers methods reflectively"
   }
 
-  private fun fastMeta(): ProjectMetadata? =
-      cachedFastMeta ?: session.gradle.metadataFast().metadataOrNull?.also { cachedFastMeta = it }
+  private fun fastMeta(): ProjectMetadata? = session.fastMetadata()
 
   private fun capture(fastMeta: ProjectMetadata): BuildCandidate =
       BuildCandidate.capture(

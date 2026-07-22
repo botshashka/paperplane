@@ -8,8 +8,10 @@ import org.junit.jupiter.api.Test
 
 class BaselineTrackerTest {
 
-  private fun candidate(vararg classes: Pair<String, ByteArray>, resources: Map<String, Long> = emptyMap()) =
-      BuildCandidate(classes.toMap(), resources)
+  private fun candidate(
+      vararg classes: Pair<String, ByteArray>,
+      resources: Map<String, Long> = emptyMap(),
+  ) = BuildCandidate(classes.toMap(), resources)
 
   @Test
   fun `starts unseeded and confirmFullSwap seeds the whole candidate`() {

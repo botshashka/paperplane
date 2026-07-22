@@ -102,15 +102,29 @@ internal class DevSession(
         buildConfigFiles.map { FileWatcher.normalizePath(it.absolutePath) }.toSet()
     if (changedFiles.any { it in buildConfigPaths }) {
       gradle.close()
-      buildConfigChangeListeners.forEach { it() }
+      cachedFastMeta = null
     }
   }
 
+  @Suppress("VariableNaming") private var cachedFastMeta: ProjectMetadata? = null
+
   /**
-   * Fired whenever a build-config change invalidates the Gradle connection. The instant lane
-   * registers here to drop its cached fast metadata — classes-dir layout may have changed.
+   * The `ppMetadataFast` result for the current build config — classes dirs, resources dir, runtime
+   * classpath — cached for the session and dropped by [maybeInvalidateGradleConnection].
+   *
+   * One cache, deliberately. Both the instant lane and the hot-reload load request steer off these
+   * paths, and a build-config edit (adding `kotlin("jvm")`, changing `sourceSets`) moves them. Two
+   * caches meant one could refresh while the other kept sending a classes dir that no longer
+   * receives output — the host would reload from a dead directory, report success, and the CLI
+   * would confirm a baseline for code nobody is running.
    */
-  val buildConfigChangeListeners = mutableListOf<() -> Unit>()
+  internal fun fastMetadata(): ProjectMetadata? =
+      cachedFastMeta ?: gradle.metadataFast().metadataOrNull?.also { cachedFastMeta = it }
+
+  /** Test seam: pre-seed or clear the cache without running Gradle. */
+  internal fun seedFastMetadata(metadata: ProjectMetadata?) {
+    cachedFastMeta = metadata
+  }
 
   /**
    * The live server + metadata pair shared between startup, fix recovery, and the main watch loop.
@@ -417,10 +431,10 @@ internal class DevSession(
    * into the pinned watching footer if it decides to exit the loop.
    *
    * [onForceSwap] is the instant tier's manual escape hatch: when non-null, a line-buffered stdin
-   * listener runs alongside the watcher, and typing `s`⏎ triggers a full swap of the current
-   * build — the user-side reset to ground truth when in-place patches leave them in doubt.
-   * Rebuilds are serialized on one lock, so a forced swap and a file-change rebuild can never
-   * interleave their phases.
+   * listener runs alongside the watcher, and typing `s`⏎ triggers a full swap of the current build
+   * — the user-side reset to ground truth when in-place patches leave them in doubt. Rebuilds are
+   * serialized on one lock, so a forced swap and a file-change rebuild can never interleave their
+   * phases.
    */
   fun runMainWatchLoop(
       onChanged: TerminalUI.(changedFiles: List<String>) -> PhaseEnd,
@@ -696,9 +710,9 @@ internal class DevSession(
 
   /**
    * The launch identity for every server this session starts, in every mode and every recovery
-   * path. Built lazily exactly once ([resolveJava] may download JBR under `jbr: on`, so it must
-   * not run before the first server actually starts) and never rebuilt — the structural form of
-   * the "mirror the args" invariant that previously lived in three HotReloadMode call sites.
+   * path. Built lazily exactly once ([resolveJava] may download JBR under `jbr: on`, so it must not
+   * run before the first server actually starts) and never rebuilt — the structural form of the
+   * "mirror the args" invariant that previously lived in three HotReloadMode call sites.
    */
   val launchSpec: LaunchSpec by lazy {
     val runtime = resolveJava()

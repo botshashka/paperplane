@@ -134,6 +134,68 @@ class InstantLaneTest {
   }
 
   @Test
+  fun `the baseline advances only for classes the companion reported applied`() {
+    // The companion can legitimately skip a class it was asked to handle. Advancing for everything
+    // requested would leave the CLI vouching for bytes the server never took — and because the
+    // baseline is what the next classification diffs against, that error is permanent.
+    val setup = setup()
+    writeClass("com.example.Logic", bodyV(1))
+    seed(setup)
+    writeClass("com.example.Logic", bodyV(2))
+    setup.server.instantWaitResult = { id ->
+      InstantWaitResult.Answered(
+          InstantSwapReport(
+              requestId = id,
+              status = InstantSwapStatus.OK,
+              patched = 0,
+              appliedClasses = emptyList(),
+          )
+      )
+    }
+
+    attempt(setup)
+
+    assertTrue(
+        setup.baseline.baseline!!.classes.getValue("com.example.Logic").contentEquals(bodyV(1)),
+        "a class the companion did not report applied must stay at its old baseline bytes",
+    )
+  }
+
+  @Test
+  fun `an unavailable companion connection escalates instead of patching`() {
+    val setup = setup()
+    writeClass("com.example.Logic", bodyV(1))
+    seed(setup)
+    writeClass("com.example.Logic", bodyV(2))
+    setup.server.sendInstantSwapResult = false
+
+    val outcome = attempt(setup)
+
+    val escalate = assertInstanceOf(InstantOutcome.Escalate::class.java, outcome)
+    val reason = escalate.reason.orEmpty()
+    assertTrue(reason.contains("companion connection"), reason)
+  }
+
+  @Test
+  fun `confirmFullSwap without build metadata unseeds the baseline rather than keeping a stale one`() {
+    val setup = setup()
+    writeClass("com.example.Logic", bodyV(1))
+    seed(setup)
+
+    // The mode reports a successful full swap, but metadata is unavailable this time — so we
+    // cannot capture what the server just loaded. Keeping the previous baseline would vouch for
+    // the build before the one now running.
+    setup.fixture.gradle.nextMetadataFast = null
+    setup.fixture.session.seedFastMetadata(null)
+    setup.lane.confirmFullSwap(setup.baseline)
+
+    assertFalse(
+        setup.baseline.seeded,
+        "an unconfirmable swap must drop to unseeded — the safe direction is refusing to patch",
+    )
+  }
+
+  @Test
   fun `an identical rebuild reports no change and sends nothing`() {
     val setup = setup()
     writeClass("com.example.Logic", bodyV(1))
@@ -297,7 +359,11 @@ class InstantLaneTest {
 
   @Test
   fun `an additive JVM is capped to body-only when a reflection framework is on the classpath`() {
-    val setup = setup(capability = RedefineCapability.ADDITIVE, metadata = metadata(depend = listOf("Skript")))
+    val setup =
+        setup(
+            capability = RedefineCapability.ADDITIVE,
+            metadata = metadata(depend = listOf("Skript")),
+        )
     writeClass("com.example.Logic", bodyV(1))
     seed(setup)
     writeClass(
@@ -365,7 +431,15 @@ class InstantLaneTest {
         "an unchanged build config must reuse the cached metadata",
     )
 
-    setup.fixture.session.buildConfigChangeListeners.forEach { it() }
+    // Drive the real invalidation path, not a listener list: an edit to build.gradle.kts is what
+    // moves the classes-dir layout, and the cache must drop for every consumer at once.
+    setup.fixture.session.maybeInvalidateGradleConnection(
+        listOf(
+            dev.paperplane.cli.watcher.FileWatcher.normalizePath(
+                java.io.File(setup.fixture.projectDir, "build.gradle.kts").absolutePath
+            )
+        )
+    )
     attempt(setup)
     assertEquals(
         callsAfterSeed + 1,

@@ -4,8 +4,8 @@ import java.io.File
 import java.util.zip.CRC32
 
 /**
- * An immutable snapshot of one build's output: every `.class` file's bytes keyed by FQCN, and a
- * CRC per resource file. Captured after each successful compile; the [BaselineTracker] promotes a
+ * An immutable snapshot of one build's output: every `.class` file's bytes keyed by FQCN, and a CRC
+ * per resource file. Captured after each successful compile; the [BaselineTracker] promotes a
  * candidate to baseline only once it is confirmed loaded in the live server.
  *
  * Holding full class bytes (not just hashes) is deliberate: the classifier needs old bytes for

@@ -4,7 +4,6 @@ import dev.paperplane.cli.devserver.DevSession.RunningState
 import dev.paperplane.cli.devserver.DevSession.StartupOutcome
 import dev.paperplane.cli.devserver.instant.BaselineTracker
 import dev.paperplane.cli.devserver.instant.InstantLane
-import dev.paperplane.cli.devserver.instant.InstantOutcome
 import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.ipc.CompanionWire
@@ -63,8 +62,7 @@ internal open class BlueGreenMode(
   // The instant fast lane, and one confirmed-loaded baseline per slot: each backend JVM runs its
   // own plugin incarnation, so what is "confirmed loaded" is a per-slot fact.
   internal val lane = InstantLane(session)
-  internal val baselines =
-      mapOf(Slot.SERVER to BaselineTracker(), Slot.SWAP to BaselineTracker())
+  internal val baselines = mapOf(Slot.SERVER to BaselineTracker(), Slot.SWAP to BaselineTracker())
 
   /**
    * Post-swap pre-warm runs in the background so the main loop can return to "Watching" quickly. If
@@ -136,7 +134,9 @@ internal open class BlueGreenMode(
 
     session.runMainWatchLoop(
         onChanged = { _ -> rebuildAndUpdateSlot(state.metadata, state.paperJar) },
-        onForceSwap = { rebuildAndUpdateSlot(state.metadata, state.paperJar, forceFullSwap = true) },
+        onForceSwap = {
+          rebuildAndUpdateSlot(state.metadata, state.paperJar, forceFullSwap = true)
+        },
         healthCheck = {
           if (!shuttingDown.get() && !velocityManager.isRunning()) {
             session.ui.error("Proxy process exited unexpectedly")
@@ -269,8 +269,8 @@ internal open class BlueGreenMode(
 
   /**
    * Internal for tests: the deploy/transfer/pre-warm cycle is driven directly. The instant lane
-   * runs first, against the live active backend and BEFORE any world save or standby teardown —
-   * a patched cycle never touches the standby at all (its stale jar is benign: every fall-through
+   * runs first, against the live active backend and BEFORE any world save or standby teardown — a
+   * patched cycle never touches the standby at all (its stale jar is benign: every fall-through
    * swap re-deploys before transferring). [forceFullSwap] skips the lane (manual escape hatch).
    */
   internal fun rebuild(
@@ -285,18 +285,8 @@ internal open class BlueGreenMode(
     val builtJar = File(session.projectDir, metadata.jarPath)
 
     if (!forceFullSwap) {
-      when (val outcome = lane.attempt(active, metadata, baselines[activeSlot]!!)) {
-        is InstantOutcome.Patched -> {
-          lane.reportPatched(active, outcome, totalStart)
-          return activeSlot to PhaseEnd.Watching
-        }
-        InstantOutcome.NoChange -> {
-          lane.reportNoChange(active)
-          return activeSlot to PhaseEnd.Watching
-        }
-        InstantOutcome.CompileFailed -> return activeSlot to PhaseEnd.Waiting
-        is InstantOutcome.Escalate ->
-            outcome.reason?.let { session.ui.info("Instant:", "$it — full swap") }
+      lane.runOrEscalate(active, metadata, baselines[activeSlot]!!, totalStart, "full swap")?.let {
+        return activeSlot to it
       }
     }
 

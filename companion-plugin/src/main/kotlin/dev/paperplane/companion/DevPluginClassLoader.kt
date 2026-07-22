@@ -63,9 +63,9 @@ class DevPluginClassLoader(
 
   /**
    * Defines a brand-new class from bytes received over the socket — the instant tier's new-class
-   * path for when the build output is not visible on this loader's URLs (no shared filesystem
-   * with the CLI, e.g. a containerized server). Throws [LinkageError] if the name is already
-   * defined; callers treat that as a refusal.
+   * path for when the build output is not visible on this loader's URLs (no shared filesystem with
+   * the CLI, e.g. a containerized server). Throws [LinkageError] if the name is already defined;
+   * callers treat that as a refusal.
    */
   fun defineNew(fqcn: String, bytes: ByteArray): Class<*> =
       synchronized(getClassLoadingLock(fqcn)) { defineClass(fqcn, bytes, 0, bytes.size) }

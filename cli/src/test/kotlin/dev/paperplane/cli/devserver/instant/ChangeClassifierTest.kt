@@ -189,7 +189,8 @@ class ChangeClassifierTest {
   fun `a removed annotated method is UNSAFE`() {
     val old =
         BytecodeFixtures.generateClass(
-            methods = listOf(MethodSpec("tick"), MethodSpec("onJump", annotations = listOf(eventHandler)))
+            methods =
+                listOf(MethodSpec("tick"), MethodSpec("onJump", annotations = listOf(eventHandler)))
         )
     val new = BytecodeFixtures.generateClass(methods = listOf(MethodSpec("tick")))
 
@@ -447,5 +448,134 @@ class ChangeClassifierTest {
     assertEquals(RedefineRequirement.ADDITIVE, result.requirement)
     assertEquals(listOf("com.example.A"), result.patches.map { it.fqcn })
     assertEquals(listOf("com.example.New"), result.newClasses.map { it.fqcn })
+  }
+
+  // ── Run-once gates on ADDED members ─────────────────────────────────
+  //
+  // The JVM will happily define these; it will simply never call them. Only the retained-method
+  // branch used to gate them, so an addition slipped through as ADDITIVE and the CLI reported a
+  // patch that could not have taken effect.
+
+  @Test
+  fun `an added static initializer is UNSAFE`() {
+    val old = BytecodeFixtures.generateClass(name = "com/example/A")
+    val new =
+        BytecodeFixtures.generateClass(
+            name = "com/example/A",
+            methods = listOf(MethodSpec("<clinit>", "()V", Opcodes.ACC_STATIC)),
+        )
+
+    val result = classify(mapOf("com.example.A" to old), mapOf("com.example.A" to new))
+
+    assertEquals(RedefineRequirement.UNSAFE, result.requirement)
+    assertEquals(setOf(EscalationKind.CLINIT_BODY), kinds(result))
+  }
+
+  @Test
+  fun `an added lifecycle method on the plugin main class is UNSAFE`() {
+    val old = BytecodeFixtures.generateClass(name = "com/example/MainPlugin")
+    val new =
+        BytecodeFixtures.generateClass(
+            name = "com/example/MainPlugin",
+            methods = listOf(MethodSpec("onLoad")),
+        )
+
+    val result = classify(mapOf(mainClass to old), mapOf(mainClass to new))
+
+    assertEquals(RedefineRequirement.UNSAFE, result.requirement)
+    assertEquals(setOf(EscalationKind.LIFECYCLE_BODY), kinds(result))
+  }
+
+  // ── Run-once constructors ───────────────────────────────────────────
+
+  @Test
+  fun `a constructor body change on a singleton object is UNSAFE`() {
+    // The Kotlin `object` shape: a static final field of the class's own type, assigned once in
+    // <clinit>, so <init> can never run again.
+    fun singleton(body: (org.objectweb.asm.MethodVisitor) -> Unit) =
+        BytecodeFixtures.generateClass(
+            name = "com/example/Registry",
+            fields =
+                listOf(
+                    Triple(
+                        Opcodes.ACC_STATIC or Opcodes.ACC_FINAL,
+                        "INSTANCE",
+                        "Lcom/example/Registry;",
+                    )
+                ),
+            methods = listOf(MethodSpec("<init>", "()V", body = body)),
+        )
+
+    val result =
+        classify(
+            mapOf("com.example.Registry" to singleton(BytecodeFixtures.bodyReturning(1))),
+            mapOf("com.example.Registry" to singleton(BytecodeFixtures.bodyReturning(2))),
+        )
+
+    assertEquals(RedefineRequirement.UNSAFE, result.requirement)
+    assertEquals(setOf(EscalationKind.LIFECYCLE_BODY), kinds(result))
+  }
+
+  @Test
+  fun `a constructor body change on an ordinary class is BODY_ONLY`() {
+    fun ordinary(body: (org.objectweb.asm.MethodVisitor) -> Unit) =
+        BytecodeFixtures.generateClass(
+            name = "com/example/Session",
+            methods = listOf(MethodSpec("<init>", "()V", body = body)),
+        )
+
+    val result =
+        classify(
+            mapOf("com.example.Session" to ordinary(BytecodeFixtures.bodyReturning(1))),
+            mapOf("com.example.Session" to ordinary(BytecodeFixtures.bodyReturning(2))),
+        )
+
+    assertEquals(RedefineRequirement.BODY_ONLY, result.requirement)
+  }
+
+  // ── Unmodeled-delta backstop ────────────────────────────────────────
+
+  @Test
+  fun `bytes that differ in an unmodeled attribute escalate rather than reporting NONE`() {
+    // EnclosingMethod is not covered by any fingerprint here. The point of the test is not that
+    // attribute in particular — it stands in for "something the classifier does not model", which
+    // must never be reported to the user as "no code changes".
+    fun withOuter(outer: String?): ByteArray {
+      val cw = org.objectweb.asm.ClassWriter(0)
+      cw.visit(Opcodes.V21, Opcodes.ACC_PUBLIC, "com/example/A", null, "java/lang/Object", null)
+      if (outer != null) cw.visitOuterClass(outer, "run", "()V")
+      cw.visitEnd()
+      return cw.toByteArray()
+    }
+
+    val result =
+        classify(
+            mapOf("com.example.A" to withOuter(null)),
+            mapOf("com.example.A" to withOuter("com/example/Outer")),
+        )
+
+    assertEquals(RedefineRequirement.UNSAFE, result.requirement)
+    assertEquals(setOf(EscalationKind.UNMODELED_CHANGE), kinds(result))
+  }
+
+  @Test
+  fun `a debug-only difference is still NONE`() {
+    val old =
+        BytecodeFixtures.generateClass(
+            methods = listOf(MethodSpec("tick", body = BytecodeFixtures.bodyWithLineNumber(10)))
+        )
+    val new =
+        BytecodeFixtures.generateClass(
+            methods = listOf(MethodSpec("tick", body = BytecodeFixtures.bodyWithLineNumber(20)))
+        )
+
+    val result = classify(mapOf("com.example.Test" to old), mapOf("com.example.Test" to new))
+
+    assertEquals(
+        RedefineRequirement.NONE,
+        result.requirement,
+        "a comment edit that only shifts line numbers must stay a no-op, not a full swap",
+    )
+    assertTrue(result.escalations.isEmpty())
   }
 }

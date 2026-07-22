@@ -56,7 +56,8 @@ class HotReloadModeTriggerReloadTest {
   fun `JAR-fallback mode rebuilds the jar before staging even when it already exists`() {
     val (fixture, mode) = fixtureAndMode()
     createBuiltJar()
-    mode.cachedFastMeta = null // JAR fallback: the staged jar is the only thing the host loads.
+    // JAR fallback: no fast metadata, so the staged jar is the only thing the host loads.
+    fixture.gradle.nextMetadataFast = null
 
     mode.triggerReload(metadata)
 
@@ -67,7 +68,7 @@ class HotReloadModeTriggerReloadTest {
   fun `directory mode skips the jar build when the jar already exists`() {
     val (fixture, mode) = fixtureAndMode()
     createBuiltJar()
-    mode.cachedFastMeta = dirModeMeta()
+    fixture.gradle.nextMetadataFast = dirModeMeta()
 
     mode.triggerReload(metadata)
 
@@ -81,7 +82,7 @@ class HotReloadModeTriggerReloadTest {
   fun `directory mode still builds the jar when it is missing`() {
     val (fixture, mode) = fixtureAndMode()
     // No built jar on disk this time.
-    mode.cachedFastMeta = dirModeMeta()
+    fixture.gradle.nextMetadataFast = dirModeMeta()
 
     mode.triggerReload(metadata)
 

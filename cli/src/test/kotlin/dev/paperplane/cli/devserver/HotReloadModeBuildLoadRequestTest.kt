@@ -8,8 +8,8 @@ import org.junit.jupiter.api.Test
 
 /**
  * Pinpoint tests for the strategy-selection logic that decides what shape of [LoadRequest] the
- * companion receives on a full reload. (In-place redefinition left this path entirely — the
- * instant lane runs before any reload — so only two strategies remain.)
+ * companion receives on a full reload. (In-place redefinition left this path entirely — the instant
+ * lane runs before any reload — so only two strategies remain.)
  *
  * Two strategies map to two contract guarantees:
  * - JAR fallback: classesDirs is empty (host MUST load from the staged JAR).

@@ -15,7 +15,6 @@ import dev.paperplane.cli.plugins.atomicMoveOrFallback
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import java.io.IOException
-import java.util.UUID
 
 open class PaperServerManager(
     val serverDir: File,
@@ -31,8 +30,6 @@ open class PaperServerManager(
     private const val SIGTERM_TIMEOUT_SECONDS = 5L
     private const val FORCE_STOP_TIMEOUT_SECONDS = 2L
     private const val SAVE_TIMEOUT_MS = 10_000L
-    /** Highest vanilla op permission level — full command access on the dev server. */
-    private const val OP_PERMISSION_LEVEL = 4
     private const val SERVER_READY_TIMEOUT_MS = 120_000L
 
     /**
@@ -123,8 +120,8 @@ open class PaperServerManager(
         serverConfig.paperWorldDefaults,
     )
     val banned = serverConfig.opBanlist.toSet()
-    writeOpsJson(serverConfig.ops.filter { it !in banned })
-    writeOpBanlist(serverConfig.opBanlist)
+    OpsFiles.writeOps(serverDir, serverConfig.ops.filter { it !in banned })
+    OpsFiles.writeBanlist(serverDir, serverConfig.opBanlist)
   }
 
   /**
@@ -138,63 +135,11 @@ open class PaperServerManager(
   }
 
   /**
-   * Writes `ops.json` if [names] is non-empty. Uses offline-mode UUIDs (deterministic from name)
-   * since the dev server runs with `online-mode=false`. PaperPlane's companion plugin also auto-ops
-   * joining players at runtime — this list seeds known ops across fresh server directories.
-   */
-  private fun writeOpsJson(names: List<String>) {
-    val opsFile = File(serverDir, "ops.json")
-    if (names.isEmpty()) {
-      opsFile.delete() // idempotent — no exists() pre-check
-      return
-    }
-    val entries = names.map { name ->
-      mapOf(
-          "uuid" to offlineUuid(name).toString(),
-          "name" to name,
-          "level" to OP_PERMISSION_LEVEL,
-          "bypassesPlayerLimit" to false,
-      )
-    }
-    opsFile.writeText(gson.toJson(entries))
-  }
-
-  /**
-   * Writes the op banlist to `.paperplane/op-banlist.json` as a JSON array of names. The companion
-   * plugin reads this file on join events and skips auto-opping any listed name. Also consulted by
-   * the CLI's reverse-sync to keep banned names out of `paperplane.yml`.
-   */
-  private fun writeOpBanlist(names: List<String>) {
-    val statusDir = File(serverDir, ".paperplane").apply { mkdirs() }
-    val file = File(statusDir, "op-banlist.json")
-    if (names.isEmpty()) {
-      file.delete()
-      return
-    }
-    file.writeText(gson.toJson(names))
-  }
-
-  /** Deterministic UUID that Minecraft uses for offline-mode players. */
-  private fun offlineUuid(name: String): UUID =
-      UUID.nameUUIDFromBytes("OfflinePlayer:$name".toByteArray(Charsets.UTF_8))
-
-  /**
    * Reads current op names from `ops.json` in this server's directory. Returns an empty list if the
    * file is missing or malformed. Used for reverse-sync of auto-opped players back into
    * `paperplane.yml`.
    */
-  fun readOpNames(): List<String> {
-    return try {
-      @Suppress("UNCHECKED_CAST")
-      val arr =
-          gson.fromJson(File(serverDir, "ops.json").readText(), List::class.java)
-              as? List<Map<String, Any>>
-      arr?.mapNotNull { it["name"] as? String } ?: emptyList()
-    } catch (_: Exception) {
-      // ops.json missing, unreadable, or malformed — treat as no ops.
-      emptyList()
-    }
-  }
+  fun readOpNames(): List<String> = OpsFiles.readOpNames(serverDir)
 
   open fun configureVelocityForwarding(secret: String) {
     val paperConfigDir = File(serverDir, ServerConfigs.PAPER_CONFIG_DIR).apply { mkdirs() }
@@ -314,7 +259,10 @@ open class PaperServerManager(
    */
   fun extractAgent(): File {
     val agentJar = File(serverDir, ".paperplane/paperplane-agent.jar")
-    if (agentJar.exists()) return agentJar
+    // Always re-extract, exactly like copyCompanion. The agent's contract moves with the CLI (the
+    // CRC registry the instant tier verifies against lives in it), and a jar left by an older ppl
+    // still satisfies the "agent present" probe — so the tier would advertise itself and then
+    // refuse every patch with "no load record" until someone ran `ppl clean`.
     agentJar.parentFile.mkdirs()
     extractResource("paperplane-agent.bin", agentJar)
     return agentJar

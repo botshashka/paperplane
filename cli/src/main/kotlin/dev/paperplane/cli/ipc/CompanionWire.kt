@@ -86,24 +86,22 @@ internal object CompanionWire {
         } catch (_: JsonParseException) {
           return null
         }
-    return when (obj.get("type")?.takeIf { it.isJsonPrimitive }?.asString) {
+    return when (obj.str("type")) {
       TYPE_WELCOME -> {
         val capabilities = obj.get("capabilities")?.takeIf { it.isJsonObject }?.asJsonObject
         CompanionEvent.Welcome(
-            protocolVersion = obj.get("protocolVersion")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0,
-            serverReady = obj.get("serverReady")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false,
-            agent =
-                capabilities?.get("agent")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false,
-            enhanced =
-                capabilities?.get("enhanced")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false,
+            protocolVersion = obj.int("protocolVersion"),
+            serverReady = obj.bool("serverReady"),
+            agent = capabilities.bool("agent"),
+            enhanced = capabilities.bool("enhanced"),
         )
       }
       TYPE_READY -> CompanionEvent.Ready
       TYPE_SAVE_COMPLETE -> CompanionEvent.SaveComplete
       TYPE_LOAD_PROGRESS ->
           CompanionEvent.LoadProgress(
-              requestId = obj.get("requestId")?.takeIf { it.isJsonPrimitive }?.asString ?: "",
-              stage = obj.get("stage")?.takeIf { it.isJsonPrimitive }?.asString ?: "",
+              requestId = obj.str("requestId") ?: "",
+              stage = obj.str("stage") ?: "",
           )
       TYPE_REPORT ->
           try {
@@ -120,6 +118,18 @@ internal object CompanionWire {
       else -> null
     }
   }
+
+  // Typed accessors over a possibly-absent, possibly-wrong-typed field. A companion one version
+  // ahead or behind must degrade to the default rather than throw — the reader logs and skips, so
+  // an exception here would take down a session over a field it doesn't even use.
+  private fun JsonObject?.str(name: String): String? =
+      this?.get(name)?.takeIf { it.isJsonPrimitive }?.asString
+
+  private fun JsonObject?.int(name: String, default: Int = 0): Int =
+      this?.get(name)?.takeIf { it.isJsonPrimitive }?.asInt ?: default
+
+  private fun JsonObject?.bool(name: String, default: Boolean = false): Boolean =
+      this?.get(name)?.takeIf { it.isJsonPrimitive }?.asBoolean ?: default
 }
 
 /** One decoded companion→CLI message. See [CompanionWire] for the full wire contract. */

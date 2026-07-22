@@ -4,7 +4,6 @@ import dev.paperplane.cli.devserver.DevSession.RunningState
 import dev.paperplane.cli.devserver.DevSession.StartupOutcome
 import dev.paperplane.cli.devserver.instant.BaselineTracker
 import dev.paperplane.cli.devserver.instant.InstantLane
-import dev.paperplane.cli.devserver.instant.InstantOutcome
 import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.ipc.CompanionWire
@@ -140,9 +139,8 @@ internal open class RestartMode(
 
   /**
    * The instant lane runs first, against the *live* server — the whole point is skipping the
-   * stop/boot cycle, so the server must not be stopped until the lane has decided to fall
-   * through. [forceFullSwap] is the manual escape hatch: skip the lane, restart on the current
-   * build.
+   * stop/boot cycle, so the server must not be stopped until the lane has decided to fall through.
+   * [forceFullSwap] is the manual escape hatch: skip the lane, restart on the current build.
    */
   internal fun rebuild(
       metadata: ProjectMetadata,
@@ -152,18 +150,8 @@ internal open class RestartMode(
     val totalStart = System.currentTimeMillis()
 
     if (!forceFullSwap) {
-      when (val outcome = lane.attempt(serverManager, metadata, baseline)) {
-        is InstantOutcome.Patched -> {
-          lane.reportPatched(serverManager, outcome, totalStart)
-          return PhaseEnd.Watching
-        }
-        InstantOutcome.NoChange -> {
-          lane.reportNoChange(serverManager)
-          return PhaseEnd.Watching
-        }
-        InstantOutcome.CompileFailed -> return PhaseEnd.Waiting
-        is InstantOutcome.Escalate ->
-            outcome.reason?.let { session.ui.info("Instant:", "$it — full restart") }
+      lane.runOrEscalate(serverManager, metadata, baseline, totalStart, "full restart")?.let {
+        return it
       }
     }
 

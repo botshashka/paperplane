@@ -145,8 +145,17 @@ class ProtocolLogReplayTest {
         sends.filter { it.get("type")?.asString == "status" }.map { it.get("state").asString }
     assertEquals(
         listOf(
-            "ready", "building", "ready", "building", "ready", "building", "ready", "building",
-            "ready", "building", "ready",
+            "ready",
+            "building",
+            "ready",
+            "building",
+            "ready",
+            "building",
+            "ready",
+            "building",
+            "ready",
+            "building",
+            "ready",
         ),
         states,
     )

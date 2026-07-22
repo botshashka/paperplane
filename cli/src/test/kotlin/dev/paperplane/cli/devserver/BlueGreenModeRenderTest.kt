@@ -360,8 +360,7 @@ class BlueGreenModeRenderTest {
         "the recovered server must NOT merely stage the jar — that booted it without the plugin",
     )
     assertTrue(
-        blue.launchSpecs.isNotEmpty() &&
-            blue.launchSpecs.all { it == fixture.session.launchSpec },
+        blue.launchSpecs.isNotEmpty() && blue.launchSpecs.all { it == fixture.session.launchSpec },
         "the recovered server must launch with the session LaunchSpec; got ${blue.launchSpecs}",
     )
   }

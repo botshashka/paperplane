@@ -24,8 +24,7 @@ object RedefineCapabilities {
   ): Capability {
     val agent = instrumentation != null
     val jbr =
-        vendor.contains("JetBrains", ignoreCase = true) ||
-            vmName.contains("JBR", ignoreCase = true)
+        vendor.contains("JetBrains", ignoreCase = true) || vmName.contains("JBR", ignoreCase = true)
     val flagged = inputArguments.any { it == ENHANCED_FLAG }
     return Capability(agent = agent, enhanced = agent && jbr && flagged)
   }

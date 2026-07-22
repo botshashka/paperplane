@@ -12,8 +12,8 @@ package dev.paperplane.cli.devserver.instant
  * would start refusing real patches if we pretended otherwise. A missed confirmation therefore
  * degrades to a refusal (safe direction), never to a silent mispatch.
  *
- * One tracker per server JVM — blue-green holds one per slot; a server death ([reset]) discards
- * the baseline until the replacement's first confirmed load reseeds it.
+ * One tracker per server JVM — blue-green holds one per slot; a server death ([reset]) discards the
+ * baseline until the replacement's first confirmed load reseeds it.
  */
 class BaselineTracker {
   var baseline: BuildCandidate? = null

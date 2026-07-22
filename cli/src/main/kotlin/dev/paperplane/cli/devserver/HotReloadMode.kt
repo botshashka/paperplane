@@ -4,7 +4,6 @@ import dev.paperplane.cli.devserver.DevSession.RunningState
 import dev.paperplane.cli.devserver.DevSession.StartupOutcome
 import dev.paperplane.cli.devserver.instant.BaselineTracker
 import dev.paperplane.cli.devserver.instant.InstantLane
-import dev.paperplane.cli.devserver.instant.InstantOutcome
 import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.ipc.CompanionWire
@@ -80,11 +79,6 @@ internal open class HotReloadMode(
         !builtJarExists || fastMeta == null || fastMeta.classesDir.isEmpty()
   }
 
-  // Fast-path metadata (classes dirs for directory reloads), fetched once. Internal so tests
-  // can seed it to exercise the JAR-fallback vs directory decision in [triggerReload].
-  internal var cachedFastMeta: ProjectMetadata? = null
-
-  // The instant fast lane and its confirmed-loaded baseline. Internal so tests can seed/inspect.
   internal val lane = InstantLane(session)
   internal val baseline = BaselineTracker()
 
@@ -246,41 +240,36 @@ internal open class HotReloadMode(
    */
   internal fun rebuild(metadata: ProjectMetadata, forceFullSwap: Boolean = false): PhaseEnd {
     val totalStart = System.currentTimeMillis()
-    if (cachedFastMeta == null) cachedFastMeta = session.gradle.metadataFast().metadataOrNull
 
-    // A failed leak-restart left the server deliberately down. There's no live server to patch or
-    // to answer a reload request, so compile and cold-start instead — this successful build is the
-    // fix that lets it come back up.
-    if (serverDownAwaitingFix) {
-      if (!compileAndReport()) return PhaseEnd.Waiting
-      return restartAfterAwaitingFix(metadata)
+    laneSkippingRebuild(metadata, totalStart, forceFullSwap)?.let {
+      return it
     }
-
-    if (forceFullSwap) {
-      if (!compileAndReport()) return PhaseEnd.Waiting
-      return fullReload(metadata, totalStart)
+    lane.runOrEscalate(serverManager, metadata, baseline, totalStart, "full reload")?.let {
+      return it
     }
-
-    return when (val outcome = lane.attempt(serverManager, metadata, baseline)) {
-      is InstantOutcome.Patched -> {
-        lane.reportPatched(serverManager, outcome, totalStart)
-        PhaseEnd.Watching
-      }
-      InstantOutcome.NoChange -> {
-        lane.reportNoChange(serverManager)
-        PhaseEnd.Watching
-      }
-      InstantOutcome.CompileFailed -> PhaseEnd.Waiting
-      is InstantOutcome.Escalate -> {
-        outcome.reason?.let { session.ui.info("Instant:", "$it — full reload") }
-        fullReload(metadata, totalStart)
-      }
-    }
+    return fullReload(metadata, totalStart)
   }
 
   /**
-   * The lane-skipping paths' compile step (awaiting-fix cold start, manual full swap) — same
-   * output shape the lane emits on its own compile.
+   * The two paths that bypass the lane, or null when the lane should run. A failed leak-restart
+   * left the server deliberately down — there's no live server to patch or to answer a reload
+   * request, so compile and cold-start instead; this successful build is the fix that lets it come
+   * back up. [forceFullSwap] is the manual escape hatch.
+   */
+  private fun laneSkippingRebuild(
+      metadata: ProjectMetadata,
+      totalStart: Long,
+      forceFullSwap: Boolean,
+  ): PhaseEnd? {
+    if (!serverDownAwaitingFix && !forceFullSwap) return null
+    if (!compileAndReport()) return PhaseEnd.Waiting
+    return if (serverDownAwaitingFix) restartAfterAwaitingFix(metadata)
+    else fullReload(metadata, totalStart)
+  }
+
+  /**
+   * The lane-skipping paths' compile step (awaiting-fix cold start, manual full swap) — same output
+   * shape the lane emits on its own compile.
    */
   private fun compileAndReport(): Boolean {
     serverManager.sendCompanionStatus(CompanionWire.STATE_BUILDING)
@@ -310,14 +299,15 @@ internal open class HotReloadMode(
     // `classes`, not `jar`, so (re)build the artifact whenever the host will actually load it —
     // otherwise a stale first-build JAR is staged and the reload silently runs old code. See
     // [needsJarBuild].
+    val fastMeta = session.fastMetadata()
     val builtJar = File(session.projectDir, metadata.jarPath)
-    if (needsJarBuild(cachedFastMeta, builtJar.exists())) session.gradle.build()
+    if (needsJarBuild(fastMeta, builtJar.exists())) session.gradle.build()
     val stagedJarPath = serverManager.stagePlugin(builtJar)
 
     val request =
         buildLoadRequest(
             metadata,
-            cachedFastMeta,
+            fastMeta,
             stagedJarPath,
             session.leakDiagnosticsWireValue(),
         )

@@ -16,9 +16,9 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 
 /**
- * The instant lane's contract with each dev mode's rebuild: a patched cycle must never pay for
- * the mode's swap machinery (restart must not stop the server; blue-green must not save the world
- * or touch the standby; hot-reload must not send a load request), and the manual escape hatch
+ * The instant lane's contract with each dev mode's rebuild: a patched cycle must never pay for the
+ * mode's swap machinery (restart must not stop the server; blue-green must not save the world or
+ * touch the standby; hot-reload must not send a load request), and the manual escape hatch
  * ([forceFullSwap]) must skip the lane entirely and run the mode's full path.
  */
 class InstantModeIntegrationTest {
@@ -108,7 +108,8 @@ class InstantModeIntegrationTest {
     val mode =
         BlueGreenMode(
             session = fixture.session,
-            servers = mapOf(BlueGreenMode.Slot.SERVER to active, BlueGreenMode.Slot.SWAP to standby),
+            servers =
+                mapOf(BlueGreenMode.Slot.SERVER to active, BlueGreenMode.Slot.SWAP to standby),
             velocityDownloader = FakeVelocityDownloader(File(fixture.ppDir, "cache")),
             velocityManager = FakeVelocityManager(File(fixture.ppDir, "proxy"), fixture.ui),
         )

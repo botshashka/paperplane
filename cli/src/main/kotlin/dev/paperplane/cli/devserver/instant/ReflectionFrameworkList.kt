@@ -5,8 +5,8 @@ import dev.paperplane.cli.gradle.ProjectMetadata
 /**
  * Curated list of frameworks known to discover plugin methods reflectively by naming convention,
  * scanned once and cached — the one silent-staleness residual the classifier's annotation rule
- * cannot see (an *unannotated* added method that such a framework would have picked up at scan
- * time stays invisible forever after a redefine).
+ * cannot see (an *unannotated* added method that such a framework would have picked up at scan time
+ * stays invisible forever after a redefine).
  *
  * When one is present, the instant tier's capability is capped to [RedefineCapability.BODY_ONLY]
  * for the session: body edits stay instant, structural admission is off. The list is deliberately
@@ -19,8 +19,7 @@ object ReflectionFrameworkList {
 
   /**
    * The display name of the first matched framework, or null. Matches against dependency-plugin
-   * names ([ProjectMetadata.depend]/[ProjectMetadata.softdepend]) and runtime-classpath jar
-   * paths.
+   * names ([ProjectMetadata.depend]/[ProjectMetadata.softdepend]) and runtime-classpath jar paths.
    */
   fun match(metadata: ProjectMetadata): String? {
     val haystacks =

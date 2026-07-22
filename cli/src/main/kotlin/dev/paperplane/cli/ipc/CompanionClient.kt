@@ -87,8 +87,8 @@ internal class CompanionClient(
     private set
 
   /**
-   * The live JVM's redefine capability, from the welcome handshake. [RedefineCapability.NONE]
-   * until authenticated — an unreachable server can't patch anything.
+   * The live JVM's redefine capability, from the welcome handshake. [RedefineCapability.NONE] until
+   * authenticated — an unreachable server can't patch anything.
    */
   @Volatile
   var capability: RedefineCapability = RedefineCapability.NONE

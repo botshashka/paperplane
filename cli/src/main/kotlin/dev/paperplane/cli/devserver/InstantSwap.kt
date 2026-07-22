@@ -5,8 +5,8 @@ import dev.paperplane.cli.devserver.instant.ClassPatch
 import java.util.Base64
 
 /**
- * CLI→companion instant-patch request (`instantSwap` wire message): redefine [classes] in place
- * and make [newClasses] loadable, atomically — or refuse. Class bytes travel on the wire (base64)
+ * CLI→companion instant-patch request (`instantSwap` wire message): redefine [classes] in place and
+ * make [newClasses] loadable, atomically — or refuse. Class bytes travel on the wire (base64)
  * rather than as filesystem paths: payloads are small (changed classes only) and the message stays
  * valid when the server has no shared filesystem (the future containerized Fresh engine).
  *
@@ -41,12 +41,20 @@ internal data class InstantClassEntry(
     val data: String = "",
 )
 
-/** Companion→CLI answer to an [InstantSwapRequest] (`instantReport` wire message). */
+/**
+ * Companion→CLI answer to an [InstantSwapRequest] (`instantReport` wire message).
+ *
+ * [appliedClasses] names every class the companion confirmed is now running the requested bytes.
+ * The baseline advances for exactly these — never for everything requested, because the companion
+ * can legitimately skip a class (an already-loaded "new" class, for one), and advancing past a skip
+ * would leave the CLI vouching for bytes the server never took.
+ */
 internal data class InstantSwapReport(
     val requestId: String = "",
     val status: InstantSwapStatus? = null,
     val patched: Int = 0,
     val defined: Int = 0,
+    val appliedClasses: List<String> = emptyList(),
     val reason: String? = null,
     val durationMs: Long = 0,
 )

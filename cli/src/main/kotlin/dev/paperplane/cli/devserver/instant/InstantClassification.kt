@@ -3,10 +3,10 @@ package dev.paperplane.cli.devserver.instant
 /**
  * One class the fast lane wants to redefine (or define, for new classes) in the live server.
  *
- * [expectedLoadedCrc32] is the CRC32 of the bytes the CLI believes the server is currently
- * running (the baseline); the companion verifies it against the actually-loaded bytes before
- * redefining, so CLI-state drift is a refusal, never a silent mispatch. Zero for new classes
- * (nothing is loaded yet).
+ * [expectedLoadedCrc32] is the CRC32 of the bytes the CLI believes the server is currently running
+ * (the baseline); the companion verifies it against the actually-loaded bytes before redefining, so
+ * CLI-state drift is a refusal, never a silent mispatch. Zero for new classes (nothing is loaded
+ * yet).
  */
 class ClassPatch(
     val fqcn: String,
@@ -15,9 +15,9 @@ class ClassPatch(
 )
 
 /**
- * Why a change-set cannot be patched in place. Every UNSAFE verdict carries at least one of
- * these; the first is surfaced to the user verbatim ("Instant: <description> — full swap"), which
- * is the honest-reporting half of the lifecycle gate: the tool always says *why* it escalated.
+ * Why a change-set cannot be patched in place. Every UNSAFE verdict carries at least one of these;
+ * the first is surfaced to the user verbatim ("Instant: <description> — full swap"), which is the
+ * honest-reporting half of the lifecycle gate: the tool always says *why* it escalated.
  */
 enum class EscalationKind {
   /** New method carrying any annotation — registration-driven frameworks would never see it. */
@@ -29,7 +29,9 @@ enum class EscalationKind {
   /** Access/exceptions/annotations changed on a retained method (e.g. @EventHandler priority). */
   METHOD_DECLARATION_CHANGED,
 
-  /** onEnable/onDisable/onLoad body changed on the plugin main class — already ran, never reruns. */
+  /**
+   * onEnable/onDisable/onLoad body changed on the plugin main class — already ran, never reruns.
+   */
   LIFECYCLE_BODY,
 
   /** Static initializer body changed — runs exactly once per class, ever. */
@@ -52,6 +54,12 @@ enum class EscalationKind {
 
   /** Bytes on one side failed to parse — refuse to vouch for anything. */
   UNPARSEABLE_CLASS,
+
+  /**
+   * The bytes differ but every modelled fingerprint matched — some attribute this classifier
+   * doesn't understand changed. The whitelist backstop: unrecognized means escalate, never NONE.
+   */
+  UNMODELED_CHANGE,
 }
 
 /** A single named escalation reason; [description] is user-facing and self-contained. */

@@ -109,8 +109,17 @@ class ProtocolLogReplayTest {
       // instant patch, reload, instant patch, no-change).
       assertEquals(
           listOf(
-              "ready", "building", "ready", "building", "ready", "building", "ready", "building",
-              "ready", "building", "ready",
+              "ready",
+              "building",
+              "ready",
+              "building",
+              "ready",
+              "building",
+              "ready",
+              "building",
+              "ready",
+              "building",
+              "ready",
           ),
           statuses.map { it.state },
       )
