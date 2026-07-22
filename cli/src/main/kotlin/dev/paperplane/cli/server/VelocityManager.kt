@@ -54,7 +54,12 @@ open class VelocityManager(private val proxyDir: File, private val ui: TerminalU
             tcp-fast-open = false
             bungee-plugin-message-channel = true
             show-ping-requests = false
-            failover-on-unexpected-server-disconnect = true
+            # The instant tier patches only the ACTIVE backend, so the standby runs however many
+            # patches behind until the next full swap. Velocity's own failover would walk `try` and
+            # silently land players on that stale backend when the active dies — the exact
+            # silent-staleness this tier exists to prevent. Routing goes through ReconnectPlugin's
+            # explicit activeServer choice instead, and a dev-server crash stays visible.
+            failover-on-unexpected-server-disconnect = false
 
             [query]
             enabled = false
