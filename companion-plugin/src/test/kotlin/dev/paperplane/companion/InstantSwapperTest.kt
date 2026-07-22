@@ -27,6 +27,7 @@ class InstantSwapperTest {
   @TempDir lateinit var tempDir: File
 
   private val crcRegistry = mutableMapOf<Pair<ClassLoader, String>, Long>()
+  private val patchedClasses = mutableSetOf<Pair<ClassLoader, String>>()
 
   private fun generateClass(internalName: String, marker: Int): ByteArray {
     val cw = ClassWriter(0)
@@ -62,7 +63,11 @@ class InstantSwapperTest {
           loadedCrcProvider = { loader, name ->
             crcRegistry[loader to name] ?: AgentAccess.UNKNOWN_CRC
           },
-          crcUpdater = { loader, name, crc -> crcRegistry[loader to name] = crc },
+          wasPatchedProvider = { loader, name -> (loader to name) in patchedClasses },
+          crcUpdater = { loader, name, crc ->
+            crcRegistry[loader to name] = crc
+            patchedClasses.add(loader to name)
+          },
       )
 
   private fun patchRequest(fqcn: String, expectedCrc: Long, newBytes: ByteArray) =
@@ -111,6 +116,69 @@ class InstantSwapperTest {
     val refused = assertInstanceOf(InstantSwapper.Outcome.Refused::class.java, outcome)
     assertTrue(refused.reason.contains("baseline drift"), refused.reason)
     assertTrue(inst.redefined.isEmpty(), "a refused request must touch nothing")
+  }
+
+  @Test
+  fun `a define-time transform admits when the loader's source bytes match the baseline`() {
+    // Native Paper loading: Commodore re-encodes every legacy-plugin class between jar and
+    // defineClass, so the agent's define record never equals the build CRC. The loader's raw
+    // source bytes are the pre-transform truth.
+    val fqcn = "com.example.Patch"
+    val v1 = generateClass("com/example/Patch", 1) // the baseline build — on disk for the loader
+    val transformed = generateClass("com/example/Patch", 99) // what the server actually defined
+    val v2 = generateClass("com/example/Patch", 2)
+    val loader = loaderWith(fqcn, v1)
+    crcRegistry[loader to fqcn] = crc(transformed)
+    val inst = FakeInstrumentation()
+
+    val outcome = swapper(inst).apply(patchRequest(fqcn, crc(v1), v2), loader)
+
+    val applied = assertInstanceOf(InstantSwapper.Outcome.Applied::class.java, outcome)
+    assertEquals(1, applied.patched)
+    assertTrue(inst.redefined.single().definitionClassFile.contentEquals(v2))
+  }
+
+  @Test
+  fun `a patched class never falls back to the source check`() {
+    // Once a patch landed, the loader's jar/dir no longer describes what's running — only the
+    // patch record may vouch. A stale CLI baseline that happens to match the on-disk source must
+    // still refuse.
+    val fqcn = "com.example.Patch"
+    val v1 = generateClass("com/example/Patch", 1)
+    val patchedLive = generateClass("com/example/Patch", 3)
+    val v2 = generateClass("com/example/Patch", 2)
+    val loader = loaderWith(fqcn, v1)
+    crcRegistry[loader to fqcn] = crc(patchedLive)
+    patchedClasses.add(loader to fqcn)
+    val inst = FakeInstrumentation()
+
+    val outcome = swapper(inst).apply(patchRequest(fqcn, crc(v1), v2), loader)
+
+    val refused = assertInstanceOf(InstantSwapper.Outcome.Refused::class.java, outcome)
+    assertTrue(refused.reason.contains("baseline drift"), refused.reason)
+    assertTrue(inst.redefined.isEmpty(), "a refused request must touch nothing")
+  }
+
+  @Test
+  fun `a loader that serves no source bytes refuses on define mismatch`() {
+    val fqcn = "com.example.Hidden"
+    val v1 = generateClass("com/example/Hidden", 1)
+    val transformed = generateClass("com/example/Hidden", 99)
+    val v2 = generateClass("com/example/Hidden", 2)
+    // Defines the class but exposes no .class resource — the source check has nothing to verify.
+    val loader =
+        object : ClassLoader(null) {
+          override fun findClass(name: String): Class<*> =
+              if (name == fqcn) defineClass(name, v1, 0, v1.size)
+              else throw ClassNotFoundException(name)
+        }
+    crcRegistry[loader to fqcn] = crc(transformed)
+    val inst = FakeInstrumentation()
+
+    val outcome = swapper(inst).apply(patchRequest(fqcn, crc(v1), v2), loader)
+
+    val refused = assertInstanceOf(InstantSwapper.Outcome.Refused::class.java, outcome)
+    assertTrue(refused.reason.contains("baseline drift"), refused.reason)
   }
 
   @Test

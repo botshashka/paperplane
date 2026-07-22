@@ -128,6 +128,26 @@ class PaperPlaneAgentTest {
     }
 
     @Test
+    void patchRecordsWinOverDefineRecordsAndFlagWasPatched() throws Exception {
+        PaperPlaneAgent.premain(null, mockInstrumentation());
+        ClassFileTransformer recorder = registered.get(0);
+        ClassLoader loader = new URLClassLoader(new URL[0], null);
+        byte[] defined = {1, 2, 3, 4};
+
+        recorder.transform((Module) null, loader, "com/example/Foo", null, null, defined);
+        assertFalse(PaperPlaneAgent.wasPatched(loader, "com.example.Foo"),
+                "a plain define is not a patch");
+
+        PaperPlaneAgent.updateCrc(loader, "com.example.Foo", 42L);
+
+        assertEquals(42L, PaperPlaneAgent.getLoadedCrc(loader, "com.example.Foo"),
+                "the patch record describes what's running now");
+        assertTrue(PaperPlaneAgent.wasPatched(loader, "com.example.Foo"));
+        assertFalse(PaperPlaneAgent.wasPatched(loader, "com.example.Other"));
+        assertFalse(PaperPlaneAgent.wasPatched(null, "com.example.Foo"));
+    }
+
+    @Test
     void registryIsScopedPerLoader() {
         ClassLoader a = new URLClassLoader(new URL[0], null);
         ClassLoader b = new URLClassLoader(new URL[0], null);

@@ -62,13 +62,26 @@ and verified application.
 - **The companion verifies before applying.** The verification ground truth
   is the agent's **load-hook CRC registry**: the premain registers a
   `ClassFileTransformer` that records the CRC32 of the exact bytes each
-  classloader defines, and successful patches update it. (Retransform-based
-  capture was tried first and failed against a live server: HotSpot hands
-  retransformers a *reconstituted* class file whose constant-pool encoding
-  differs from the loaded original.) A CRC mismatch — CLI state drift, a
-  remapped jar, anything — refuses the whole request with the reason; the
-  JVM's own `UnsupportedOperationException`/`UnmodifiableClassException`
-  remains the final backstop. `redefineClasses` is one atomic batch;
+  classloader defines, and successful patches are recorded separately.
+  (Retransform-based capture was tried first and failed against a live
+  server: HotSpot hands retransformers a *reconstituted* class file whose
+  constant-pool encoding differs from the loaded original.) Natively loaded
+  plugins never match the build CRC literally: Paper's Commodore
+  compatibility pass re-encodes every legacy-plugin class between jar and
+  `defineClass` — independent of the remap the manifest stamp skips — so the
+  define record alone would refuse every native patch as drift (found live:
+  restart and blue-green escalated every body edit until this was accounted
+  for). A define-record mismatch therefore falls back to the defining
+  loader's **raw source bytes** — its own jar/dir entry, read pre-transform
+  via `findResource`, where a `URLClassLoader`'s open jar handle serves what
+  the loader actually defines from even if the file on disk was replaced —
+  and admits iff those match the baseline. A class patched in place must
+  match its patch record exactly; its source no longer describes what's
+  running, so it never takes the fallback. Any remaining mismatch — CLI
+  state drift, a remapped jar, anything — refuses the whole request with the
+  reason; the JVM's own
+  `UnsupportedOperationException`/`UnmodifiableClassException` remains the
+  final backstop. `redefineClasses` is one atomic batch;
   changed-but-unloaded classes are force-loaded (uninitialized) first so a
   jar-backed loader's stale bytes can't resurrect later.
 - **New classes** load through the plugin's own loader: directory-backed dev
@@ -82,8 +95,10 @@ and verified application.
   server start in every mode and recovery path — no code path can silently
   produce a server the lane can't patch. The gradle-plugin stamps
   `paperweight-mappings-namespace: mojang` into plugin jars so Paper 1.20.5+
-  skips its load-time remap and native-mode loaded bytes stay byte-identical
-  to the build output.
+  skips its load-time remap, keeping the loader's source jar byte-identical
+  to the build output — the source-bytes verification depends on exactly
+  that (an unstamped jar gets remapped, its source bytes stop matching the
+  baseline, and every patch honestly refuses).
 - **Honest reporting is the contract:** every rebuild ends in exactly one of
   "Patched N classes (instant)", "Instant: <named reason> — full swap", or
   "No code changes"; a session-start banner reports the tier ceiling and why

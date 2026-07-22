@@ -22,8 +22,11 @@ import java.util.zip.CRC32
  * the CLI diffed against. The verification source is the agent's load-hook CRC registry
  * ([AgentAccess.loadedCrc]): the filesystem is already overwritten by verify time, and
  * retransform-capture is byte-unfaithful (HotSpot reconstitutes class files for retransformers),
- * so the bytes recorded at definition time are the only truthful record. Any mismatch refuses the
- * whole request. The JVM's own [UnmodifiableClassException]/[UnsupportedOperationException] veto
+ * so the bytes recorded at definition time are the only truthful record. Natively loaded plugins
+ * never match literally — Paper's compatibility pass (Commodore) re-encodes every legacy-plugin
+ * class between jar and defineClass — so a define-record mismatch falls back to comparing the
+ * defining loader's raw source bytes against the baseline; patched classes must match their patch
+ * record exactly. Any mismatch refuses the whole request. The JVM's own [UnmodifiableClassException]/[UnsupportedOperationException] veto
  * stays as the final backstop, and `redefineClasses` is all-or-nothing, so a failure never leaves
  * half a patch applied. (New classes made loadable before a vetoed redefine remain defined but
  * unreferenced — old code never names them — so that residue is inert.)
@@ -33,6 +36,7 @@ class InstantSwapper(
     private val overlayDir: File,
     private val instrumentationProvider: () -> Instrumentation? = { AgentAccess.instrumentation() },
     private val loadedCrcProvider: (ClassLoader, String) -> Long = AgentAccess::loadedCrc,
+    private val wasPatchedProvider: (ClassLoader, String) -> Boolean = AgentAccess::wasPatched,
     private val crcUpdater: (ClassLoader, String, Long) -> Unit = AgentAccess::updateCrc,
 ) {
   sealed class Outcome {
@@ -88,14 +92,25 @@ class InstantSwapper(
         crc32(newBytes) -> alreadyCurrent++
         entry.expectedCrc32 -> definitions += ClassDefinition(cls, newBytes)
         else -> {
-          logger.fine(
-              "Instant verify mismatch on ${entry.fqcn}: loaded=$loadedCrc " +
-                  "expected=${entry.expectedCrc32} new=${crc32(newBytes)}"
-          )
-          return Outcome.Refused(
-              "baseline drift on ${entry.fqcn} — the server is not running the bytes " +
-                  "the CLI diffed against"
-          )
+          // The defined bytes don't literally match the CLI's baseline. That is expected for
+          // natively loaded plugins: Paper's compatibility pass (Commodore) re-encodes every
+          // legacy-plugin class at define time, so the define CRC never equals the build CRC.
+          // The loader's own resource bytes are pre-transform — if THEY match the baseline, the
+          // running class is verifiably derived from it. Never applies to a patched class: its
+          // source no longer describes what's running, so only the patch record may vouch.
+          val sourceCrc = sourceCrc(definingLoader, entry.fqcn)
+          if (wasPatchedProvider(definingLoader, entry.fqcn) ||
+              sourceCrc != entry.expectedCrc32) {
+            logger.fine(
+                "Instant verify mismatch on ${entry.fqcn}: loaded=$loadedCrc " +
+                    "expected=${entry.expectedCrc32} source=$sourceCrc new=${crc32(newBytes)}"
+            )
+            return Outcome.Refused(
+                "baseline drift on ${entry.fqcn} — the server is not running the bytes " +
+                    "the CLI diffed against"
+            )
+          }
+          definitions += ClassDefinition(cls, newBytes)
         }
       }
     }
@@ -133,6 +148,24 @@ class InstantSwapper(
       }
     }
     return Outcome.Applied(patched = definitions.size + alreadyCurrent, defined = defined)
+  }
+
+  /**
+   * CRC32 of the class-file bytes [loader]'s own source (jar or directory) serves for [fqcn], or
+   * [AgentAccess.UNKNOWN_CRC] when it has none. Resource reads bypass define-time transforms, and
+   * a `URLClassLoader`'s open jar handle keeps serving the entries the loader actually defines
+   * from even if the file on disk was since replaced. `findResource` over `getResource` so parent
+   * delegation can't answer for a class this loader owns.
+   */
+  private fun sourceCrc(loader: ClassLoader, fqcn: String): Long {
+    val path = fqcn.replace('.', '/') + ".class"
+    val url = if (loader is URLClassLoader) loader.findResource(path) else loader.getResource(path)
+    return try {
+      url?.openStream()?.use { crc32(it.readBytes()) } ?: AgentAccess.UNKNOWN_CRC
+    } catch (e: java.io.IOException) {
+      logger.fine("Instant verify: cannot read source bytes for $fqcn: ${e.message}")
+      AgentAccess.UNKNOWN_CRC
+    }
   }
 
   /** Decodes base64 payloads; null on any malformed entry. */

@@ -36,6 +36,20 @@ object AgentAccess {
         UNKNOWN_CRC
       }
 
+  /**
+   * Whether [binaryName]'s running bytes came from an in-place patch. A patched class must verify
+   * against the agent's patch record alone — its backing jar or directory no longer describes
+   * what's running. `false` when unrecorded or the agent is absent.
+   */
+  fun wasPatched(loader: ClassLoader, binaryName: String): Boolean =
+      try {
+        agentClass()
+            .getMethod("wasPatched", ClassLoader::class.java, String::class.java)
+            .invoke(null, loader, binaryName) as Boolean
+      } catch (_: ReflectiveOperationException) {
+        false
+      }
+
   /** Records a successful in-place redefinition in the agent's registry. */
   fun updateCrc(loader: ClassLoader, binaryName: String, crc: Long) {
     try {

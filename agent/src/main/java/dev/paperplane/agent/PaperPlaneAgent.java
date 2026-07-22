@@ -32,8 +32,18 @@ import java.util.zip.CRC32;
 public class PaperPlaneAgent {
     private static volatile Instrumentation instrumentation;
 
-    /** Loader → (binary class name → CRC32 of defined bytes). Weak so dead loaders unpin. */
-    private static final Map<ClassLoader, Map<String, Long>> loadedCrcs =
+    /**
+     * Loader → (binary class name → CRC32 of defined bytes), recorded by the load hook. Weak so
+     * dead loaders unpin. Kept separate from {@link #patchedCrcs}: a define record's bytes came
+     * from the loader's own source (jar or directory) — possibly rewritten by a server-side
+     * class-file transformer — while a patch record's bytes are exactly what the patcher wrote.
+     * The companion's verification treats the two differently.
+     */
+    private static final Map<ClassLoader, Map<String, Long>> definedCrcs =
+            Collections.synchronizedMap(new WeakHashMap<>());
+
+    /** Loader → (binary class name → CRC32 of the last in-place redefinition's bytes). */
+    private static final Map<ClassLoader, Map<String, Long>> patchedCrcs =
             Collections.synchronizedMap(new WeakHashMap<>());
 
     /** Sentinel for {@link #getLoadedCrc} when the class was never recorded. */
@@ -49,22 +59,37 @@ public class PaperPlaneAgent {
     }
 
     /**
-     * The CRC32 of the bytes {@code loader} defined {@code binaryName} from, or
-     * {@link #UNKNOWN_CRC} when the class wasn't seen (loaded before premain, or a null/bootstrap
-     * loader).
+     * The CRC32 of the bytes {@code loader} is currently running {@code binaryName} with — the
+     * last patch if one landed, else the bytes the loader defined — or {@link #UNKNOWN_CRC} when
+     * the class wasn't seen (loaded before premain, or a null/bootstrap loader).
      */
     public static long getLoadedCrc(ClassLoader loader, String binaryName) {
-        if (loader == null) return UNKNOWN_CRC;
-        Map<String, Long> byName = loadedCrcs.get(loader);
-        if (byName == null) return UNKNOWN_CRC;
-        Long crc = byName.get(binaryName);
-        return crc == null ? UNKNOWN_CRC : crc;
+        long patched = lookup(patchedCrcs, loader, binaryName);
+        return patched != UNKNOWN_CRC ? patched : lookup(definedCrcs, loader, binaryName);
+    }
+
+    /**
+     * Whether the running bytes of {@code binaryName} came from an in-place patch rather than the
+     * loader's own source. Patched classes must verify against the patch record alone — their
+     * backing jar or directory no longer describes what's running.
+     */
+    public static boolean wasPatched(ClassLoader loader, String binaryName) {
+        return lookup(patchedCrcs, loader, binaryName) != UNKNOWN_CRC;
     }
 
     /** Records the CRC of a successful in-place redefinition (called by the companion patcher). */
     public static void updateCrc(ClassLoader loader, String binaryName, long crc) {
         if (loader == null) return;
-        loadedCrcs.computeIfAbsent(loader, l -> new ConcurrentHashMap<>()).put(binaryName, crc);
+        patchedCrcs.computeIfAbsent(loader, l -> new ConcurrentHashMap<>()).put(binaryName, crc);
+    }
+
+    private static long lookup(
+            Map<ClassLoader, Map<String, Long>> registry, ClassLoader loader, String binaryName) {
+        if (loader == null) return UNKNOWN_CRC;
+        Map<String, Long> byName = registry.get(loader);
+        if (byName == null) return UNKNOWN_CRC;
+        Long crc = byName.get(binaryName);
+        return crc == null ? UNKNOWN_CRC : crc;
     }
 
     private static final class CrcRecorder implements ClassFileTransformer {
@@ -79,7 +104,9 @@ public class PaperPlaneAgent {
             if (loader != null && className != null && classBeingRedefined == null) {
                 CRC32 crc = new CRC32();
                 crc.update(classfileBuffer);
-                updateCrc(loader, className.replace('/', '.'), crc.getValue());
+                definedCrcs
+                        .computeIfAbsent(loader, l -> new ConcurrentHashMap<>())
+                        .put(className.replace('/', '.'), crc.getValue());
             }
             return null;
         }
