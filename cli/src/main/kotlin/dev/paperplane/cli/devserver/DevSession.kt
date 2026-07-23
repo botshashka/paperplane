@@ -671,7 +671,7 @@ internal class DevSession(
       metadata: ProjectMetadata,
       stagedJarPath: String,
   ): String {
-    val requestId = LoadRequest.newId()
+    val requestId = newRequestId()
     serverManager.sendLoadRequest(
         LoadRequest(
             requestId = requestId,

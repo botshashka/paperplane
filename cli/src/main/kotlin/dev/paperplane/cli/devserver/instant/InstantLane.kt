@@ -4,6 +4,7 @@ import dev.paperplane.cli.devserver.DevSession
 import dev.paperplane.cli.devserver.InstantSwapRequest
 import dev.paperplane.cli.devserver.InstantSwapStatus
 import dev.paperplane.cli.devserver.InstantWaitResult
+import dev.paperplane.cli.devserver.newRequestId
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.ipc.CompanionWire
 import dev.paperplane.cli.server.PaperServerManager
@@ -171,7 +172,7 @@ internal class InstantLane(private val session: DevSession) {
   ): InstantOutcome {
     val request =
         InstantSwapRequest(
-            requestId = InstantSwapRequest.newId(),
+            requestId = newRequestId(),
             pluginName = metadata.pluginName,
             classes = classification.patches.map { InstantSwapRequest.entry(it) },
             newClasses = classification.newClasses.map { InstantSwapRequest.entry(it) },

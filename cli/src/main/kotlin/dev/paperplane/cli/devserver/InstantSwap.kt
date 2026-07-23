@@ -20,8 +20,6 @@ internal data class InstantSwapRequest(
     val newClasses: List<InstantClassEntry> = emptyList(),
 ) {
   companion object {
-    fun newId(): String = java.util.UUID.randomUUID().toString()
-
     fun entry(patch: ClassPatch): InstantClassEntry =
         InstantClassEntry(
             fqcn = patch.fqcn,

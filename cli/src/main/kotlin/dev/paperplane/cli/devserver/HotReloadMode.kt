@@ -54,7 +54,7 @@ internal open class HotReloadMode(
       }
 
       return LoadRequest(
-          requestId = LoadRequest.newId(),
+          requestId = newRequestId(),
           jarPath = stagedJarPath,
           pluginName = metadata.pluginName,
           classesDirs = classesDirs,
