@@ -286,19 +286,39 @@ class CompanionSocketServer(
       }
     } catch (_: IOException) {
       // Dropped connection — fall through to cleanup.
-    }
-    synchronized(writeLock) {
-      if (client === connection) {
-        client = null
-        clientWriter = null
+    } finally {
+      // In a finally: the cleanup must run even if a dispatch escapes despite the guard below,
+      // or this connection stays installed as the active client and every later send writes into
+      // a socket nobody is reading.
+      synchronized(writeLock) {
+        if (client === connection) {
+          client = null
+          clientWriter = null
+        }
       }
+      try {
+        connection.close()
+      } catch (_: IOException) {}
     }
-    try {
-      connection.close()
-    } catch (_: IOException) {}
   }
 
+  /**
+   * Decodes one CLI message and hands it to its callback. Malformed JSON is logged and skipped;
+   * anything the *callback* throws is logged and skipped too. The callbacks hop onto the server
+   * main thread via `scheduler.runTask`, which throws `IllegalPluginAccessException` once the
+   * plugin is disabled — a Ctrl-C mid-rebuild does exactly that — and letting it escape would kill
+   * the reader thread. Same invariant as the accept loop: a CLI message can never brick the
+   * endpoint.
+   */
   private fun dispatch(line: String) {
+    try {
+      dispatchDecoded(line)
+    } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+      logger.fine("Companion socket dispatch failed: ${e.javaClass.simpleName}: ${e.message}")
+    }
+  }
+
+  private fun dispatchDecoded(line: String) {
     val obj =
         try {
           gson.fromJson(line, JsonObject::class.java) ?: return
