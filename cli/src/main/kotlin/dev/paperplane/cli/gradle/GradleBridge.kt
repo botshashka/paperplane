@@ -117,31 +117,6 @@ open class GradleBridge(private val projectDir: File, private val ui: TerminalUI
     return root.message?.lines()?.firstOrNull { it.isNotBlank() } ?: e.message ?: "unknown error"
   }
 
-  open fun test(quiet: Boolean = false, filter: String? = null): Boolean {
-    val stdout = ByteArrayOutputStream()
-    val stderr = ByteArrayOutputStream()
-    return try {
-      val args = mutableListOf("test")
-      if (filter != null) {
-        args.addAll(listOf("--tests", "*$filter*"))
-      }
-      connect()
-          .newBuild()
-          .withArguments(args)
-          .setStandardOutput(stdout)
-          .setStandardError(stderr)
-          .run()
-      true
-    } catch (e: GradleConnectionException) {
-      if (!quiet) {
-        ui.status("Test failed: ${rootCauseMessage(e)}")
-        val output = stderr.toString() + stdout.toString()
-        parseBuildErrors(output)
-      }
-      false
-    }
-  }
-
   open fun metadata(): MetadataResult = runMetadataTask("ppMetadata")
 
   open fun metadataFast(): MetadataResult = runMetadataTask("ppMetadataFast")
