@@ -17,8 +17,6 @@ enum class LoadStatus {
  * as `HostReloadStrategy`).
  */
 enum class ReloadStrategy {
-  /** In-place class redefinition via Instrumentation; no host reload. */
-  @SerializedName("hotswap") HOTSWAP,
   /** First load of the plugin in this server run. */
   @SerializedName("fresh") FRESH,
   /** Full unload + reload of an already-loaded plugin. */

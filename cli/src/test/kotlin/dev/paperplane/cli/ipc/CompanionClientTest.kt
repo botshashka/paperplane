@@ -1,8 +1,10 @@
 package dev.paperplane.cli.ipc
 
+import dev.paperplane.cli.devserver.InstantWaitResult
 import dev.paperplane.cli.devserver.LoadRequest
 import dev.paperplane.cli.devserver.LoadStatus
 import dev.paperplane.cli.devserver.LoadWaitResult
+import dev.paperplane.cli.devserver.instant.RedefineCapability
 import dev.paperplane.cli.testing.FakeCompanionSocket
 import java.io.File
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -229,6 +231,39 @@ class CompanionClientTest {
     }
   }
 
+  // ── Capability ──────────────────────────────────────────────────────
+
+  @Test
+  fun `the welcome capability is published on connect`() {
+    FakeCompanionSocket(serverDir).use { companion ->
+      companion.start()
+      CompanionClient(serverDir).use { client ->
+        assertEquals(RedefineCapability.NONE, client.capability, "NONE until authenticated")
+        connectOrFail(client)
+        assertEquals(
+            RedefineCapability.BODY_ONLY,
+            client.capability,
+            "a connected client must report the tier the welcome advertised",
+        )
+      }
+    }
+  }
+
+  @Test
+  fun `a welcome without a capability leaves the client at NONE`() {
+    FakeCompanionSocket(serverDir, capability = null).use { companion ->
+      companion.start()
+      CompanionClient(serverDir).use { client ->
+        connectOrFail(client)
+        assertEquals(
+            RedefineCapability.NONE,
+            client.capability,
+            "an absent capability must degrade to NONE, never a guess",
+        )
+      }
+    }
+  }
+
   // ── Sends ───────────────────────────────────────────────────────────
 
   @Test
@@ -382,6 +417,47 @@ class CompanionClientTest {
     }
   }
 
+  // ── Instant reports ─────────────────────────────────────────────────
+  // Same await contract as load reports (one shared loop); these pin the instant mapper: the
+  // typed Answered result, the stale-id drop, and the dead-process short-circuit.
+
+  @Test
+  fun `awaitInstantReport resolves Answered for the matching report and drops stale ids`() {
+    FakeCompanionSocket(serverDir).use { companion ->
+      companion.start()
+      CompanionClient(serverDir).use { client ->
+        connectOrFail(client)
+        companion.awaitConnection()
+        companion.send("""{"type":"instantReport","requestId":"STALE","status":"ok","patched":9}""")
+        companion.send(
+            """{"type":"instantReport","requestId":"i1","status":"ok","patched":1,""" +
+                """"appliedClasses":["com.example.Foo"]}"""
+        )
+
+        val result = client.awaitInstantReport("i1", 5_000, alive)
+
+        val answered = assertInstanceOf(InstantWaitResult.Answered::class.java, result)
+        assertEquals("i1", answered.report.requestId)
+        assertEquals(1, answered.report.patched)
+        assertEquals(listOf("com.example.Foo"), answered.report.appliedClasses)
+      }
+    }
+  }
+
+  @Test
+  fun `awaitInstantReport resolves ServerExited when the process dies`() {
+    FakeCompanionSocket(serverDir).use { companion ->
+      companion.start()
+      CompanionClient(serverDir).use { client ->
+        connectOrFail(client)
+        assertEquals(
+            InstantWaitResult.ServerExited,
+            client.awaitInstantReport("i1", 10_000) { false },
+        )
+      }
+    }
+  }
+
   @Test
   fun `a report that arrived before the drop still wins`() {
     // Durable-result-first: the host answered and THEN the process died within the same window —
@@ -520,6 +596,11 @@ class CompanionClientTest {
     }
   }
 
-  /** Finds a port with nothing listening by binding-and-releasing an ephemeral one. */
-  private fun findDeadPort(): Int = java.net.ServerSocket(0).use { it.localPort }
+  /**
+   * Finds a port with nothing listening on loopback by binding-and-releasing an ephemeral one.
+   * Binds the loopback address explicitly: a wildcard bind can be handed a port another process
+   * already holds on 127.0.0.1 only, and the "dead" port would then answer the dial.
+   */
+  private fun findDeadPort(): Int =
+      java.net.ServerSocket(0, 0, java.net.InetAddress.getLoopbackAddress()).use { it.localPort }
 }

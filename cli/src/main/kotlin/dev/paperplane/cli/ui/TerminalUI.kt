@@ -180,6 +180,14 @@ class TerminalUI(terminal: Terminal) {
     emit("  ${dim("➜")}  ${bold(brightWhite(label))}  $value")
   }
 
+  /**
+   * Something the session can continue without, but the user would be wrong to assume is fine —
+   * louder than [info], quieter than [error], which is reserved for a step that actually failed.
+   */
+  fun warning(message: String) {
+    emit("  ${yellow("⚠")}  $message")
+  }
+
   fun status(message: String) {
     emit("  ${dim(message)}")
   }

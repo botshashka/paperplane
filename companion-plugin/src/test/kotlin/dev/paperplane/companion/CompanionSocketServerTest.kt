@@ -39,6 +39,7 @@ class CompanionSocketServerTest {
   private val gson = Gson()
   private val statuses = CopyOnWriteArrayList<StatusUpdate>()
   private val loadRequests = CopyOnWriteArrayList<HostLoadRequest>()
+  private val instantSwaps = CopyOnWriteArrayList<HostInstantSwapRequest>()
   private lateinit var server: CompanionSocketServer
   private val openSockets = mutableListOf<Socket>()
 
@@ -49,6 +50,8 @@ class CompanionSocketServerTest {
             Logger.getLogger("test"),
             onStatus = { statuses += it },
             onLoadRequest = { loadRequests += it },
+            onInstantSwap = { instantSwaps += it },
+            capability = HostRedefineCapability.BODY_ONLY,
         )
   }
 
@@ -153,6 +156,7 @@ class CompanionSocketServerTest {
     assertEquals("welcome", welcome.get("type").asString)
     assertEquals(CompanionSocketServer.PROTOCOL_VERSION, welcome.get("protocolVersion").asInt)
     assertFalse(welcome.get("serverReady").asBoolean, "server not marked ready yet")
+    assertEquals("body-only", welcome.get("capability").asString)
   }
 
   @Test
@@ -268,7 +272,7 @@ class CompanionSocketServerTest {
     client.send(
         """{"type":"load","requestId":"r1","jarPath":"/x.jar","pluginName":"Sample",""" +
             """"classesDirs":["/c"],"resourcesDir":"/r","runtimeClasspath":["/lib.jar"],""" +
-            """"changedClasses":["com.example.Foo"],"leakDiagnostics":"full"}"""
+            """"leakDiagnostics":"full"}"""
     )
 
     awaitTrue("load dispatched") { loadRequests.isNotEmpty() }
@@ -279,8 +283,26 @@ class CompanionSocketServerTest {
     assertEquals(listOf("/c"), request.classesDirs)
     assertEquals("/r", request.resourcesDir)
     assertEquals(listOf("/lib.jar"), request.runtimeClasspath)
-    assertEquals(listOf("com.example.Foo"), request.changedClasses)
     assertEquals("full", request.leakDiagnostics)
+  }
+
+  @Test
+  fun `an instantSwap message is dispatched as a HostInstantSwapRequest with all fields`() {
+    server.start(serverRoot)
+    val (client, _) = connect()
+
+    client.send(
+        """{"type":"instantSwap","requestId":"i1","pluginName":"Sample",""" +
+            """"classes":[{"fqcn":"com.example.Foo","expectedCrc32":42,"data":"QUJD"}]}"""
+    )
+
+    awaitTrue("instantSwap dispatched") { instantSwaps.isNotEmpty() }
+    val request = instantSwaps.single()
+    assertEquals("i1", request.requestId)
+    assertEquals("Sample", request.pluginName)
+    assertEquals("com.example.Foo", request.classes.single().fqcn)
+    assertEquals(42L, request.classes.single().expectedCrc32)
+    assertEquals("QUJD", request.classes.single().data)
   }
 
   @Test

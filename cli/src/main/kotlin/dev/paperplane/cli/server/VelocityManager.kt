@@ -15,11 +15,13 @@ open class VelocityManager(private val proxyDir: File, private val ui: TerminalU
   }
 
   private var process: Process? = null
+  private var proxyPort: Int? = null
   private val pluginsDir = File(proxyDir, "plugins")
 
   val forwardingSecret: String = UUID.randomUUID().toString()
 
   open fun configure(serverPort: Int, swapPort: Int, proxyPort: Int) {
+    this.proxyPort = proxyPort
     proxyDir.mkdirs()
     pluginsDir.mkdirs()
 
@@ -52,7 +54,12 @@ open class VelocityManager(private val proxyDir: File, private val ui: TerminalU
             tcp-fast-open = false
             bungee-plugin-message-channel = true
             show-ping-requests = false
-            failover-on-unexpected-server-disconnect = true
+            # The instant tier patches only the ACTIVE backend, so the standby runs however many
+            # patches behind until the next full swap. Velocity's own failover would walk `try` and
+            # silently land players on that stale backend when the active dies — the exact
+            # silent-staleness this tier exists to prevent. Routing goes through ReconnectPlugin's
+            # explicit activeServer choice instead, and a dev-server crash stays visible.
+            failover-on-unexpected-server-disconnect = false
 
             [query]
             enabled = false
@@ -64,8 +71,9 @@ open class VelocityManager(private val proxyDir: File, private val ui: TerminalU
     // Write forwarding secret
     File(proxyDir, "forwarding.secret").writeText(forwardingSecret)
 
-    // Write initial active server state
-    writeActiveServer("blue")
+    // Write initial active server state — must name a registered backend ("server"/"swap"); the
+    // transfer plugin ignores unknown names and would silently keep its own default.
+    writeActiveServer("server")
 
     // Copy embedded transfer plugin
     copyTransferPlugin()
@@ -94,6 +102,10 @@ open class VelocityManager(private val proxyDir: File, private val ui: TerminalU
   }
 
   open fun start(velocityJar: File, javaBin: String = "java") {
+    // Same port ownership as the Paper backends' cleanupStale: a leftover process squatting the
+    // proxy port would make Velocity's bind fail while the port-poll in waitForReady happily
+    // reaches the squatter and reports a proxy that isn't there.
+    proxyPort?.let { killProcessOnPort(it) }
     val cmd =
         listOf(
             javaBin,

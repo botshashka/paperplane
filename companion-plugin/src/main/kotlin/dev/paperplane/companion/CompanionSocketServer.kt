@@ -27,6 +27,9 @@ interface CompanionIpc {
   /** Terminal answer to a `load` request. */
   fun sendReport(report: HostLoadReport)
 
+  /** Terminal answer to an `instantSwap` request. */
+  fun sendInstantReport(report: HostInstantSwapReport)
+
   /** The world save requested by a `saving` status finished. */
   fun sendSaveComplete()
 
@@ -57,10 +60,16 @@ class CompanionSocketServer(
     private val logger: Logger,
     private val onStatus: (StatusUpdate) -> Unit,
     private val onLoadRequest: (HostLoadRequest) -> Unit,
+    private val onInstantSwap: (HostInstantSwapRequest) -> Unit = {},
+    /**
+     * The JVM's redefine capability, stamped into every welcome so the CLI knows the instant tier's
+     * ceiling for this server. Detected once — capability is a process property.
+     */
+    private val capability: HostRedefineCapability = RedefineCapabilities.detect(),
 ) : CompanionIpc, AutoCloseable {
   companion object {
     /** Mirror of the CLI's `CompanionSocketFile.PROTOCOL_VERSION`. */
-    const val PROTOCOL_VERSION = 3
+    const val PROTOCOL_VERSION = 4
 
     // Wire message `type` discriminators. Mirror of the CLI's CompanionWire tags; the modules share
     // no code, so a tag introduced on one side must be added on the other.
@@ -69,7 +78,9 @@ class CompanionSocketServer(
     private const val TYPE_READY = "ready"
     private const val TYPE_STATUS = "status"
     private const val TYPE_LOAD = "load"
+    private const val TYPE_INSTANT_SWAP = "instantSwap"
     private const val TYPE_REPORT = "report"
+    private const val TYPE_INSTANT_REPORT = "instantReport"
     private const val TYPE_SAVE_COMPLETE = "saveComplete"
     private const val TYPE_LOAD_PROGRESS = "loadProgress"
 
@@ -137,10 +148,14 @@ class CompanionSocketServer(
     }
   }
 
-  override fun sendReport(report: HostLoadReport) {
-    sendLine(
-        gson.toJsonTree(report).asJsonObject.apply { addProperty("type", TYPE_REPORT) }.toString()
-    )
+  override fun sendReport(report: HostLoadReport) = sendTagged(report, TYPE_REPORT)
+
+  override fun sendInstantReport(report: HostInstantSwapReport) =
+      sendTagged(report, TYPE_INSTANT_REPORT)
+
+  /** Sends a report object as its plain JSON shape plus the wire's `type` discriminator. */
+  private fun sendTagged(payload: Any, type: String) {
+    sendLine(gson.toJsonTree(payload).asJsonObject.apply { addProperty("type", type) }.toString())
   }
 
   override fun sendSaveComplete() {
@@ -210,6 +225,7 @@ class CompanionSocketServer(
             addProperty("type", TYPE_WELCOME)
             addProperty("protocolVersion", PROTOCOL_VERSION)
             addProperty("serverReady", serverReady)
+            add("capability", gson.toJsonTree(capability))
           }
       writer.write(welcome.toString())
       writer.write("\n")
@@ -264,19 +280,39 @@ class CompanionSocketServer(
       }
     } catch (_: IOException) {
       // Dropped connection — fall through to cleanup.
-    }
-    synchronized(writeLock) {
-      if (client === connection) {
-        client = null
-        clientWriter = null
+    } finally {
+      // In a finally: the cleanup must run even if a dispatch escapes despite the guard below,
+      // or this connection stays installed as the active client and every later send writes into
+      // a socket nobody is reading.
+      synchronized(writeLock) {
+        if (client === connection) {
+          client = null
+          clientWriter = null
+        }
       }
+      try {
+        connection.close()
+      } catch (_: IOException) {}
     }
-    try {
-      connection.close()
-    } catch (_: IOException) {}
   }
 
+  /**
+   * Decodes one CLI message and hands it to its callback. Malformed JSON is logged and skipped;
+   * anything the *callback* throws is logged and skipped too. The callbacks hop onto the server
+   * main thread via `scheduler.runTask`, which throws `IllegalPluginAccessException` once the
+   * plugin is disabled — a Ctrl-C mid-rebuild does exactly that — and letting it escape would kill
+   * the reader thread. Same invariant as the accept loop: a CLI message can never brick the
+   * endpoint.
+   */
   private fun dispatch(line: String) {
+    try {
+      dispatchDecoded(line)
+    } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+      logger.fine("Companion socket dispatch failed: ${e.javaClass.simpleName}: ${e.message}")
+    }
+  }
+
+  private fun dispatchDecoded(line: String) {
     val obj =
         try {
           gson.fromJson(line, JsonObject::class.java) ?: return
@@ -298,6 +334,12 @@ class CompanionSocketServer(
             onLoadRequest(gson.fromJson(obj, HostLoadRequest::class.java))
           } catch (e: JsonParseException) {
             logger.warning("Invalid load request: ${e.message}")
+          }
+      TYPE_INSTANT_SWAP ->
+          try {
+            onInstantSwap(gson.fromJson(obj, HostInstantSwapRequest::class.java))
+          } catch (e: JsonParseException) {
+            logger.warning("Invalid instant swap request: ${e.message}")
           }
       else -> logger.fine("Unknown companion socket message type: $type")
     }

@@ -39,31 +39,7 @@ class InnerPluginHostNmsDetectionTest {
   // `Class` is final, so we can't proxy it. Instead, ASM-generate a minimal class whose name
   // matches the prefix under test and define it in a controlled classloader.
   private fun makeClassInLoader(cl: FakeClassLoader, internalName: String): Class<*> {
-    // Minimal valid class file for `public class <internalName> {}` extending Object.
-    val cw = org.objectweb.asm.ClassWriter(0)
-    cw.visit(
-        org.objectweb.asm.Opcodes.V17,
-        org.objectweb.asm.Opcodes.ACC_PUBLIC,
-        internalName,
-        null,
-        "java/lang/Object",
-        null,
-    )
-    val ctor = cw.visitMethod(org.objectweb.asm.Opcodes.ACC_PUBLIC, "<init>", "()V", null, null)
-    ctor.visitCode()
-    ctor.visitVarInsn(org.objectweb.asm.Opcodes.ALOAD, 0)
-    ctor.visitMethodInsn(
-        org.objectweb.asm.Opcodes.INVOKESPECIAL,
-        "java/lang/Object",
-        "<init>",
-        "()V",
-        false,
-    )
-    ctor.visitInsn(org.objectweb.asm.Opcodes.RETURN)
-    ctor.visitMaxs(1, 1)
-    ctor.visitEnd()
-    cw.visitEnd()
-    val bytes = cw.toByteArray()
+    val bytes = dev.paperplane.companion.BytecodeFixtures.emptyClass(internalName)
     return DefiningLoader(cl).defineHere(internalName.replace('/', '.'), bytes)
   }
 

@@ -5,6 +5,7 @@ import com.google.gson.JsonObject
 import dev.paperplane.cli.devserver.LoadRequest
 import dev.paperplane.cli.devserver.LoadStatus
 import dev.paperplane.cli.devserver.ReloadStrategy
+import dev.paperplane.cli.devserver.instant.RedefineCapability
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
@@ -59,7 +60,6 @@ class CompanionWireTest {
             classesDirs = listOf("/c"),
             resourcesDir = "/r",
             runtimeClasspath = listOf("/lib.jar"),
-            changedClasses = listOf("com.example.Foo"),
             leakDiagnostics = "full",
         )
 
@@ -72,8 +72,84 @@ class CompanionWireTest {
     assertEquals("/c", obj.getAsJsonArray("classesDirs").single().asString)
     assertEquals("/r", obj.get("resourcesDir").asString)
     assertEquals("/lib.jar", obj.getAsJsonArray("runtimeClasspath").single().asString)
-    assertEquals("com.example.Foo", obj.getAsJsonArray("changedClasses").single().asString)
     assertEquals("full", obj.get("leakDiagnostics").asString)
+  }
+
+  @Test
+  fun `encodeInstantSwap flattens the request beside the type tag`() {
+    val request =
+        dev.paperplane.cli.devserver.InstantSwapRequest(
+            requestId = "i1",
+            pluginName = "Sample",
+            classes =
+                listOf(
+                    dev.paperplane.cli.devserver.InstantClassEntry(
+                        fqcn = "com.example.Foo",
+                        expectedCrc32 = 42L,
+                        data = "QUJD",
+                    )
+                ),
+        )
+
+    val obj = parse(CompanionWire.encodeInstantSwap(request))
+
+    assertEquals("instantSwap", obj.get("type").asString)
+    assertEquals("i1", obj.get("requestId").asString)
+    assertEquals("Sample", obj.get("pluginName").asString)
+    val entry = obj.getAsJsonArray("classes").single().asJsonObject
+    assertEquals("com.example.Foo", entry.get("fqcn").asString)
+    assertEquals(42L, entry.get("expectedCrc32").asLong)
+    assertEquals("QUJD", entry.get("data").asString)
+  }
+
+  @Test
+  fun `decodes an instantReport into the typed event`() {
+    val event =
+        CompanionWire.decode(
+            """{"type":"instantReport","requestId":"i1","status":"ok","patched":2}"""
+        )
+
+    val report = (event as CompanionEvent.InstantReport).report
+    assertEquals("i1", report.requestId)
+    assertEquals(dev.paperplane.cli.devserver.InstantSwapStatus.OK, report.status)
+    assertEquals(2, report.patched)
+  }
+
+  @Test
+  fun `decodes a refused instantReport with its reason`() {
+    val event =
+        CompanionWire.decode(
+            """{"type":"instantReport","requestId":"i2","status":"refused",""" +
+                """"reason":"baseline drift on com.example.Foo"}"""
+        )
+
+    val report = (event as CompanionEvent.InstantReport).report
+    assertEquals(dev.paperplane.cli.devserver.InstantSwapStatus.REFUSED, report.status)
+    assertEquals("baseline drift on com.example.Foo", report.reason)
+  }
+
+  @Test
+  fun `decodes the welcome capability and degrades absent or unknown values to NONE`() {
+    val bodyOnly =
+        CompanionWire.decode(
+            """{"type":"welcome","protocolVersion":4,"serverReady":true,""" +
+                """"capability":"body-only"}"""
+        ) as CompanionEvent.Welcome
+    assertEquals(RedefineCapability.BODY_ONLY, bodyOnly.capability)
+
+    val absent =
+        CompanionWire.decode("""{"type":"welcome","protocolVersion":4,"serverReady":false}""")
+            as CompanionEvent.Welcome
+    assertEquals(RedefineCapability.NONE, absent.capability)
+
+    // A companion advertising a tier this CLI doesn't know must degrade to "can't patch",
+    // never to a tier it can't honour.
+    val unknown =
+        CompanionWire.decode(
+            """{"type":"welcome","protocolVersion":4,"serverReady":true,""" +
+                """"capability":"quantum"}"""
+        ) as CompanionEvent.Welcome
+    assertEquals(RedefineCapability.NONE, unknown.capability)
   }
 
   @Test

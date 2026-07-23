@@ -26,8 +26,8 @@ internal sealed interface LoadWaitResult {
  * scripted waiter as a lambda without a live companion connection.
  *
  * The default implementation ([socketLoadResultWaiter]) delegates to
- * [PaperServerManager.awaitLoadReport], which consumes `report` messages from the companion socket
- * — filtering on `requestId` so a stale report from a previous reload is never mistaken for this
+ * [CompanionIpc.awaitLoadReport], which consumes `report` messages from the companion socket —
+ * filtering on `requestId` so a stale report from a previous reload is never mistaken for this
  * one's, and resolving [LoadWaitResult.ServerExited] on process death or a dropped connection.
  */
 internal fun interface LoadResultWaiter {
@@ -40,5 +40,5 @@ internal fun interface LoadResultWaiter {
 
 /** The production waiter: consumes the companion socket via the server manager's connection. */
 internal fun socketLoadResultWaiter(): LoadResultWaiter = LoadResultWaiter { manager, id, timeout ->
-  manager.awaitLoadReport(id, timeout)
+  manager.ipc.awaitLoadReport(id, timeout)
 }

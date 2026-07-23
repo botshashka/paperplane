@@ -94,14 +94,14 @@ class PaperServerManagerSocketTest {
     val manager = createManager()
     manager.serverDir.mkdirs()
     // Advisory sends must be droppable: reporting an error while nothing is running cannot throw.
-    manager.sendCompanionStatus("error", message = "Build failed")
+    manager.ipc.sendStatus("error", message = "Build failed")
   }
 
   @Test
   fun `sendLoadRequest without a connection reports false`() {
     val manager = createManager()
     assertFalse(
-        manager.sendLoadRequest(LoadRequest(requestId = "r1", jarPath = "/x", pluginName = "P"))
+        manager.ipc.sendLoadRequest(LoadRequest(requestId = "r1", jarPath = "/x", pluginName = "P"))
     )
   }
 
@@ -163,7 +163,7 @@ class PaperServerManagerSocketTest {
     val manager = createManager()
     manager.serverDir.mkdirs()
     // No connection at all (the server was never started) counts as exited — no report can arrive.
-    assertEquals(LoadWaitResult.ServerExited, manager.awaitLoadReport("r1", 300))
+    assertEquals(LoadWaitResult.ServerExited, manager.ipc.awaitLoadReport("r1", 300))
   }
 
   @Test
@@ -180,7 +180,7 @@ class PaperServerManagerSocketTest {
         assertTrue(manager.waitForReady())
 
         companion.send("""{"type":"report","requestId":"r1","status":"ok"}""")
-        assertInstanceOf(LoadWaitResult.Ok::class.java, manager.awaitLoadReport("r1", 5_000))
+        assertInstanceOf(LoadWaitResult.Ok::class.java, manager.ipc.awaitLoadReport("r1", 5_000))
       }
     }
   }
@@ -320,7 +320,10 @@ class PaperServerManagerSocketTest {
     manager.serverDir.mkdirs()
     // A process that exits immediately: java with a nonexistent jar.
     val javaBin = File(File(System.getProperty("java.home"), "bin"), "java").absolutePath
-    manager.start(File(tempDir, "missing.jar"), emptyList(), javaBin = javaBin)
+    manager.start(
+        File(tempDir, "missing.jar"),
+        LaunchSpec(javaBin, isJbr = false, jvmArgs = emptyList(), attachAgent = false),
+    )
     val deadline = System.currentTimeMillis() + 30_000
     while (manager.isRunning()) {
       if (System.currentTimeMillis() > deadline) throw AssertionError("process never exited")
@@ -349,7 +352,10 @@ class PaperServerManagerSocketTest {
     val staleError = File(ppDir, "companion-error").apply { writeText("stale") }
 
     val javaBin = File(File(System.getProperty("java.home"), "bin"), "java").absolutePath
-    manager.start(File(tempDir, "missing.jar"), emptyList(), javaBin = javaBin)
+    manager.start(
+        File(tempDir, "missing.jar"),
+        LaunchSpec(javaBin, isJbr = false, jvmArgs = emptyList(), attachAgent = false),
+    )
     manager.stop()
 
     assertFalse(staleSocket.exists(), "a stale handshake file could dial a reassigned port")

@@ -1,9 +1,13 @@
 package dev.paperplane.cli.ipc
 
+import dev.paperplane.cli.devserver.InstantSwapReport
+import dev.paperplane.cli.devserver.InstantSwapRequest
+import dev.paperplane.cli.devserver.InstantWaitResult
 import dev.paperplane.cli.devserver.LoadReport
 import dev.paperplane.cli.devserver.LoadRequest
 import dev.paperplane.cli.devserver.LoadStatus
 import dev.paperplane.cli.devserver.LoadWaitResult
+import dev.paperplane.cli.devserver.instant.RedefineCapability
 import java.io.BufferedReader
 import java.io.BufferedWriter
 import java.io.File
@@ -82,8 +86,17 @@ internal class CompanionClient(
   var serverReady: Boolean = false
     private set
 
+  /**
+   * The live JVM's redefine capability, from the welcome handshake. [RedefineCapability.NONE] until
+   * authenticated — an unreachable server can't patch anything.
+   */
+  @Volatile
+  var capability: RedefineCapability = RedefineCapability.NONE
+    private set
+
   private val saveCompletions = LinkedBlockingQueue<Unit>()
   private val reports = LinkedBlockingQueue<LoadReport>()
+  private val instantReports = LinkedBlockingQueue<InstantSwapReport>()
 
   val isConnected: Boolean
     get() = connected
@@ -146,12 +159,16 @@ internal class CompanionClient(
       val reader = BufferedReader(InputStreamReader(candidate.getInputStream(), Charsets.UTF_8))
       val welcome = performHandshake(info, out, reader)
       candidate.soTimeout = 0
+      if (welcome.serverReady) serverReady = true
       synchronized(lock) {
         socket = candidate
         writer = out
+        // Publish the capability BEFORE flipping `connected`: every reader gates on isConnected,
+        // so setting it afterwards leaves a window where another thread sees a live connection
+        // whose capability still reads NONE.
+        capability = welcome.capability
         connected = true
       }
-      if (welcome.serverReady) serverReady = true
       readerThread =
           Thread({ readLoop(reader) }, "companion-ipc-reader").apply {
             isDaemon = true
@@ -218,8 +235,9 @@ internal class CompanionClient(
           is CompanionEvent.Ready -> serverReady = true
           is CompanionEvent.SaveComplete -> saveCompletions.put(Unit)
           is CompanionEvent.Report -> reports.put(event.report)
-          // LoadProgress is a streamed stage with no consumer yet (Fresh/Instant mode will read
-          // it); a Welcome outside the handshake and an unknown line are likewise ignored.
+          is CompanionEvent.InstantReport -> instantReports.put(event.report)
+          // LoadProgress is a streamed stage with no consumer yet (Fresh mode will read it); a
+          // Welcome outside the handshake and an unknown line are likewise ignored.
           is CompanionEvent.LoadProgress,
           is CompanionEvent.Welcome,
           null -> {}
@@ -262,6 +280,9 @@ internal class CompanionClient(
 
   fun sendLoadRequest(request: LoadRequest): Boolean = send(CompanionWire.encodeLoad(request))
 
+  fun sendInstantSwap(request: InstantSwapRequest): Boolean =
+      send(CompanionWire.encodeInstantSwap(request))
+
   /**
    * Waits for the explicit server-readiness event. Readiness already streamed (or snapshotted in
    * the welcome) resolves immediately; the readiness check runs before the liveness checks so a
@@ -286,47 +307,85 @@ internal class CompanionClient(
   }
 
   /**
-   * Waits for the companion's `saveComplete`. Like [awaitReport], the queue is polled before the
-   * liveness checks so a completion that lands exactly as the process dies still wins, and a
-   * dropped connection or dead process short-circuits the wait instead of blocking the whole
-   * timeout.
+   * The one await loop, and with it the one place the drain-before-liveness invariant is written
+   * down: an event that lands in the queue exactly as the process dies still wins, because losing
+   * it would report a crash for work that genuinely completed. A dropped connection or dead process
+   * short-circuits the wait rather than burning the whole timeout.
+   *
+   * [accept] maps a polled event to a terminal result, or null to keep waiting — which is how the
+   * report awaits discard answers to a previous request whose id no longer matches.
    */
-  fun awaitSaveComplete(timeoutMs: Long, isAlive: () -> Boolean): Boolean {
+  private fun <E, R> await(
+      queue: LinkedBlockingQueue<E>,
+      timeoutMs: Long,
+      isAlive: () -> Boolean,
+      onDisconnected: () -> R,
+      onTimeout: () -> R,
+      accept: (E) -> R?,
+  ): R {
     val deadline = System.currentTimeMillis() + timeoutMs
     while (true) {
       val remaining = deadline - System.currentTimeMillis()
-      val completed =
-          saveCompletions.poll(remaining.coerceIn(0, AWAIT_POLL_INTERVAL_MS), TimeUnit.MILLISECONDS)
-      if (completed != null) return true
-      if (!connected || !isAlive()) return false
-      if (remaining <= 0) return false
+      val event = queue.poll(remaining.coerceIn(0, AWAIT_POLL_INTERVAL_MS), TimeUnit.MILLISECONDS)
+      if (event != null) {
+        accept(event)?.let {
+          return it
+        }
+        continue
+      }
+      if (!connected || !isAlive()) return onDisconnected()
+      if (remaining <= 0) return onTimeout()
     }
   }
 
+  /** Waits for the companion's `saveComplete`; see [await] for the timing contract. */
+  fun awaitSaveComplete(timeoutMs: Long, isAlive: () -> Boolean): Boolean =
+      await(
+          saveCompletions,
+          timeoutMs,
+          isAlive,
+          onDisconnected = { false },
+          onTimeout = { false },
+          accept = { true },
+      )
+
   /**
    * Waits for the companion's [LoadReport] answering [expectedRequestId]. Reports for other request
-   * ids are discarded (stale answers from a previous reload). The queue is drained before the
-   * liveness checks so a report that arrived just as the process died still wins — the load
-   * genuinely completed.
+   * ids are stale answers from a previous reload — dropped, and the wait continues.
    */
   fun awaitReport(
       expectedRequestId: String,
       timeoutMs: Long,
       isAlive: () -> Boolean,
-  ): LoadWaitResult {
-    val deadline = System.currentTimeMillis() + timeoutMs
-    while (true) {
-      val remaining = deadline - System.currentTimeMillis()
-      val report =
-          reports.poll(remaining.coerceIn(0, AWAIT_POLL_INTERVAL_MS), TimeUnit.MILLISECONDS)
-      if (report != null) {
-        if (report.requestId == expectedRequestId) return report.toWaitResult()
-        continue // Stale requestId — drop and keep waiting.
-      }
-      if (!connected || !isAlive()) return LoadWaitResult.ServerExited
-      if (remaining <= 0) return LoadWaitResult.TimedOut
-    }
-  }
+  ): LoadWaitResult =
+      await(
+          reports,
+          timeoutMs,
+          isAlive,
+          onDisconnected = { LoadWaitResult.ServerExited },
+          onTimeout = { LoadWaitResult.TimedOut },
+          accept = { it.takeIf { r -> r.requestId == expectedRequestId }?.toWaitResult() },
+      )
+
+  /**
+   * Waits for the [InstantSwapReport] answering [expectedRequestId]; same contract as
+   * [awaitReport].
+   */
+  fun awaitInstantReport(
+      expectedRequestId: String,
+      timeoutMs: Long,
+      isAlive: () -> Boolean,
+  ): InstantWaitResult =
+      await(
+          instantReports,
+          timeoutMs,
+          isAlive,
+          onDisconnected = { InstantWaitResult.ServerExited },
+          onTimeout = { InstantWaitResult.TimedOut },
+          accept = {
+            it.takeIf { r -> r.requestId == expectedRequestId }?.let(InstantWaitResult::Answered)
+          },
+      )
 
   private fun LoadReport.toWaitResult(): LoadWaitResult =
       if (status == LoadStatus.OK) LoadWaitResult.Ok(this)

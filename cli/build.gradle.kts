@@ -21,6 +21,8 @@ dependencies {
   implementation(libs.gson)
   implementation(libs.slf4j.nop)
   implementation(libs.jline.terminal)
+  implementation(libs.asm)
+  implementation(libs.asm.util)
   runtimeOnly(libs.jline.terminal.jni)
 
   testImplementation(libs.junit.jupiter)

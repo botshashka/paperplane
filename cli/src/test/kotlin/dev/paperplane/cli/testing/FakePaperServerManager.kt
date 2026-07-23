@@ -2,6 +2,8 @@ package dev.paperplane.cli.testing
 
 import dev.paperplane.cli.config.ServerConfig
 import dev.paperplane.cli.devserver.LoadRequest
+import dev.paperplane.cli.server.CompanionIpc
+import dev.paperplane.cli.server.LaunchSpec
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.TerminalUI
@@ -32,6 +34,12 @@ class FakePaperServerManager(
   /** Every [LoadRequest] handed to [sendLoadRequest], in order. */
   val sentLoadRequests: MutableList<LoadRequest> = mutableListOf()
 
+  /**
+   * Every [LaunchSpec] handed to [start], in order. Tests assert that all entries are the same
+   * session-wide spec — the structural "mirror the args" invariant.
+   */
+  val launchSpecs: MutableList<LaunchSpec> = mutableListOf()
+
   override fun cleanupStale() {
     calls += "cleanupStale"
   }
@@ -61,8 +69,9 @@ class FakePaperServerManager(
     calls += "copyCompanion(depend=${depend.size},softdepend=${softdepend.size})"
   }
 
-  override fun start(paperJar: File, jvmArgs: List<String>, hotReload: Boolean, javaBin: String) {
-    calls += "start(${paperJar.name}, hotReload=$hotReload)"
+  override fun start(paperJar: File, launch: LaunchSpec) {
+    calls += "start(${paperJar.name})"
+    launchSpecs += launch
     // Stream the simulated server output through ui.serverLog so tests can verify the log lines
     // interleave correctly above the pinned footer (the most fragile rendering path).
     for (line in simulatedLogs) ui.serverLog(line)
@@ -96,13 +105,67 @@ class FakePaperServerManager(
     calls += "sendCommand($command)"
   }
 
-  override fun sendCompanionStatus(state: String, duration: String?, message: String?) {
-    calls += "sendCompanionStatus($state)"
-  }
+  /** Scripted redefine capability the fake's "server" advertises. */
+  internal var capability: dev.paperplane.cli.devserver.instant.RedefineCapability =
+      dev.paperplane.cli.devserver.instant.RedefineCapability.BODY_ONLY
 
-  override fun sendLoadRequest(request: LoadRequest): Boolean {
-    calls += "sendLoadRequest(${request.pluginName})"
-    sentLoadRequests += request
-    return true
-  }
+  /**
+   * Scripted answer for [CompanionIpc.awaitInstantReport]; echoes the awaited requestId when OK,
+   * and reports every requested class as applied — what a real companion does when nothing is
+   * skipped.
+   */
+  internal var instantWaitResult: (String) -> dev.paperplane.cli.devserver.InstantWaitResult =
+      { id ->
+        val requested = sentInstantSwaps.lastOrNull()
+        dev.paperplane.cli.devserver.InstantWaitResult.Answered(
+            dev.paperplane.cli.devserver.InstantSwapReport(
+                requestId = id,
+                status = dev.paperplane.cli.devserver.InstantSwapStatus.OK,
+                patched = 1,
+                appliedClasses = requested?.classes.orEmpty().map { it.fqcn },
+            )
+        )
+      }
+
+  /** Whether [CompanionIpc.sendInstantSwap] reports the request as delivered. */
+  internal var sendInstantSwapResult: Boolean = true
+
+  /** Every instant-swap request handed to [CompanionIpc.sendInstantSwap], in order. */
+  internal val sentInstantSwaps: MutableList<dev.paperplane.cli.devserver.InstantSwapRequest> =
+      mutableListOf()
+
+  /** The fake conversation: records into [calls] and answers from the scripted fields above. */
+  override val ipc: CompanionIpc =
+      object : CompanionIpc({ null }, { false }) {
+        override fun sendStatus(state: String, duration: String?, message: String?) {
+          calls += "sendCompanionStatus($state)"
+        }
+
+        override fun sendLoadRequest(request: LoadRequest): Boolean {
+          calls += "sendLoadRequest(${request.pluginName})"
+          sentLoadRequests += request
+          return true
+        }
+
+        override fun redefineCapability(): dev.paperplane.cli.devserver.instant.RedefineCapability {
+          calls += "redefineCapability"
+          return capability
+        }
+
+        override fun sendInstantSwap(
+            request: dev.paperplane.cli.devserver.InstantSwapRequest
+        ): Boolean {
+          calls += "sendInstantSwap(${request.pluginName})"
+          sentInstantSwaps += request
+          return sendInstantSwapResult
+        }
+
+        override fun awaitInstantReport(
+            expectedRequestId: String,
+            timeoutMs: Long,
+        ): dev.paperplane.cli.devserver.InstantWaitResult {
+          calls += "awaitInstantReport"
+          return instantWaitResult(expectedRequestId)
+        }
+      }
 }

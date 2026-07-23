@@ -11,6 +11,7 @@ import dev.paperplane.companion.host.LeakDiagnosticsMode
 import dev.paperplane.companion.host.UnsupportedPaperVersionException
 import java.io.File
 import java.io.IOException
+import java.util.logging.Level
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.plugin.java.JavaPlugin
@@ -33,6 +34,12 @@ class CompanionMessageHandler(
     private val hostProvider: (LeakDiagnosticsMode) -> InnerPluginHost,
     private val ipc: CompanionIpc,
     private val serverRoot: File = plugin.dataFolder.absoluteFile.parentFile.parentFile,
+    /**
+     * Builds the [InstantSwapper] on the first patch request, memoized after. Injected like every
+     * other collaborator so the applied/failed answer paths are reachable in tests — the real one
+     * needs a live agent and a live plugin classloader, which no test can stand up.
+     */
+    private val instantSwapperProvider: () -> InstantSwapper = { InstantSwapper(plugin.logger) },
 ) {
   companion object {
     /** Streamed stage sent when a load request is accepted for dispatch. */
@@ -46,7 +53,7 @@ class CompanionMessageHandler(
     private const val STATE_ERROR = "error"
   }
 
-  private var hotSwapper: HotSwapper? = null
+  private var instantSwapper: InstantSwapper? = null
   private var agentWarningLogged = false
 
   // Lazily built by [resolveHost] on the first load request. Null until then (native modes never
@@ -159,7 +166,7 @@ class CompanionMessageHandler(
 
     if (!agentWarningLogged && AgentAccess.instrumentation() == null) {
       plugin.logger.warning(
-          "PaperPlane agent not loaded — hot-swap tier and NMS detection disabled; " +
+          "PaperPlane agent not loaded — instant tier and NMS detection disabled; " +
               "full reloads still work."
       )
     }
@@ -170,32 +177,6 @@ class CompanionMessageHandler(
     // Captured before dispatch so the report's strategy reflects whether this was the first load
     // (fresh) or a reload of an already-loaded plugin.
     val wasLoaded = host.isLoaded()
-
-    // Try in-place class redefinition first if HotSwapper is available and the change is
-    // method-body-only. Skips the full host reload entirely.
-    if (
-        hotSwapEligible(
-            wasLoaded,
-            host.leakLimitReached,
-            request.changedClasses,
-            request.classesDirs,
-        )
-    ) {
-      if (tryHotSwap(host, request)) {
-        ipc.sendReport(
-            HostLoadReport(
-                requestId = request.requestId,
-                status = HostLoadStatus.OK,
-                strategy = HostReloadStrategy.HOTSWAP,
-                durationMs = 0,
-                pluginName = request.pluginName,
-            )
-        )
-        broadcast(Component.text("${request.pluginName} hot-swapped!", NamedTextColor.GREEN))
-        return
-      }
-    }
-
     val strategy = if (wasLoaded) HostReloadStrategy.RELOAD else HostReloadStrategy.FRESH
     val result = host.handleRequest(request)
     ipc.sendReport(reportFor(request, strategy, result))
@@ -222,21 +203,113 @@ class CompanionMessageHandler(
     }
   }
 
+  // ── Instant swaps (`instantSwap` messages) ─────────────────────────
+
   /**
-   * Hot-swap fast-path eligibility. A method-body-only edit (changed classes, no structural change)
-   * on an already-loaded plugin can be redefined in place, skipping the full host reload — but only
-   * while the host hasn't tripped its leak limit. Once it has, the fast path would report Ok with
-   * no `action`, deferring the leak-restart indefinitely (the CLI may have missed the tripping Ok);
-   * falling through to the full reload lets the host's refusal carry the restart action. Pure so it
-   * can be unit-tested without instrumentation, which [tryHotSwap] requires.
+   * Applies an instant patch (in-place class redefinition) to the live plugin and answers with an
+   * `instantReport`. Refusals are cheap and honest — the CLI falls through to the active mode's
+   * full swap path with the reason surfaced.
+   *
+   * The leak-limit refusal keeps the leak-restart signal flowing: past the limit, patches would
+   * report Ok with no `action`, deferring the restart indefinitely (the CLI may have missed the
+   * tripping Ok); refusing routes the next change through the full reload, whose report carries
+   * [HostLoadReport.ACTION_RESTART].
    */
-  internal fun hotSwapEligible(
-      wasLoaded: Boolean,
-      leakLimitReached: Boolean,
-      changedClasses: List<String>,
-      classesDirs: List<String>,
-  ): Boolean =
-      wasLoaded && !leakLimitReached && changedClasses.isNotEmpty() && classesDirs.isNotEmpty()
+  fun handleInstantSwap(request: HostInstantSwapRequest) {
+    fun answer(
+        status: HostInstantSwapStatus,
+        patched: Int = 0,
+        appliedClasses: List<String> = emptyList(),
+        reason: String? = null,
+    ) {
+      ipc.sendInstantReport(
+          HostInstantSwapReport(
+              requestId = request.requestId,
+              status = status,
+              patched = patched,
+              appliedClasses = appliedClasses,
+              reason = reason,
+          )
+      )
+    }
+
+    if (host?.leakLimitReached == true) {
+      answer(
+          HostInstantSwapStatus.REFUSED,
+          reason = "leak limit reached — a full reload must carry the restart signal",
+      )
+      return
+    }
+    val target = resolveInstantTarget(request.pluginName)
+    if (target == null) {
+      answer(HostInstantSwapStatus.REFUSED, reason = "plugin ${request.pluginName} is not loaded")
+      return
+    }
+    val swapper = instantSwapper ?: instantSwapperProvider().also { instantSwapper = it }
+
+    // Last-resort net for the whole patch pipeline, mirroring the load path's. The CLI blocks on a
+    // report; anything that escapes here would strand it until timeout and surface as "no patch
+    // answer from the companion", burying the real cause in a scheduler stack trace.
+    val outcome =
+        try {
+          swapper.apply(request, target.classLoader, target.sourceFallbackAllowed)
+        } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
+          plugin.logger.log(Level.WARNING, "Instant swap failed unexpectedly", e)
+          InstantSwapper.Outcome.Failed("${e.javaClass.simpleName}: ${e.message}")
+        }
+
+    when (outcome) {
+      is InstantSwapper.Outcome.Applied -> {
+        answer(
+            HostInstantSwapStatus.OK,
+            patched = outcome.patched,
+            appliedClasses = outcome.appliedClasses,
+        )
+        broadcast(Component.text("${request.pluginName} patched!", NamedTextColor.GREEN))
+      }
+      is InstantSwapper.Outcome.Refused ->
+          answer(HostInstantSwapStatus.REFUSED, reason = outcome.reason)
+      is InstantSwapper.Outcome.Failed ->
+          answer(HostInstantSwapStatus.FAILED, reason = outcome.reason)
+    }
+  }
+
+  /** What a patch needs to know about the live plugin it targets. */
+  private class InstantTarget(
+      val classLoader: ClassLoader,
+      /** See [InstantSwapper.apply]. */
+      val sourceFallbackAllowed: Boolean,
+  )
+
+  /**
+   * The live plugin named [pluginName]: the host's inner plugin in hot-reload mode, or the natively
+   * loaded plugin (Paper's own `PluginClassLoader`) in restart/blue-green.
+   *
+   * Null whenever that plugin isn't running here — a request naming someone else, or a native
+   * plugin that is loaded but disabled (its classes may be resident, but patching a plugin the
+   * server has shut down is never what the CLI vouched for). Answering with the wrong loader would
+   * push the honest "not loaded" refusal down into the swapper, which can only report it as the
+   * misleading "no load record". A null `host?.current()` means the host is mid-reload with no
+   * inner plugin, which still falls through to the native lookup.
+   *
+   * The dev host applies no define-time rewrite of its own, so a hosted plugin may always use the
+   * source-bytes fallback. A native plugin may only when it declares an `api-version`: without one
+   * Paper treats it as legacy and Commodore's rewrite is semantic, not just a re-encode.
+   */
+  private fun resolveInstantTarget(pluginName: String): InstantTarget? {
+    val hosted = host?.current()
+    if (hosted != null) {
+      return if (hosted.name == pluginName) {
+        InstantTarget(hosted.javaClass.classLoader, sourceFallbackAllowed = true)
+      } else null
+    }
+    val native = plugin.server.pluginManager.getPlugin(pluginName) ?: return null
+    if (!native.isEnabled) return null
+    return InstantTarget(
+        native.javaClass.classLoader,
+        sourceFallbackAllowed = native.description.apiVersion != null,
+    )
+  }
 
   /**
    * Schedules the deferred leak dumps — but only in [LeakDiagnosticsMode.FULL] and only when the
@@ -288,21 +361,6 @@ class CompanionMessageHandler(
                 action = result.action,
             )
       }
-
-  private fun tryHotSwap(host: InnerPluginHost, request: HostLoadRequest): Boolean {
-    val inner = host.current() ?: return false
-    if (hotSwapper == null) hotSwapper = HotSwapper(plugin.logger)
-    if (!hotSwapper!!.isAvailable()) return false
-    val classLoader = inner.javaClass.classLoader
-    val result = hotSwapper!!.redefine(request.changedClasses, classLoader, request.classesDirs)
-    return when (result) {
-      HotSwapResult.SUCCESS -> true
-      else -> {
-        plugin.logger.fine("Hot-swap returned $result — falling back to full host reload")
-        false
-      }
-    }
-  }
 
   // ── Helpers ────────────────────────────────────────────────────────
 

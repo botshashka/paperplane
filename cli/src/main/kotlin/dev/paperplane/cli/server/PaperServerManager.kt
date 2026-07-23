@@ -2,8 +2,6 @@ package dev.paperplane.cli.server
 
 import com.charleskorn.kaml.YamlMap
 import dev.paperplane.cli.config.ServerConfig
-import dev.paperplane.cli.devserver.LoadRequest
-import dev.paperplane.cli.devserver.LoadWaitResult
 import dev.paperplane.cli.ipc.CompanionClient
 import dev.paperplane.cli.ipc.CompanionSocketFile
 import dev.paperplane.cli.ipc.CompanionWire
@@ -12,7 +10,6 @@ import dev.paperplane.cli.plugins.atomicMoveOrFallback
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import java.io.IOException
-import java.util.UUID
 
 open class PaperServerManager(
     val serverDir: File,
@@ -28,8 +25,6 @@ open class PaperServerManager(
     private const val SIGTERM_TIMEOUT_SECONDS = 5L
     private const val FORCE_STOP_TIMEOUT_SECONDS = 2L
     private const val SAVE_TIMEOUT_MS = 10_000L
-    /** Highest vanilla op permission level — full command access on the dev server. */
-    private const val OP_PERMISSION_LEVEL = 4
     private const val SERVER_READY_TIMEOUT_MS = 120_000L
 
     /**
@@ -120,8 +115,8 @@ open class PaperServerManager(
         serverConfig.paperWorldDefaults,
     )
     val banned = serverConfig.opBanlist.toSet()
-    writeOpsJson(serverConfig.ops.filter { it !in banned })
-    writeOpBanlist(serverConfig.opBanlist)
+    OpsFiles.writeOps(serverDir, serverConfig.ops.filter { it !in banned })
+    OpsFiles.writeBanlist(serverDir, serverConfig.opBanlist)
   }
 
   /**
@@ -135,63 +130,11 @@ open class PaperServerManager(
   }
 
   /**
-   * Writes `ops.json` if [names] is non-empty. Uses offline-mode UUIDs (deterministic from name)
-   * since the dev server runs with `online-mode=false`. PaperPlane's companion plugin also auto-ops
-   * joining players at runtime — this list seeds known ops across fresh server directories.
-   */
-  private fun writeOpsJson(names: List<String>) {
-    val opsFile = File(serverDir, "ops.json")
-    if (names.isEmpty()) {
-      opsFile.delete() // idempotent — no exists() pre-check
-      return
-    }
-    val entries = names.map { name ->
-      mapOf(
-          "uuid" to offlineUuid(name).toString(),
-          "name" to name,
-          "level" to OP_PERMISSION_LEVEL,
-          "bypassesPlayerLimit" to false,
-      )
-    }
-    opsFile.writeText(gson.toJson(entries))
-  }
-
-  /**
-   * Writes the op banlist to `.paperplane/op-banlist.json` as a JSON array of names. The companion
-   * plugin reads this file on join events and skips auto-opping any listed name. Also consulted by
-   * the CLI's reverse-sync to keep banned names out of `paperplane.yml`.
-   */
-  private fun writeOpBanlist(names: List<String>) {
-    val statusDir = File(serverDir, ".paperplane").apply { mkdirs() }
-    val file = File(statusDir, "op-banlist.json")
-    if (names.isEmpty()) {
-      file.delete()
-      return
-    }
-    file.writeText(gson.toJson(names))
-  }
-
-  /** Deterministic UUID that Minecraft uses for offline-mode players. */
-  private fun offlineUuid(name: String): UUID =
-      UUID.nameUUIDFromBytes("OfflinePlayer:$name".toByteArray(Charsets.UTF_8))
-
-  /**
    * Reads current op names from `ops.json` in this server's directory. Returns an empty list if the
    * file is missing or malformed. Used for reverse-sync of auto-opped players back into
    * `paperplane.yml`.
    */
-  fun readOpNames(): List<String> {
-    return try {
-      @Suppress("UNCHECKED_CAST")
-      val arr =
-          gson.fromJson(File(serverDir, "ops.json").readText(), List::class.java)
-              as? List<Map<String, Any>>
-      arr?.mapNotNull { it["name"] as? String } ?: emptyList()
-    } catch (_: Exception) {
-      // ops.json missing, unreadable, or malformed — treat as no ops.
-      emptyList()
-    }
-  }
+  fun readOpNames(): List<String> = OpsFiles.readOpNames(serverDir)
 
   open fun configureVelocityForwarding(secret: String) {
     val paperConfigDir = File(serverDir, ServerConfigs.PAPER_CONFIG_DIR).apply { mkdirs() }
@@ -305,12 +248,16 @@ open class PaperServerManager(
   }
 
   /**
-   * Extracts the PaperPlane Java agent JAR from CLI resources. Used for HMR Level 2
-   * (instrumentation-based hot-swap).
+   * Extracts the PaperPlane Java agent JAR from CLI resources. Attached to every dev-server JVM
+   * (all modes) so the instant tier's in-place class redefinition is available wherever the
+   * classifier admits a change.
    */
   fun extractAgent(): File {
     val agentJar = File(serverDir, ".paperplane/paperplane-agent.jar")
-    if (agentJar.exists()) return agentJar
+    // Always re-extract, exactly like copyCompanion. The agent's contract moves with the CLI (the
+    // CRC registry the instant tier verifies against lives in it), and a jar left by an older ppl
+    // still satisfies the "agent present" probe — so the tier would advertise itself and then
+    // refuse every patch with "no load record" until someone ran `ppl clean`.
     agentJar.parentFile.mkdirs()
     extractResource("paperplane-agent.bin", agentJar)
     return agentJar
@@ -323,13 +270,12 @@ open class PaperServerManager(
     stream.use { input -> target.outputStream().use { output -> input.copyTo(output) } }
   }
 
-  open fun start(
-      paperJar: File,
-      jvmArgs: List<String>,
-      hotReload: Boolean = false,
-      javaBin: String = "java",
-  ) {
-    val cmd = mutableListOf(javaBin)
+  /**
+   * Launches the server with the session-wide [LaunchSpec] — the single source of truth for
+   * javaBin, JVM args and agent attachment in every mode and recovery path.
+   */
+  open fun start(paperJar: File, launch: LaunchSpec) {
+    val cmd = mutableListOf(launch.javaBin)
     // Fast startup flags
     cmd.addAll(
         listOf(
@@ -342,12 +288,15 @@ open class PaperServerManager(
         )
     )
 
-    if (hotReload) {
+    if (launch.attachAgent) {
       val agentJar = extractAgent()
-      cmd.add("-javaagent:${agentJar.absolutePath}")
+      val agentArgs =
+          launch.recordedPackages.takeIf { it.isNotEmpty() }?.joinToString(",")?.let { "=$it" }
+              ?: ""
+      cmd.add("-javaagent:${agentJar.absolutePath}$agentArgs")
     }
 
-    cmd.addAll(jvmArgs)
+    cmd.addAll(launch.jvmArgs)
     cmd.addAll(listOf("-jar", paperJar.absolutePath, "--nogui"))
 
     // Clear the previous run's discovery/bootstrap leftovers BEFORE the process launches: a stale
@@ -496,28 +445,9 @@ open class PaperServerManager(
   }
 
   /**
-   * Pushes a build-state update to the companion (chat broadcast + save-protection window on the
-   * server side). Best-effort: with no live connection — server down, or the state is an error
-   * being reported while nothing is running — the update is dropped, which matches its advisory
-   * role.
+   * The companion conversation for this server — see [CompanionIpc]. One overridable seam: the
+   * delegate reads the live connection through a provider, so it follows every reconnect without
+   * being rebuilt.
    */
-  open fun sendCompanionStatus(state: String, duration: String? = null, message: String? = null) {
-    companion?.sendStatus(state, duration, message)
-  }
-
-  /**
-   * Sends a [LoadRequest] to the companion host. Best-effort like [sendCompanionStatus] — the
-   * caller's [awaitLoadReport] resolves the outcome either way.
-   */
-  open fun sendLoadRequest(request: LoadRequest): Boolean =
-      companion?.sendLoadRequest(request) ?: false
-
-  /**
-   * Waits for the companion's report answering [expectedRequestId]. Resolves
-   * [LoadWaitResult.ServerExited] when the process dies or the connection drops (no client at all —
-   * the server was never started — counts as exited too).
-   */
-  internal open fun awaitLoadReport(expectedRequestId: String, timeoutMs: Long): LoadWaitResult =
-      companion?.awaitReport(expectedRequestId, timeoutMs, isAlive = ::isRunning)
-          ?: LoadWaitResult.ServerExited
+  internal open val ipc: CompanionIpc = CompanionIpc({ companion }, ::isRunning)
 }

@@ -262,6 +262,11 @@ class BlueGreenModeRenderTest {
         serverA.calls.contains("copyCompanion(depend=0,softdepend=0)"),
         "native deploy must not rewrite the companion's depends; calls were ${serverA.calls}",
     )
+    assertTrue(
+        serverA.launchSpecs.isNotEmpty() &&
+            serverA.launchSpecs.all { it == fixture.session.launchSpec },
+        "the active backend must launch with the session LaunchSpec; got ${serverA.launchSpecs}",
+    )
   }
 
   // ── Rebuild deploys natively to standby and pre-warms the old active ─
@@ -311,6 +316,14 @@ class BlueGreenModeRenderTest {
         serverA.calls.contains("copyPluginToPluginsDir(test.jar)"),
         "the pre-warmed old active must receive the fresh jar too; calls were ${serverA.calls}",
     )
+    // Promoted standby and pre-warmed replacement alike must carry the session LaunchSpec —
+    // this is the blue-green half of the mirror-the-args invariant.
+    assertTrue(
+        serverB.launchSpecs.isNotEmpty() &&
+            (serverA.launchSpecs + serverB.launchSpecs).all { it == fixture.session.launchSpec },
+        "every blue-green start must use the session LaunchSpec; " +
+            "A=${serverA.launchSpecs} B=${serverB.launchSpecs}",
+    )
   }
 
   // ── Fix-recovery restart deploys natively (regression: startFixedServer) ─
@@ -345,6 +358,10 @@ class BlueGreenModeRenderTest {
     assertFalse(
         blue.calls.any { it.startsWith("stagePlugin") },
         "the recovered server must NOT merely stage the jar — that booted it without the plugin",
+    )
+    assertTrue(
+        blue.launchSpecs.isNotEmpty() && blue.launchSpecs.all { it == fixture.session.launchSpec },
+        "the recovered server must launch with the session LaunchSpec; got ${blue.launchSpecs}",
     )
   }
 

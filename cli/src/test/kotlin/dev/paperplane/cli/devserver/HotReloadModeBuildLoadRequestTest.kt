@@ -1,6 +1,5 @@
 package dev.paperplane.cli.devserver
 
-import dev.paperplane.cli.gradle.ClassChanges
 import dev.paperplane.cli.gradle.ProjectMetadata
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -9,15 +8,15 @@ import org.junit.jupiter.api.Test
 
 /**
  * Pinpoint tests for the strategy-selection logic that decides what shape of [LoadRequest] the
- * companion receives on rebuild.
+ * companion receives on a full reload. (The instant lane runs before any reload, so a load request
+ * always means a real host load.)
  *
- * Three strategies map to three contract guarantees:
+ * Two strategies map to two contract guarantees:
  * - JAR fallback: classesDirs is empty (host MUST load from the staged JAR).
- * - HOTSWAP: classesDirs populated AND changedClasses populated (host can use Instrumentation).
- * - DIRECTORY: classesDirs populated AND changedClasses empty (host must do full classloader swap).
+ * - DIRECTORY: classesDirs populated (host does the full classloader swap from build dirs).
  *
- * The companion's `BuildStatusBar.handleRequest` interprets these shapes — these tests fix the
- * contract on the CLI side so the two halves can't drift.
+ * The companion interprets these shapes — these tests fix the contract on the CLI side so the two
+ * halves can't drift.
  */
 class HotReloadModeBuildLoadRequestTest {
 
@@ -47,12 +46,9 @@ class HotReloadModeBuildLoadRequestTest {
         HotReloadMode.buildLoadRequest(
             metadata = baseMetadata,
             fastMeta = null,
-            changes =
-                ClassChanges(modified = listOf("X"), added = emptyList(), removed = emptyList()),
             stagedJarPath = "/staged/sample.jar",
         )
     assertTrue(request.classesDirs.isEmpty(), "JAR fallback must have empty classesDirs")
-    assertTrue(request.changedClasses.isEmpty())
     assertTrue(request.resourcesDir.isEmpty())
     assertTrue(request.runtimeClasspath.isEmpty())
     assertEquals("/staged/sample.jar", request.jarPath)
@@ -66,86 +62,24 @@ class HotReloadModeBuildLoadRequestTest {
         HotReloadMode.buildLoadRequest(
             metadata = baseMetadata,
             fastMeta = emptyFast,
-            changes = ClassChanges(emptyList(), emptyList(), emptyList()),
             stagedJarPath = "/x.jar",
         )
     assertTrue(request.classesDirs.isEmpty())
-    assertTrue(request.changedClasses.isEmpty())
-  }
-
-  // ── HOTSWAP ─────────────────────────────────────────────────────────
-
-  @Test
-  fun `only modified classes yields HOTSWAP request`() {
-    val request =
-        HotReloadMode.buildLoadRequest(
-            metadata = baseMetadata,
-            fastMeta = fastMeta(),
-            changes =
-                ClassChanges(
-                    modified = listOf("com.example.Foo", "com.example.Bar"),
-                    added = emptyList(),
-                    removed = emptyList(),
-                ),
-            stagedJarPath = "/staged/sample.jar",
-        )
-    assertEquals(listOf("com.example.Foo", "com.example.Bar"), request.changedClasses)
-    assertEquals(listOf("/proj/build/classes/kotlin/main"), request.classesDirs)
-    assertEquals("/proj/build/resources/main", request.resourcesDir)
-    assertEquals(listOf("/lib/dep1.jar", "/lib/dep2.jar"), request.runtimeClasspath)
   }
 
   // ── DIRECTORY ───────────────────────────────────────────────────────
 
   @Test
-  fun `added classes force DIRECTORY (no HOTSWAP)`() {
+  fun `fastMeta with classes dirs yields DIRECTORY shape with full metadata propagation`() {
     val request =
         HotReloadMode.buildLoadRequest(
             metadata = baseMetadata,
             fastMeta = fastMeta(),
-            changes =
-                ClassChanges(
-                    modified = listOf("com.example.Foo"),
-                    added = listOf("com.example.NewClass"),
-                    removed = emptyList(),
-                ),
             stagedJarPath = "/staged/sample.jar",
         )
-    assertTrue(request.changedClasses.isEmpty(), "Adding classes must disqualify HOTSWAP")
-    assertTrue(request.classesDirs.isNotEmpty(), "DIRECTORY must keep classesDirs populated")
-  }
-
-  @Test
-  fun `removed classes force DIRECTORY (no HOTSWAP)`() {
-    val request =
-        HotReloadMode.buildLoadRequest(
-            metadata = baseMetadata,
-            fastMeta = fastMeta(),
-            changes =
-                ClassChanges(
-                    modified = emptyList(),
-                    added = emptyList(),
-                    removed = listOf("com.example.Old"),
-                ),
-            stagedJarPath = "/x.jar",
-        )
-    assertTrue(request.changedClasses.isEmpty())
-    assertTrue(request.classesDirs.isNotEmpty())
-  }
-
-  @Test
-  fun `no changes still emits DIRECTORY shape (empty changedClasses)`() {
-    // Edge case: rebuild fired but actual diff is empty (debouncing artifact). The host should
-    // do a no-op-ish DIRECTORY reload rather than a JAR fallback.
-    val request =
-        HotReloadMode.buildLoadRequest(
-            metadata = baseMetadata,
-            fastMeta = fastMeta(),
-            changes = ClassChanges(emptyList(), emptyList(), emptyList()),
-            stagedJarPath = "/x.jar",
-        )
-    assertTrue(request.changedClasses.isEmpty())
-    assertTrue(request.classesDirs.isNotEmpty())
+    assertEquals(listOf("/proj/build/classes/kotlin/main"), request.classesDirs)
+    assertEquals("/proj/build/resources/main", request.resourcesDir)
+    assertEquals(listOf("/lib/dep1.jar", "/lib/dep2.jar"), request.runtimeClasspath)
   }
 
   // ── needsJarBuild: keep the staged JAR fresh in JAR-fallback mode ────
@@ -165,8 +99,8 @@ class HotReloadModeBuildLoadRequestTest {
 
   @Test
   fun `needsJarBuild is false in directory mode so fast reloads skip the jar task`() {
-    // Directory/hotswap mode: the host loads from classesDirs and never touches the jar, so there
-    // is no reason to pay for a `jar` build.
+    // Directory mode: the host loads from classesDirs and never touches the jar, so there is no
+    // reason to pay for a `jar` build.
     assertFalse(HotReloadMode.needsJarBuild(fastMeta = fastMeta(), builtJarExists = true))
   }
 
@@ -180,20 +114,8 @@ class HotReloadModeBuildLoadRequestTest {
 
   @Test
   fun `each call generates a unique requestId`() {
-    val a =
-        HotReloadMode.buildLoadRequest(
-            baseMetadata,
-            null,
-            ClassChanges(emptyList(), emptyList(), emptyList()),
-            "/x.jar",
-        )
-    val b =
-        HotReloadMode.buildLoadRequest(
-            baseMetadata,
-            null,
-            ClassChanges(emptyList(), emptyList(), emptyList()),
-            "/x.jar",
-        )
+    val a = HotReloadMode.buildLoadRequest(baseMetadata, null, "/x.jar")
+    val b = HotReloadMode.buildLoadRequest(baseMetadata, null, "/x.jar")
     assertTrue(a.requestId != b.requestId, "Each rebuild must mint a fresh requestId for dedup")
     assertTrue(a.requestId.isNotBlank())
   }
