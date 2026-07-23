@@ -1,5 +1,6 @@
 package dev.paperplane.cli.ipc
 
+import dev.paperplane.cli.devserver.InstantWaitResult
 import dev.paperplane.cli.devserver.LoadRequest
 import dev.paperplane.cli.devserver.LoadStatus
 import dev.paperplane.cli.devserver.LoadWaitResult
@@ -378,6 +379,47 @@ class CompanionClientTest {
       CompanionClient(serverDir).use { client ->
         connectOrFail(client)
         assertEquals(LoadWaitResult.ServerExited, client.awaitReport("r1", 10_000) { false })
+      }
+    }
+  }
+
+  // ── Instant reports ─────────────────────────────────────────────────
+  // Same await contract as load reports (one shared loop); these pin the instant mapper: the
+  // typed Answered result, the stale-id drop, and the dead-process short-circuit.
+
+  @Test
+  fun `awaitInstantReport resolves Answered for the matching report and drops stale ids`() {
+    FakeCompanionSocket(serverDir).use { companion ->
+      companion.start()
+      CompanionClient(serverDir).use { client ->
+        connectOrFail(client)
+        companion.awaitConnection()
+        companion.send("""{"type":"instantReport","requestId":"STALE","status":"ok","patched":9}""")
+        companion.send(
+            """{"type":"instantReport","requestId":"i1","status":"ok","patched":1,""" +
+                """"appliedClasses":["com.example.Foo"]}"""
+        )
+
+        val result = client.awaitInstantReport("i1", 5_000, alive)
+
+        val answered = assertInstanceOf(InstantWaitResult.Answered::class.java, result)
+        assertEquals("i1", answered.report.requestId)
+        assertEquals(1, answered.report.patched)
+        assertEquals(listOf("com.example.Foo"), answered.report.appliedClasses)
+      }
+    }
+  }
+
+  @Test
+  fun `awaitInstantReport resolves ServerExited when the process dies`() {
+    FakeCompanionSocket(serverDir).use { companion ->
+      companion.start()
+      CompanionClient(serverDir).use { client ->
+        connectOrFail(client)
+        assertEquals(
+            InstantWaitResult.ServerExited,
+            client.awaitInstantReport("i1", 10_000) { false },
+        )
       }
     }
   }

@@ -321,6 +321,54 @@ class InstantLaneTest {
   }
 
   @Test
+  fun `a failed report escalates with the companion's reason`() {
+    val setup = setup()
+    writeClass("com.example.Logic", bodyV(1))
+    seed(setup)
+    writeClass("com.example.Logic", bodyV(2))
+    setup.server.instantWaitResult = { id ->
+      InstantWaitResult.Answered(
+          InstantSwapReport(
+              requestId = id,
+              status = InstantSwapStatus.FAILED,
+              reason = "JVM rejected redefinition: VerifyError",
+          )
+      )
+    }
+
+    val escalate = assertInstanceOf(InstantOutcome.Escalate::class.java, attempt(setup))
+    assertTrue(escalate.reason.contains("JVM rejected"), escalate.reason)
+  }
+
+  @Test
+  fun `a report timeout escalates rather than hanging the rebuild`() {
+    val setup = setup()
+    writeClass("com.example.Logic", bodyV(1))
+    seed(setup)
+    writeClass("com.example.Logic", bodyV(2))
+    setup.server.instantWaitResult = { _ -> InstantWaitResult.TimedOut }
+
+    val escalate = assertInstanceOf(InstantOutcome.Escalate::class.java, attempt(setup))
+    assertTrue(escalate.reason.contains("no patch answer"), escalate.reason)
+    assertTrue(
+        setup.baseline.confirmed()!!.classes.getValue("com.example.Logic").contentEquals(bodyV(1)),
+        "an unanswered patch must not advance the baseline",
+    )
+  }
+
+  @Test
+  fun `a server exit during the patch escalates with the exit named`() {
+    val setup = setup()
+    writeClass("com.example.Logic", bodyV(1))
+    seed(setup)
+    writeClass("com.example.Logic", bodyV(2))
+    setup.server.instantWaitResult = { _ -> InstantWaitResult.ServerExited }
+
+    val escalate = assertInstanceOf(InstantOutcome.Escalate::class.java, attempt(setup))
+    assertTrue(escalate.reason.contains("server exited"), escalate.reason)
+  }
+
+  @Test
   fun `a compile failure ends the attempt as CompileFailed`() {
     val setup = setup()
     writeClass("com.example.Logic", bodyV(1))
