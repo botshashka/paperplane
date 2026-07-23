@@ -158,6 +158,71 @@ class InstantModeIntegrationTest {
   }
 
   @Test
+  fun `a no-change hot-reload rebuild reports honestly and does nothing`() {
+    val (fixture, metadata) = fixtureWithClasses()
+    val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
+    val mode = HotReloadMode(fixture.session, server)
+    writeLogic(1)
+    mode.lane.confirmFullSwap(mode.baseline)
+
+    lateinit var end: PhaseEnd
+    fixture.ui.phase {
+      end = mode.rebuild(metadata)
+      PhaseEnd.None
+    }
+
+    assertEquals(PhaseEnd.Watching, end)
+    assertTrue(
+        fixture.terminal.writes.any { it.contains("No code changes") },
+        "the honest nothing-to-do line must reach the user; got: ${fixture.terminal.writes}",
+    )
+    assertTrue(server.sentInstantSwaps.isEmpty(), "nothing changed — nothing to patch")
+    assertTrue(server.sentLoadRequests.isEmpty(), "nothing changed — nothing to reload")
+  }
+
+  @Test
+  fun `a disabled lane falls through to the full path with no instant chatter`() {
+    // dev.instant: false is the only rebuild shape with zero mode-level coverage elsewhere: the
+    // lane still compiles, then the mode's full swap runs as if the lane didn't exist — silently,
+    // because a switched-off feature must not nag every rebuild.
+    val fixture =
+        DevSessionFixture(
+                tempDir,
+                config =
+                    dev.paperplane.cli.config.PaperPlaneConfig(
+                        dev = dev.paperplane.cli.config.DevConfig(instant = false)
+                    ),
+            )
+            .withMetadata()
+    val metadata =
+        fixture.gradle.nextMetadata!!.copy(
+            classesDir = classesDir().absolutePath,
+            classesDirs = listOf(classesDir().absolutePath),
+        )
+    fixture.gradle.nextMetadata = metadata
+    fixture.gradle.nextMetadataFast = metadata
+    val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)
+    val mode = HotReloadMode(fixture.session, server)
+    writeLogic(1)
+    mode.lane.confirmFullSwap(mode.baseline)
+    writeLogic(2)
+
+    lateinit var end: PhaseEnd
+    fixture.ui.phase {
+      end = mode.rebuild(metadata)
+      PhaseEnd.None
+    }
+
+    assertEquals(PhaseEnd.Watching, end)
+    assertTrue(server.sentInstantSwaps.isEmpty(), "a disabled lane must never send a patch")
+    assertEquals(1, server.sentLoadRequests.size, "the full reload must run instead")
+    assertFalse(
+        fixture.terminal.writes.any { it.contains("Instant:") },
+        "a disabled lane escalates silently; got: ${fixture.terminal.writes}",
+    )
+  }
+
+  @Test
   fun `an escalated hot-reload rebuild prints the reason and falls through to the host reload`() {
     val (fixture, metadata) = fixtureWithClasses()
     val server = FakePaperServerManager(fixture.ppDir, fixture.downloader, fixture.ui)

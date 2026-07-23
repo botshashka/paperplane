@@ -39,6 +39,20 @@ class BuildCandidateTest {
   }
 
   @Test
+  fun `capture order does not change the sourceDirs identity`() {
+    // sourceDirs feeds the classifier's OUTPUT_LAYOUT_CHANGED gate. Gradle owes no ordering
+    // guarantee for classesDirs across invocations, so a mere reorder must compare equal — only a
+    // genuinely moved directory may escalate.
+    val javaOut = File(tempDir, "classes/java/main").apply { mkdirs() }
+    val kotlinOut = File(tempDir, "classes/kotlin/main").apply { mkdirs() }
+
+    val ab = BuildCandidate.capture(listOf(javaOut, kotlinOut), null)
+    val ba = BuildCandidate.capture(listOf(kotlinOut, javaOut), null)
+
+    assertEquals(ab.sourceDirs, ba.sourceDirs)
+  }
+
+  @Test
   fun `classCrc is stable per content and zero for unknown classes`() {
     val candidate = BuildCandidate(mapOf("com.example.A" to byteArrayOf(1, 2, 3)), emptyMap())
     assertEquals(BuildCandidate.crc32(byteArrayOf(1, 2, 3)), candidate.classCrc("com.example.A"))

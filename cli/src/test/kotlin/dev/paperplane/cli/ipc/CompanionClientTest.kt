@@ -4,6 +4,7 @@ import dev.paperplane.cli.devserver.InstantWaitResult
 import dev.paperplane.cli.devserver.LoadRequest
 import dev.paperplane.cli.devserver.LoadStatus
 import dev.paperplane.cli.devserver.LoadWaitResult
+import dev.paperplane.cli.devserver.instant.RedefineCapability
 import dev.paperplane.cli.testing.FakeCompanionSocket
 import java.io.File
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -226,6 +227,39 @@ class CompanionClientTest {
       CompanionClient(serverDir).use { client ->
         connectOrFail(client)
         assertFalse(client.awaitServerReady(10_000) { false })
+      }
+    }
+  }
+
+  // ── Capability ──────────────────────────────────────────────────────
+
+  @Test
+  fun `the welcome capability is published on connect`() {
+    FakeCompanionSocket(serverDir).use { companion ->
+      companion.start()
+      CompanionClient(serverDir).use { client ->
+        assertEquals(RedefineCapability.NONE, client.capability, "NONE until authenticated")
+        connectOrFail(client)
+        assertEquals(
+            RedefineCapability.BODY_ONLY,
+            client.capability,
+            "a connected client must report the tier the welcome advertised",
+        )
+      }
+    }
+  }
+
+  @Test
+  fun `a welcome without a capability leaves the client at NONE`() {
+    FakeCompanionSocket(serverDir, capability = null).use { companion ->
+      companion.start()
+      CompanionClient(serverDir).use { client ->
+        connectOrFail(client)
+        assertEquals(
+            RedefineCapability.NONE,
+            client.capability,
+            "an absent capability must degrade to NONE, never a guess",
+        )
       }
     }
   }

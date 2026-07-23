@@ -302,6 +302,111 @@ class InstantSwapperTest {
   }
 
   @Test
+  fun `a multi-class request reports every applied fqcn - redefined and already-current alike`() {
+    // appliedClasses is what the CLI advances its baseline against, so both shapes of "verifiably
+    // running the requested bytes" must be named: the redefined class AND the already-current one
+    // (which never enters the redefinition batch).
+    val redefined = "com.example.PatchA"
+    val current = "com.example.PatchB"
+    val aV1 = BytecodeFixtures.classWithMarker("com/example/PatchA", 1)
+    val aV2 = BytecodeFixtures.classWithMarker("com/example/PatchA", 2)
+    val bV2 = BytecodeFixtures.classWithMarker("com/example/PatchB", 2)
+    val dir = File(tempDir, "multi").apply { mkdirs() }
+    for ((fqcn, bytes) in mapOf(redefined to aV1, current to bV2)) {
+      val target = File(dir, fqcn.replace('.', '/') + ".class")
+      target.parentFile.mkdirs()
+      target.writeBytes(bytes)
+    }
+    val loader = URLClassLoader(arrayOf(dir.toURI().toURL()), null)
+    crcRegistry[loader to redefined] = crc(aV1)
+    crcRegistry[loader to current] = crc(bV2)
+    val request =
+        HostInstantSwapRequest(
+            requestId = "i1",
+            pluginName = "Sample",
+            classes =
+                listOf(
+                    HostInstantClassEntry(redefined, crc(aV1), b64(aV2)),
+                    HostInstantClassEntry(current, 12345L, b64(bV2)),
+                ),
+        )
+    val inst = FakeInstrumentation()
+
+    val outcome = swapper(inst).apply(request, loader)
+
+    val applied = assertInstanceOf(InstantSwapper.Outcome.Applied::class.java, outcome)
+    assertEquals(2, applied.patched)
+    assertEquals(listOf(redefined, current), applied.appliedClasses)
+    assertEquals(1, inst.redefined.size, "the already-current class must not be redefined")
+    assertEquals(redefined, inst.redefined.single().definitionClass.name)
+  }
+
+  @Test
+  fun `a class that fails to link refuses with the linkage error named`() {
+    // A plugin class referencing a since-removed dependency throws NoClassDefFoundError on the
+    // force-load — a LinkageError, which the ClassNotFoundException catch never sees.
+    val loader =
+        object : ClassLoader(null) {
+          override fun findClass(name: String): Class<*> =
+              throw NoClassDefFoundError("com/missing/Dep")
+        }
+
+    val outcome =
+        swapper(FakeInstrumentation())
+            .apply(patchRequest("com.example.Broken", 1L, byteArrayOf(1)), loader)
+
+    val refused = assertInstanceOf(InstantSwapper.Outcome.Refused::class.java, outcome)
+    assertTrue(refused.reason.contains("failed to link"), refused.reason)
+  }
+
+  @Test
+  fun `a class resolved from the bootstrap loader is never patched`() {
+    // Delegation can resolve a requested name to a JDK class whose loader is null. Reported as
+    // Failed, not Refused: the class had no load record, so the force-load conservatism already
+    // gave up the "nothing was touched" promise before the loader check ran.
+    val outcome =
+        swapper(FakeInstrumentation())
+            .apply(patchRequest("java.lang.String", 1L, byteArrayOf(1)), javaClass.classLoader)
+
+    val failed = assertInstanceOf(InstantSwapper.Outcome.Failed::class.java, outcome)
+    assertTrue(failed.reason.contains("bootstrap loader"), failed.reason)
+  }
+
+  @Test
+  fun `an unmodifiable-class veto reports failed with the reason`() {
+    val fqcn = "com.example.Patch"
+    val v1 = BytecodeFixtures.classWithMarker("com/example/Patch", 1)
+    val v2 = BytecodeFixtures.classWithMarker("com/example/Patch", 2)
+    val loader = loaderWith(fqcn, v1)
+    crcRegistry[loader to fqcn] = crc(v1)
+    val inst =
+        FakeInstrumentation().apply {
+          redefineThrows = java.lang.instrument.UnmodifiableClassException("cannot modify")
+        }
+
+    val outcome = swapper(inst).apply(patchRequest(fqcn, crc(v1), v2), loader)
+
+    val failed = assertInstanceOf(InstantSwapper.Outcome.Failed::class.java, outcome)
+    assertTrue(failed.reason.contains("JVM rejected"), failed.reason)
+  }
+
+  @Test
+  fun `an unexpected redefine exception reports failed rather than escaping`() {
+    val fqcn = "com.example.Patch"
+    val v1 = BytecodeFixtures.classWithMarker("com/example/Patch", 1)
+    val v2 = BytecodeFixtures.classWithMarker("com/example/Patch", 2)
+    val loader = loaderWith(fqcn, v1)
+    crcRegistry[loader to fqcn] = crc(v1)
+    val inst = FakeInstrumentation().apply { redefineThrows = IllegalStateException("boom") }
+
+    val outcome = swapper(inst).apply(patchRequest(fqcn, crc(v1), v2), loader)
+
+    val failed = assertInstanceOf(InstantSwapper.Outcome.Failed::class.java, outcome)
+    assertTrue(failed.reason.contains("IllegalStateException"), failed.reason)
+    assertTrue(failed.reason.contains("boom"), failed.reason)
+  }
+
+  @Test
   fun `a JVM without redefinition support refuses`() {
     val fqcn = "com.example.Patch"
     val v1 = BytecodeFixtures.classWithMarker("com/example/Patch", 1)

@@ -33,9 +33,8 @@ class FakeCompanionSocket(
     private val answerHello: Boolean = true,
     /** Snapshot the welcome reports for `serverReady`. */
     private val serverReadyOnWelcome: Boolean = false,
-    /** Redefine capabilities the welcome advertises (agent present / JBR enhanced armed). */
-    private val agentCapability: Boolean = true,
-    private val enhancedCapability: Boolean = false,
+    /** The redefine capability the welcome advertises; null omits the field entirely. */
+    private val capability: String? = "body-only",
 ) : AutoCloseable {
   private val gson = Gson()
   private val serverSocket = ServerSocket()
@@ -108,13 +107,7 @@ class FakeCompanionSocket(
               addProperty("type", "welcome")
               addProperty("protocolVersion", welcomeProtocolVersion)
               addProperty("serverReady", serverReadyOnWelcome)
-              add(
-                  "capabilities",
-                  JsonObject().apply {
-                    addProperty("agent", agentCapability)
-                    addProperty("enhanced", enhancedCapability)
-                  },
-              )
+              capability?.let { addProperty("capability", it) }
             }
             .toString()
     )

@@ -238,6 +238,62 @@ class ChangeClassifierTest {
   }
 
   @Test
+  fun `an added method annotated only on a parameter is UNSAFE with the annotated label`() {
+    // The developer-annotation gate must see parameter annotations too (a scan-once framework can
+    // key on them), and with no method-level annotation to name, the label falls back to
+    // "annotated" rather than inventing one.
+    val old =
+        BytecodeFixtures.generateClass(
+            methods = listOf(MethodSpec("tick", body = BytecodeFixtures.bodyReturning(1)))
+        )
+    val new =
+        BytecodeFixtures.generateClass(
+            methods =
+                listOf(
+                    MethodSpec("tick", body = BytecodeFixtures.bodyReturning(1)),
+                    MethodSpec(
+                        "handle",
+                        desc = "(I)V",
+                        parameterAnnotations = listOf(eventHandler),
+                    ),
+                )
+        )
+
+    val result = classify(mapOf("com.example.Test" to old), mapOf("com.example.Test" to new))
+
+    assertEquals(RedefineRequirement.UNSAFE, result.requirement)
+    assertEquals(setOf(EscalationKind.ANNOTATED_METHOD_ADDED), kinds(result))
+    assertTrue(
+        result.escalations[0].description.contains("annotated method handle"),
+        result.escalations[0].description,
+    )
+  }
+
+  @Test
+  fun `a throws-clause change on a retained method is UNSAFE`() {
+    val old =
+        BytecodeFixtures.generateClass(
+            methods = listOf(MethodSpec("tick", body = BytecodeFixtures.bodyReturning(1)))
+        )
+    val new =
+        BytecodeFixtures.generateClass(
+            methods =
+                listOf(
+                    MethodSpec(
+                        "tick",
+                        exceptions = arrayOf("java/io/IOException"),
+                        body = BytecodeFixtures.bodyReturning(1),
+                    )
+                )
+        )
+
+    val result = classify(mapOf("com.example.Test" to old), mapOf("com.example.Test" to new))
+
+    assertEquals(RedefineRequirement.UNSAFE, result.requirement)
+    assertEquals(setOf(EscalationKind.METHOD_DECLARATION_CHANGED), kinds(result))
+  }
+
+  @Test
   fun `adding an annotation to a retained method is UNSAFE`() {
     val old = BytecodeFixtures.generateClass(methods = listOf(MethodSpec("onJump")))
     val new =
@@ -425,6 +481,24 @@ class ChangeClassifierTest {
         )
 
     assertEquals(RedefineRequirement.UNSAFE, result.requirement)
+  }
+
+  @Test
+  fun `a removed resource is UNSAFE and says removed`() {
+    val bytes = BytecodeFixtures.generateClass()
+    val result =
+        classify(
+            mapOf("com.example.Test" to bytes),
+            mapOf("com.example.Test" to bytes),
+            oldResources = mapOf("config.yml" to 1L),
+        )
+
+    assertEquals(RedefineRequirement.UNSAFE, result.requirement)
+    assertEquals(setOf(EscalationKind.RESOURCE_CHANGED), kinds(result))
+    assertTrue(
+        result.escalations[0].description.contains("removed"),
+        result.escalations[0].description,
+    )
   }
 
   // ── Aggregation ─────────────────────────────────────────────────────

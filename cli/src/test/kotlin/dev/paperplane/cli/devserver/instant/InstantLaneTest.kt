@@ -295,6 +295,36 @@ class InstantLaneTest {
   }
 
   @Test
+  fun `empty class-output dirs escalate before classification`() {
+    val bare = metadata().copy(classesDir = "", classesDirs = emptyList())
+    val setup = setup(metadata = bare)
+    seed(setup)
+
+    val escalate = assertInstanceOf(InstantOutcome.Escalate::class.java, attempt(setup))
+    assertTrue(escalate.reason.contains("no class output dirs"), escalate.reason)
+  }
+
+  @Test
+  fun `a report without a recognizable status escalates as not applied`() {
+    // A status outside the enum (a newer companion, a corrupted line) decodes to null. That must
+    // read as not-applied — resolving it as success would advance the baseline on nothing.
+    val setup = setup()
+    writeClass("com.example.Logic", bodyV(1))
+    seed(setup)
+    writeClass("com.example.Logic", bodyV(2))
+    setup.server.instantWaitResult = { id ->
+      InstantWaitResult.Answered(InstantSwapReport(requestId = id, status = null))
+    }
+
+    val escalate = assertInstanceOf(InstantOutcome.Escalate::class.java, attempt(setup))
+    assertTrue(escalate.reason.contains("patch not applied"), escalate.reason)
+    assertTrue(
+        setup.baseline.confirmed()!!.classes.getValue("com.example.Logic").contentEquals(bodyV(1)),
+        "an unrecognizable answer must not advance the baseline",
+    )
+  }
+
+  @Test
   fun `a refused report escalates with the companion's reason and never advances the baseline`() {
     val setup = setup()
     writeClass("com.example.Logic", bodyV(1))

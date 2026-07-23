@@ -17,6 +17,8 @@ object BytecodeFixtures {
       val desc: String = "()V",
       val access: Int = Opcodes.ACC_PUBLIC,
       val annotations: List<String> = emptyList(),
+      /** Annotation descriptors on the method's first parameter (the desc must declare one). */
+      val parameterAnnotations: List<String> = emptyList(),
       val exceptions: Array<String>? = null,
       val body: (MethodVisitor) -> Unit = { it.visitInsn(Opcodes.RETURN) },
   )
@@ -46,6 +48,9 @@ object BytecodeFixtures {
       val mv = cw.visitMethod(spec.access, spec.name, spec.desc, null, spec.exceptions)
       for (desc in spec.annotations) {
         mv.visitAnnotation(desc, true).visitEnd()
+      }
+      for (desc in spec.parameterAnnotations) {
+        mv.visitParameterAnnotation(0, desc, true).visitEnd()
       }
       mv.visitCode()
       spec.body(mv)
