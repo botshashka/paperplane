@@ -5,6 +5,7 @@ import dev.paperplane.cli.ui.RecordingTerminal
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -38,5 +39,17 @@ class ProjectTemplatesTest {
         "vanilla default should pass through",
     )
     assertTrue(config.server.ops.isEmpty())
+  }
+
+  @Test
+  fun `scaffolded readme only references commands that exist`() {
+    val readme = ProjectTemplates.readme("MyPlugin")
+
+    assertTrue(readme.contains("ppl dev"))
+    assertTrue(readme.contains("./gradlew test"), "testing story is plain Gradle until Windtunnel")
+    // ppl test and ppl format were stripped from the CLI; the scaffolded
+    // README must not point users at commands that no longer exist.
+    assertFalse(readme.contains("ppl test"))
+    assertFalse(readme.contains("ppl format"))
   }
 }
