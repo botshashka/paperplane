@@ -481,20 +481,29 @@ internal class DevSession(
   private fun startForceSwapListener(rebuildLock: Any, onForceSwap: TerminalUI.() -> PhaseEnd) {
     Thread(
             {
-              try {
-                while (true) {
-                  val line = readlnOrNull() ?: break
-                  if (line.trim().equals("s", ignoreCase = true)) {
-                    synchronized(rebuildLock) {
-                      ui.phase {
-                        change("Manual full swap requested")
-                        onForceSwap()
-                      }
+              while (true) {
+                val line =
+                    try {
+                      readlnOrNull() ?: break
+                    } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                      // Detached/unreadable stdin — the escape hatch just isn't available.
+                      ui.status("Force-swap key disabled: stdin unreadable (${e.message})")
+                      break
+                    }
+                if (!line.trim().equals("s", ignoreCase = true)) continue
+                // The rebuild is caught per keypress, not around the loop: a throw from one forced
+                // swap used to kill the listener thread outright, silently removing the escape
+                // hatch for the rest of the session with nothing printed.
+                try {
+                  synchronized(rebuildLock) {
+                    ui.phase {
+                      change("Manual full swap requested")
+                      onForceSwap()
                     }
                   }
+                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                  ui.error("Manual full swap failed: ${e.javaClass.simpleName}: ${e.message}")
                 }
-              } catch (_: Exception) {
-                // Detached/unreadable stdin — the escape hatch just isn't available.
               }
             },
             "instant-force-swap",
