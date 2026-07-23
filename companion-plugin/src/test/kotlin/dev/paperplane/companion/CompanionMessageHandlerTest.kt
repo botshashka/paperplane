@@ -541,6 +541,52 @@ class CompanionMessageHandlerTest {
     )
   }
 
+  @Test
+  fun `an instant swap naming a different plugin than the hosted one is refused as not loaded`() {
+    // In hot-reload mode the host owns exactly one plugin. Answering a request for someone else
+    // with the hosted plugin's loader would push the refusal down into the swapper, which can only
+    // report it as "no load record" — true of the wrong class, and useless to whoever reads it.
+    val hosted = MockBukkit.createMockPlugin("Hosted")
+    MockBukkit.createMockPlugin(
+        "Sample"
+    ) // also loaded natively: the host branch must not fall through
+    val hostingOther =
+        object : RecordingHost(fakeServer, javaClass.classLoader, probe) {
+          override fun current() = hosted
+        }
+    val otherHandler = CompanionMessageHandler(hostingPlugin, { hostingOther }, ipc, serverRoot)
+    otherHandler.handleLoadRequest(request("r1")) // memoizes the host
+    ipc.instantReports.clear()
+
+    otherHandler.handleInstantSwap(instantRequest("i4", pluginName = "Sample"))
+
+    val report = ipc.instantReports.single()
+    assertEquals(HostInstantSwapStatus.REFUSED, report.status)
+    assertTrue(
+        report.reason!!.contains("Sample is not loaded"),
+        "the refusal must name the plugin that isn't hosted; got: ${report.reason}",
+    )
+  }
+
+  @Test
+  fun `an instant swap for a disabled native plugin is refused as not loaded`() {
+    // A disabled plugin's classes may still be resident, but the server has shut it down —
+    // redefining into it is never what the CLI vouched for.
+    val sample = MockBukkit.createMockPlugin("Sample")
+    server.pluginManager.disablePlugin(sample)
+
+    handler.handleInstantSwap(instantRequest("i5"))
+
+    val report = ipc.instantReports.single()
+    assertEquals(HostInstantSwapStatus.REFUSED, report.status)
+    assertTrue(
+        // Not a bare "not loaded" check: the swapper's own "instrumentation agent not loaded"
+        // would satisfy that, and this must refuse before the swapper is ever reached.
+        report.reason!!.contains("Sample is not loaded"),
+        "a disabled plugin must be refused before the swapper runs; got: ${report.reason}",
+    )
+  }
+
   // ── Status updates ──────────────────────────────────────────────────
 
   @Test
@@ -654,7 +700,7 @@ class CompanionMessageHandlerTest {
 
     override fun isLoaded(): Boolean = isLoadedResult
 
-    override fun current() = null
+    override fun current(): org.bukkit.plugin.java.JavaPlugin? = null
 
     override val leakLimitReached: Boolean = false
   }

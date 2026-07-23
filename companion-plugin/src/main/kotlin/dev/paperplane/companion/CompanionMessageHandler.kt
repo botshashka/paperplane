@@ -275,12 +275,24 @@ class CompanionMessageHandler(
   }
 
   /**
-   * The live plugin's classloader: the host's inner plugin in hot-reload mode, or the natively
-   * loaded plugin (Paper's own `PluginClassLoader`) in restart/blue-green.
+   * The classloader of the live plugin named [pluginName]: the host's inner plugin in hot-reload
+   * mode, or the natively loaded plugin (Paper's own `PluginClassLoader`) in restart/blue-green.
+   *
+   * Null whenever that plugin isn't running here — a request naming someone else, or a native
+   * plugin that is loaded but disabled (its classes may be resident, but patching a plugin the
+   * server has shut down is never what the CLI vouched for). Answering with the wrong loader would
+   * push the honest "not loaded" refusal down into the swapper, which can only report it as the
+   * misleading "no load record". A null `host?.current()` means the host is mid-reload with no
+   * inner plugin, which still falls through to the native lookup.
    */
-  private fun resolveInstantLoader(pluginName: String): ClassLoader? =
-      host?.current()?.javaClass?.classLoader
-          ?: plugin.server.pluginManager.getPlugin(pluginName)?.javaClass?.classLoader
+  private fun resolveInstantLoader(pluginName: String): ClassLoader? {
+    val hosted = host?.current()
+    if (hosted != null) {
+      return if (hosted.name == pluginName) hosted.javaClass.classLoader else null
+    }
+    val native = plugin.server.pluginManager.getPlugin(pluginName) ?: return null
+    return if (native.isEnabled) native.javaClass.classLoader else null
+  }
 
   /**
    * Schedules the deferred leak dumps — but only in [LeakDiagnosticsMode.FULL] and only when the
