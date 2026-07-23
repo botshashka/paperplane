@@ -1,7 +1,9 @@
 # 0005 — The instant tier: a universal redefine fast lane (protocol v4)
 
-**Status:** Accepted
-**Date:** 2026-07-22
+**Status:** Accepted — amended 2026-07-23: the ADDITIVE tier is cut, body-only
+everywhere (see the Amendment section; the Decision below is edited to the
+amended design, since protocol v4 is unreleased and is amended in place)
+**Date:** 2026-07-22, amended 2026-07-23
 
 ## Context
 
@@ -24,8 +26,8 @@ code that was never live.
 ## Decision
 
 Promote redefinition to a **universal fast lane** that runs in front of
-*every* dev mode's rebuild, with a capability-tiered conservative classifier
-and verified application.
+*every* dev mode's rebuild, with a conservative body-only classifier and
+verified application.
 
 - **CLI classifies.** Per rebuild the lane compiles (`classes` only — the
   patched path never builds a jar), snapshots the build output, and diffs it
@@ -35,9 +37,10 @@ and verified application.
   - `NONE` — nothing observable changed (debug info only). Report "no code
     changes", do nothing.
   - `BODY_ONLY` — only retained method bodies changed.
-  - `ADDITIVE` — additionally new classes and/or added/removed unannotated
-    methods (includes nest-attribute changes from new anonymous classes).
-  - `UNSAFE` — everything else, each with a named reason.
+  - `UNSAFE` — everything else, each with a named reason. Added and removed
+    methods, new classes, and nest-attribute changes are UNSAFE like every
+    other structural change *(amended 2026-07-23 — these were the ADDITIVE
+    tier, see the Amendment)*.
 - **The lifecycle gate is part of UNSAFE**: changes a JVM would happily
   redefine but that can never take effect — new/removed/changed *annotated*
   methods (registration-driven frameworks scan once), `onEnable`/
@@ -46,19 +49,18 @@ and verified application.
   default-initialized state), hierarchy changes, resource edits. The two
   historical blind spots (`<clinit>`, `onEnable`) are now escalations.
 - **Capability is per live JVM**, advertised in the socket `welcome`:
-  no agent → `NONE`; agent on a stock JVM → `BODY_ONLY`; agent on JBR with
-  the `-XX:+AllowEnhancedClassRedefinition` launch flag actually present →
-  `ADDITIVE` (vendor-only detection over-reported). The lane patches iff
-  requirement ≤ capability; a shortfall escalates naming the structural
-  change and the missing runtime. A curated list of scan-once-by-name
-  reflection frameworks caps `ADDITIVE` back to `BODY_ONLY` when present.
+  no agent → `NONE`; agent present → `BODY_ONLY`. The lane patches iff the
+  change-set is BODY_ONLY and the capability is there; anything structural
+  escalates naming the change.
 - **Protocol v4** adds an `instantSwap`/`instantReport` message pair,
   mirrored on both ends like the rest of the schema. Class bytes travel on
   the wire (base64 per class) with the expected loaded CRC32 — self-contained
   and container-proof for the Fresh-mode future where the server shares no
   filesystem with the CLI. `LoadRequest.changedClasses` and the `hotswap`
   strategy are deleted outright (clean cut, both ends ship as one artifact,
-  same as ADR-0004).
+  same as ADR-0004). *(Amended 2026-07-23: the request carries redefinitions
+  only — the `newClasses` list left the wire with the ADDITIVE cut. v4 is
+  unreleased, so the shape is amended in place; no v5.)*
 - **The companion verifies before applying.** The verification ground truth
   is the agent's **load-hook CRC registry**: the premain registers a
   `ClassFileTransformer` that records the CRC32 of the exact bytes each
@@ -84,14 +86,8 @@ and verified application.
   final backstop. `redefineClasses` is one atomic batch;
   changed-but-unloaded classes are force-loaded (uninitialized) first so a
   jar-backed loader's stale bytes can't resurrect later.
-- **New classes** load through the plugin's own loader: directory-backed dev
-  loaders see them on disk; `DevPluginClassLoader` can define them from wire
-  bytes; Paper's jar-backed `PluginClassLoader` gets an overlay-dir
-  `addURL` splice (the server JVM always launches with
-  `--add-opens java.base/java.net=ALL-UNNAMED` for this). Unspliceable
-  loaders refuse → escalate.
 - **LaunchSpec** makes the launch identity structural: one immutable value
-  per session (javaBin, JBR flags, the agent, the add-opens) used by every
+  per session (javaBin, the agent, the add-opens) used by every
   server start in every mode and recovery path — no code path can silently
   produce a server the lane can't patch. The gradle-plugin stamps
   `paperweight-mappings-namespace: mojang` into plugin jars so Paper 1.20.5+
@@ -102,21 +98,23 @@ and verified application.
 - **Honest reporting is the contract:** every rebuild ends in exactly one of
   "Patched N classes (instant)", "Instant: <named reason> — full swap", or
   "No code changes"; a session-start banner reports the tier ceiling and why
-  (`additive (JBR)`, `body-only`, `off (…)`); and typing `s`⏎ forces a full
-  swap — the user-side reset to ground truth.
+  (`body-only`, `off (…)`); and typing `s`⏎ forces a full swap — the
+  user-side reset to ground truth.
 
 ## Consequences
 
-- Body-only edits (and, on JBR, additive-structural ones) apply in the live
+- Body-only edits apply in the live
   server in well under a second in every mode — measured ~560 ms
   edit-to-patched including the Gradle compile, ~65 ms for the redefinition
   itself, against a real Paper 1.21.4 server whose running scheduler task
   switched output the tick after the patch landed.
-- Two residual risks are accepted and documented rather than hidden:
+- One residual risk is accepted and documented rather than hidden:
   "new code, old state" (inherent to hotswap of any kind — patched logic
-  runs against state computed by old logic) and reflection-by-name discovery
-  outside the curated cap list. Both are bounded by the escape hatch and by
-  every escalation being one normal swap away from ground truth.
+  runs against state computed by old logic). It is bounded by the escape
+  hatch and by every escalation being one normal swap away from ground
+  truth. *(The second residual — reflection-by-name discovery of added
+  members — left with the ADDITIVE cut: body-only patches never change the
+  member set.)*
 - The companion no longer ships ASM (the classifier moved CLI-side); the
   agent grew from a premain stub to the CRC registry, still dependency-free.
 - Refusals surface real environment facts (baseline drift, remapped jars,
@@ -125,3 +123,51 @@ and verified application.
 - The replay fixtures were re-captured from a real session exercising the
   full arc: fresh load → structural escalation (field) → instant patch →
   lifecycle escalation (`onEnable`) → instant patch → no-change.
+
+## Amendment (2026-07-23) — the ADDITIVE tier is cut
+
+The design as accepted had a third grade, `ADDITIVE` (new classes,
+added/removed unannotated methods, nest-attribute changes), patched only
+when the live JVM was JBR with `-XX:+AllowEnhancedClassRedefinition`
+actually present, and capped back to body-only by a curated list of
+scan-once-by-name reflection frameworks. That tier is removed. BODY_ONLY
+stays, with all of its verification machinery — the CRC load-hook agent,
+the baseline tracker, the escalation gates, and protocol v4 — unchanged.
+Added/removed methods and new classes now escalate as UNSAFE with named
+reasons. Since protocol v4 is unreleased, the wire shape is amended in
+place (the `instantSwap` request loses `newClasses`; the welcome capability
+becomes agent-present/absent); there is no v5.
+
+Why the reversal:
+
+1. **The review-cost evidence.** The pre-merge review of this branch found
+   twelve ways the tool could silently vouch for stale code, and they
+   concentrated worst in structural patching: the new-class define/overlay
+   splice, the foreign-loader probe, lifecycle gaps on *added* methods. A
+   future classifier gap in that territory fails silent — the exact failure
+   this ADR's Context names as the cardinal sin. Body-only's failure
+   surface is a fraction of the size, and its failure direction is refusal.
+2. **Delivered value was empirically ~zero.** The tier shipped dead for
+   Kotlin — `@kotlin.Metadata`'s `d1`/`d2` and `@NotNull` on added methods
+   escalated every Kotlin structural change — and nobody noticed until a
+   seven-agent review pass. The headline capability never fired for the
+   repo's own primary language.
+3. **The headline engine can never use it.** CRaC servers run a CRaC JDK,
+   not JBR, so the Fresh-mode future is body-only regardless. Post-Fresh,
+   an escalation costs a ~3–5 s fresh server (likely less), dissolving the
+   escalation-cost asymmetry that justified re-admitting JBR for the
+   10–15 s native modes.
+4. **The empirical baseline** (`david-local-docs/`
+   `jbr-agentic-baseline-experiment.md`, 2026-07-22): a 15-iteration
+   agentic plugin build on plain JBR+JDWP hit a hotswap wall in 40% of
+   iterations, failed silently or misattributably in 27%, and additive's
+   measured marginal value over body-only-plus-fresh-swap was ~12 s per
+   session. The same experiment showed JBR 21 *accepts* added methods and
+   fields over JDWP while advertising `canAddMethod=false` — capability
+   detection is heuristic at the mechanism level, and the safe/unsafe
+   boundary for additions is semantic (does any framework observe the
+   member set?), which a bytecode classifier cannot decide.
+
+Positioning consequence, recorded so future proposals argue against it:
+hotswap tools compete on *when they work*; paperplane competes on *never
+being wrong*.
