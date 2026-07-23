@@ -32,9 +32,7 @@ class InstantLaneTest {
   private fun classesDir(): File = File(tempDir, "build/classes/java/main").apply { mkdirs() }
 
   private fun writeClass(fqcn: String, bytes: ByteArray) {
-    val file = File(classesDir(), fqcn.replace('.', '/') + ".class")
-    file.parentFile.mkdirs()
-    file.writeBytes(bytes)
+    BytecodeFixtures.writeClassFile(classesDir(), fqcn, bytes)
   }
 
   private fun metadata(

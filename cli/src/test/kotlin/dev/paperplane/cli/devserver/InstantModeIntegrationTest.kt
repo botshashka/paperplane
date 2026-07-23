@@ -28,13 +28,13 @@ class InstantModeIntegrationTest {
   private fun classesDir(): File = File(tempDir, "build/classes/java/main").apply { mkdirs() }
 
   private fun writeLogic(marker: Int) {
-    val file = File(classesDir(), "com/example/Logic.class")
-    file.parentFile.mkdirs()
-    file.writeBytes(
+    BytecodeFixtures.writeClassFile(
+        classesDir(),
+        "com.example.Logic",
         BytecodeFixtures.generateClass(
             name = "com/example/Logic",
             methods = listOf(MethodSpec("tick", body = BytecodeFixtures.bodyReturning(marker))),
-        )
+        ),
     )
   }
 

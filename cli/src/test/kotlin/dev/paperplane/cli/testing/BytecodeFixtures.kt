@@ -70,4 +70,11 @@ object BytecodeFixtures {
     mv.visitLineNumber(line, label)
     mv.visitInsn(Opcodes.RETURN)
   }
+
+  /** Writes [bytes] as `<dir>/<fqcn-as-path>.class`, creating parent directories. */
+  fun writeClassFile(dir: java.io.File, fqcn: String, bytes: ByteArray): java.io.File =
+      java.io.File(dir, fqcn.replace('.', '/') + ".class").apply {
+        parentFile.mkdirs()
+        writeBytes(bytes)
+      }
 }

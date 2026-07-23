@@ -10,8 +10,6 @@ import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
-import org.objectweb.asm.ClassWriter
-import org.objectweb.asm.Opcodes
 
 /**
  * Drives [InstantSwapper.apply] end to end with a [FakeInstrumentation], a scripted CRC registry
@@ -25,19 +23,6 @@ class InstantSwapperTest {
 
   private val crcRegistry = mutableMapOf<Pair<ClassLoader, String>, Long>()
   private val patchedClasses = mutableSetOf<Pair<ClassLoader, String>>()
-
-  private fun generateClass(internalName: String, marker: Int): ByteArray {
-    val cw = ClassWriter(0)
-    cw.visit(Opcodes.V21, Opcodes.ACC_PUBLIC, internalName, null, "java/lang/Object", null)
-    val mv = cw.visitMethod(Opcodes.ACC_PUBLIC, "marker", "()I", null, null)
-    mv.visitCode()
-    mv.visitLdcInsn(marker)
-    mv.visitInsn(Opcodes.IRETURN)
-    mv.visitMaxs(2, 1)
-    mv.visitEnd()
-    cw.visitEnd()
-    return cw.toByteArray()
-  }
 
   private fun crc(bytes: ByteArray): Long = CRC32().apply { update(bytes) }.value
 
@@ -80,8 +65,8 @@ class InstantSwapperTest {
   @Test
   fun `a verified body patch redefines atomically and reports applied`() {
     val fqcn = "com.example.Patch"
-    val v1 = generateClass("com/example/Patch", 1)
-    val v2 = generateClass("com/example/Patch", 2)
+    val v1 = BytecodeFixtures.classWithMarker("com/example/Patch", 1)
+    val v2 = BytecodeFixtures.classWithMarker("com/example/Patch", 2)
     val loader = loaderWith(fqcn, v1)
     crcRegistry[loader to fqcn] = crc(v1)
     val inst = FakeInstrumentation()
@@ -101,9 +86,9 @@ class InstantSwapperTest {
   @Test
   fun `baseline drift refuses before anything is redefined`() {
     val fqcn = "com.example.Patch"
-    val v0 = generateClass("com/example/Patch", 0) // what the JVM actually runs
-    val v1 = generateClass("com/example/Patch", 1) // what the CLI thinks it runs
-    val v2 = generateClass("com/example/Patch", 2)
+    val v0 = BytecodeFixtures.classWithMarker("com/example/Patch", 0) // what the JVM actually runs
+    val v1 = BytecodeFixtures.classWithMarker("com/example/Patch", 1) // what the CLI thinks it runs
+    val v2 = BytecodeFixtures.classWithMarker("com/example/Patch", 2)
     val loader = loaderWith(fqcn, v0)
     crcRegistry[loader to fqcn] = crc(v0)
     val inst = FakeInstrumentation()
@@ -121,9 +106,17 @@ class InstantSwapperTest {
     // defineClass, so the agent's define record never equals the build CRC. The loader's raw
     // source bytes are the pre-transform truth.
     val fqcn = "com.example.Patch"
-    val v1 = generateClass("com/example/Patch", 1) // the baseline build — on disk for the loader
-    val transformed = generateClass("com/example/Patch", 99) // what the server actually defined
-    val v2 = generateClass("com/example/Patch", 2)
+    val v1 =
+        BytecodeFixtures.classWithMarker(
+            "com/example/Patch",
+            1,
+        ) // the baseline build — on disk for the loader
+    val transformed =
+        BytecodeFixtures.classWithMarker(
+            "com/example/Patch",
+            99,
+        ) // what the server actually defined
+    val v2 = BytecodeFixtures.classWithMarker("com/example/Patch", 2)
     val loader = loaderWith(fqcn, v1)
     crcRegistry[loader to fqcn] = crc(transformed)
     val inst = FakeInstrumentation()
@@ -141,9 +134,9 @@ class InstantSwapperTest {
     // jar: URL branch runs and reads the central directory instead of inflating the entry), and
     // the define record disagrees with the jar bytes (Commodore re-encoded at define time).
     val fqcn = "com.example.Patch"
-    val v1 = generateClass("com/example/Patch", 1)
-    val transformed = generateClass("com/example/Patch", 99)
-    val v2 = generateClass("com/example/Patch", 2)
+    val v1 = BytecodeFixtures.classWithMarker("com/example/Patch", 1)
+    val transformed = BytecodeFixtures.classWithMarker("com/example/Patch", 99)
+    val v2 = BytecodeFixtures.classWithMarker("com/example/Patch", 2)
     val jar = File(tempDir, "plugin.jar")
     java.util.jar.JarOutputStream(jar.outputStream()).use { out ->
       out.putNextEntry(java.util.zip.ZipEntry("com/example/Patch.class"))
@@ -167,9 +160,9 @@ class InstantSwapperTest {
     // patch record may vouch. A stale CLI baseline that happens to match the on-disk source must
     // still refuse.
     val fqcn = "com.example.Patch"
-    val v1 = generateClass("com/example/Patch", 1)
-    val patchedLive = generateClass("com/example/Patch", 3)
-    val v2 = generateClass("com/example/Patch", 2)
+    val v1 = BytecodeFixtures.classWithMarker("com/example/Patch", 1)
+    val patchedLive = BytecodeFixtures.classWithMarker("com/example/Patch", 3)
+    val v2 = BytecodeFixtures.classWithMarker("com/example/Patch", 2)
     val loader = loaderWith(fqcn, v1)
     crcRegistry[loader to fqcn] = crc(patchedLive)
     patchedClasses.add(loader to fqcn)
@@ -185,9 +178,9 @@ class InstantSwapperTest {
   @Test
   fun `a loader that serves no source bytes refuses on define mismatch`() {
     val fqcn = "com.example.Hidden"
-    val v1 = generateClass("com/example/Hidden", 1)
-    val transformed = generateClass("com/example/Hidden", 99)
-    val v2 = generateClass("com/example/Hidden", 2)
+    val v1 = BytecodeFixtures.classWithMarker("com/example/Hidden", 1)
+    val transformed = BytecodeFixtures.classWithMarker("com/example/Hidden", 99)
+    val v2 = BytecodeFixtures.classWithMarker("com/example/Hidden", 2)
     // Defines the class but exposes no .class resource — the source check has nothing to verify.
     val loader =
         object : ClassLoader(null) {
@@ -207,7 +200,7 @@ class InstantSwapperTest {
   @Test
   fun `already-current classes count as patched without a redefinition`() {
     val fqcn = "com.example.Patch"
-    val v2 = generateClass("com/example/Patch", 2)
+    val v2 = BytecodeFixtures.classWithMarker("com/example/Patch", 2)
     val loader = loaderWith(fqcn, v2)
     // The JVM already runs the new bytes (e.g. a directory-backed loader force-loaded them).
     crcRegistry[loader to fqcn] = crc(v2)
@@ -223,8 +216,8 @@ class InstantSwapperTest {
   @Test
   fun `the JVM veto reports failed with the reason`() {
     val fqcn = "com.example.Patch"
-    val v1 = generateClass("com/example/Patch", 1)
-    val v2 = generateClass("com/example/Patch", 2)
+    val v1 = BytecodeFixtures.classWithMarker("com/example/Patch", 1)
+    val v2 = BytecodeFixtures.classWithMarker("com/example/Patch", 2)
     val loader = loaderWith(fqcn, v1)
     crcRegistry[loader to fqcn] = crc(v1)
     val inst =
@@ -241,8 +234,8 @@ class InstantSwapperTest {
   @Test
   fun `a loadable class with no load record fails - the force-load already landed`() {
     val fqcn = "com.example.Patch"
-    val v1 = generateClass("com/example/Patch", 1)
-    val v2 = generateClass("com/example/Patch", 2)
+    val v1 = BytecodeFixtures.classWithMarker("com/example/Patch", 1)
+    val v2 = BytecodeFixtures.classWithMarker("com/example/Patch", 2)
     val loader = loaderWith(fqcn, v1)
     // Registry deliberately empty: the agent never saw this class load. The force-load then
     // defines it — a side effect that has landed — so the honest answer is Failed, not a
@@ -295,8 +288,8 @@ class InstantSwapperTest {
     // escape strands the CLI's await until timeout and reports "no patch answer from the
     // companion" — the failure with the most useful message becomes the one with none.
     val fqcn = "com.example.Patch"
-    val v1 = generateClass("com/example/Patch", 1)
-    val v2 = generateClass("com/example/Patch", 2)
+    val v1 = BytecodeFixtures.classWithMarker("com/example/Patch", 1)
+    val v2 = BytecodeFixtures.classWithMarker("com/example/Patch", 2)
     val loader = loaderWith(fqcn, v1)
     crcRegistry[loader to fqcn] = crc(v1)
     val inst = FakeInstrumentation().apply { redefineThrows = VerifyError("bad type on operand") }
@@ -311,7 +304,7 @@ class InstantSwapperTest {
   @Test
   fun `a JVM without redefinition support refuses`() {
     val fqcn = "com.example.Patch"
-    val v1 = generateClass("com/example/Patch", 1)
+    val v1 = BytecodeFixtures.classWithMarker("com/example/Patch", 1)
     val loader = loaderWith(fqcn, v1)
     val inst = FakeInstrumentation().apply { redefineSupported = false }
 
