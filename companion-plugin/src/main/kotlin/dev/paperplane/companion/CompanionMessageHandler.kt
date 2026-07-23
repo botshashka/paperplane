@@ -210,8 +210,6 @@ class CompanionMessageHandler(
    * [HostLoadReport.ACTION_RESTART].
    */
   fun handleInstantSwap(request: HostInstantSwapRequest) {
-    val start = System.currentTimeMillis()
-
     fun answer(
         status: HostInstantSwapStatus,
         patched: Int = 0,
@@ -227,7 +225,6 @@ class CompanionMessageHandler(
               defined = defined,
               appliedClasses = appliedClasses,
               reason = reason,
-              durationMs = System.currentTimeMillis() - start,
           )
       )
     }

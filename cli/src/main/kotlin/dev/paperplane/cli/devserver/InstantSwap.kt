@@ -48,6 +48,9 @@ internal data class InstantClassEntry(
  * The baseline advances for exactly these — never for everything requested, because the companion
  * can legitimately skip a class (an already-loaded "new" class, for one), and advancing past a skip
  * would leave the CLI vouching for bytes the server never took.
+ *
+ * No duration field: the lane times its own send→answer wall clock, which is what it reports, so a
+ * server-side figure would only ever be a second unread number on the wire.
  */
 internal data class InstantSwapReport(
     val requestId: String = "",
@@ -56,7 +59,6 @@ internal data class InstantSwapReport(
     val defined: Int = 0,
     val appliedClasses: List<String> = emptyList(),
     val reason: String? = null,
-    val durationMs: Long = 0,
 )
 
 /**

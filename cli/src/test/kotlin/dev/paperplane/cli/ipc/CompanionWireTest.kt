@@ -117,7 +117,7 @@ class CompanionWireTest {
     val event =
         CompanionWire.decode(
             """{"type":"instantReport","requestId":"i1","status":"ok","patched":2,""" +
-                """"defined":1,"durationMs":12}"""
+                """"defined":1}"""
         )
 
     val report = (event as CompanionEvent.InstantReport).report
@@ -125,7 +125,6 @@ class CompanionWireTest {
     assertEquals(dev.paperplane.cli.devserver.InstantSwapStatus.OK, report.status)
     assertEquals(2, report.patched)
     assertEquals(1, report.defined)
-    assertEquals(12L, report.durationMs)
   }
 
   @Test

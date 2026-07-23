@@ -38,6 +38,9 @@ enum class HostInstantSwapStatus {
  * its baseline for exactly these, so it must never include one the swapper skipped: counts alone
  * would let a silently-skipped class be recorded as patched, and the CLI would then vouch for bytes
  * the server never took.
+ *
+ * No duration field: the CLI times its own send→answer wall clock and reports that, so a
+ * server-side figure would only ever be a second unread number on the wire.
  */
 data class HostInstantSwapReport(
     val requestId: String,
@@ -46,5 +49,4 @@ data class HostInstantSwapReport(
     val defined: Int = 0,
     val appliedClasses: List<String> = emptyList(),
     val reason: String? = null,
-    val durationMs: Long = 0,
 )
