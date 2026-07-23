@@ -6,10 +6,10 @@ import java.lang.instrument.Instrumentation
  * Resolves the PaperPlane javaagent's [Instrumentation] handle, or `null` when the agent isn't
  * loaded.
  *
- * The agent powers two optional capabilities — the hot-swap tier (in-place class redefinition) and
- * NMS-class detection — both of which degrade gracefully when it's absent. Restart and blue-green
- * modes legitimately run without the agent, so a missing agent is never fatal: full host reloads
- * still work.
+ * The agent powers two optional capabilities — the instant tier (in-place class redefinition plus
+ * its load-hook CRC registry) and NMS-class detection — both of which degrade gracefully when it's
+ * absent. A missing agent is never fatal: the welcome reports capability `none`, the lane
+ * escalates, and full swaps still work in every mode.
  */
 object AgentAccess {
   /** Mirror of the agent's `UNKNOWN_CRC` sentinel — the class was never seen by the load hook. */

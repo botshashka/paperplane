@@ -19,10 +19,9 @@ import org.junit.jupiter.api.io.TempDir
  * Visual regression tests for [HotReloadMode]'s startup phase.
  *
  * Drives `runStartup` directly with a [DevSessionFixture]-backed `DevSession` and a
- * [FakePaperServerManager]. The HMR rebuild path (rebuild → triggerReload → strategy ladder) is not
- * exercised here — it requires a real BuildSnapshot for class-change detection. The HMR strategy
- * logic itself is covered by the existing `HmrReloadFlowTest` and `HotReloadTest`. This file
- * focuses on the rendering layer of startup.
+ * [FakePaperServerManager]. The reload flow itself (rebuild → triggerReload → waitAndReport) is
+ * covered by `HotReloadModeBuildLoadRequestTest` and the instant-lane tests; this file focuses on
+ * the rendering layer of startup.
  */
 class HotReloadModeRenderTest {
 
@@ -246,10 +245,8 @@ class HotReloadModeRenderTest {
   }
 
   // ── Fix-recovery restart preserves hot-reload wiring ───────────────
-  // Regression: HotReloadMode's fix-recovery restart previously called startServerAndReport with
-  // default args, silently dropping the staged-deploy strategy and the agent/JBR wiring. The
-  // launch identity is now structural (every start records the session-wide LaunchSpec); what
-  // recovery must still mirror is the staged deploy (stagePlugin, not plugins/).
+  // The launch identity is structural (every start records the session-wide LaunchSpec); what
+  // recovery must additionally mirror is the staged deploy (stagePlugin, not plugins/).
 
   @Test
   fun `fix-recovery restart preserves the hot-reload agent wiring`() {

@@ -8,8 +8,8 @@ dependencies {
   testImplementation(libs.junit.jupiter)
   testRuntimeOnly(libs.junit.platform.launcher)
   testImplementation(libs.mockbukkit)
-  // Tests synthesize bytecode fixtures with ASM; the plugin itself no longer ships it — the
-  // instant classifier (the only production ASM user) lives CLI-side now.
+  // Tests synthesize bytecode fixtures with ASM; production ships none (the classifier that
+  // consumes bytecode lives CLI-side).
   testImplementation(libs.asm)
   testImplementation(libs.asm.util)
 }
