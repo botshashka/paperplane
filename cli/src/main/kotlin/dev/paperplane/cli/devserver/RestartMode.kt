@@ -2,6 +2,8 @@ package dev.paperplane.cli.devserver
 
 import dev.paperplane.cli.devserver.DevSession.RunningState
 import dev.paperplane.cli.devserver.DevSession.StartupOutcome
+import dev.paperplane.cli.devserver.instant.BaselineTracker
+import dev.paperplane.cli.devserver.instant.InstantLane
 import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.ipc.CompanionWire
@@ -19,6 +21,9 @@ internal open class RestartMode(
             protocolLog = session.config.dev.protocolLog,
         ),
 ) {
+  // The instant fast lane and its confirmed-loaded baseline. Internal so tests can seed/inspect.
+  internal val lane = InstantLane(session)
+  internal val baseline = BaselineTracker()
 
   fun run() {
     Runtime.getRuntime()
@@ -41,6 +46,7 @@ internal open class RestartMode(
 
     session.runMainWatchLoop(
         onChanged = { _ -> rebuild(state.metadata, state.paperJar) },
+        onForceSwap = { rebuild(state.metadata, state.paperJar, forceFullSwap = true) },
         healthCheck = {
           // hasExitedUnexpectedly, not !isRunning(): rebuild() stops and restarts the server
           // inside the watcher callback, and this check polls concurrently from the main loop —
@@ -95,10 +101,12 @@ internal open class RestartMode(
             }
             DevSession.ServerStartResult.Aborted -> return@phase PhaseEnd.None
           }
+      lane.confirmFullSwap(baseline)
       session.showServerInfo(
           metadata,
           "localhost:${PaperServerManager.DEFAULT_PORT}",
           "restart",
+          instant = lane.bannerState(serverManager),
       )
       outcome = StartupOutcome.Running(state)
       PhaseEnd.Watching
@@ -125,11 +133,28 @@ internal open class RestartMode(
               session
                   .startServerAndReport(serverManager, attempt.metadata, attempt.paperJar)
                   .stateOrNull
+                  ?.also { lane.confirmFullSwap(baseline) }
         }
       }
 
-  internal fun rebuild(metadata: ProjectMetadata, paperJar: File): PhaseEnd {
+  /**
+   * The instant lane runs first, against the *live* server — the whole point is skipping the
+   * stop/boot cycle, so the server must not be stopped until the lane has decided to fall through.
+   * [forceFullSwap] is the manual escape hatch: skip the lane, restart on the current build.
+   */
+  internal fun rebuild(
+      metadata: ProjectMetadata,
+      paperJar: File,
+      forceFullSwap: Boolean = false,
+  ): PhaseEnd {
     val totalStart = System.currentTimeMillis()
+
+    if (!forceFullSwap) {
+      lane.runOrEscalate(serverManager, metadata, baseline, totalStart, "full restart")?.let {
+        return it
+      }
+    }
+
     serverManager.stop()
 
     val buildStart = System.currentTimeMillis()
@@ -150,7 +175,7 @@ internal open class RestartMode(
     serverManager.copyCompanion()
 
     val serverStart = System.currentTimeMillis()
-    serverManager.start(paperJar, session.config.server.jvmArgs)
+    serverManager.start(paperJar, session.launchSpec)
     val ready = serverManager.waitForReady()
     val serverDuration = session.formatDuration(System.currentTimeMillis() - serverStart)
 
@@ -158,10 +183,12 @@ internal open class RestartMode(
       session.ui.success("Server ready", serverDuration)
       val totalDuration = session.formatDuration(System.currentTimeMillis() - totalStart)
       session.ui.totalTime(totalDuration)
-      serverManager.sendCompanionStatus(CompanionWire.STATE_READY, duration = totalDuration)
+      serverManager.ipc.sendStatus(CompanionWire.STATE_READY, duration = totalDuration)
+      lane.confirmFullSwap(baseline)
       PhaseEnd.Watching
     } else {
       session.ui.error("Server failed to start", serverDuration)
+      baseline.reset()
       PhaseEnd.Waiting
     }
   }

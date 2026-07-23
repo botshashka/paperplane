@@ -3,13 +3,22 @@ package dev.paperplane.cli.devserver
 import java.util.UUID
 
 /**
+ * A fresh correlation id for one CLI→companion request. Every request type shares this generator:
+ * the companion echoes the id back on its report and the CLI's waiters filter on it, so the only
+ * property that matters — and the only one worth stating once — is that ids never collide.
+ */
+internal fun newRequestId(): String = UUID.randomUUID().toString()
+
+/**
  * Request from CLI to companion: "load this plugin." Sent over the companion socket as a `load`
  * message (see `CompanionWire`), dispatched by the companion to `InnerPluginHost`.
  *
  * The companion picks the reload strategy from the contents:
- * - `changedClasses` non-empty AND no structural changes → HOTSWAP via Instrumentation.
  * - `classesDirs` non-empty → DIRECTORY reload (Level 1).
  * - Otherwise → JAR reload (Level 0).
+ *
+ * In-place redefinition is not part of this path: the instant fast lane sends its own `instantSwap`
+ * message (see [InstantSwapRequest]), so a `load` always means a real host load.
  *
  * [leakDiagnostics] carries the host's leak-diagnostics mode (wire values of the CLI's
  * `LeakDiagnosticsMode`). The host is built once, on the first load request, so only the first
@@ -22,10 +31,5 @@ data class LoadRequest(
     val classesDirs: List<String> = emptyList(),
     val resourcesDir: String = "",
     val runtimeClasspath: List<String> = emptyList(),
-    val changedClasses: List<String> = emptyList(),
     val leakDiagnostics: String = "summary",
-) {
-  companion object {
-    fun newId(): String = UUID.randomUUID().toString()
-  }
-}
+)

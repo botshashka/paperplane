@@ -208,6 +208,11 @@ class RestartModeRenderTest {
         server.sentLoadRequests.isEmpty(),
         "native modes must not send a LoadRequest",
     )
+    assertTrue(
+        server.launchSpecs.isNotEmpty() &&
+            server.launchSpecs.all { it == fixture.session.launchSpec },
+        "restart startup must launch with the session LaunchSpec; got ${server.launchSpecs}",
+    )
   }
 
   // ── rebuild happy path ─────────────────────────────────────────────
@@ -247,6 +252,11 @@ class RestartModeRenderTest {
         "rebuild must copy the fresh jar into plugins/; calls were ${server.calls}",
     )
     assertFalse(server.calls.any { it.startsWith("stagePlugin") })
+    assertTrue(
+        server.launchSpecs.isNotEmpty() &&
+            server.launchSpecs.all { it == fixture.session.launchSpec },
+        "the restarted server must launch with the session LaunchSpec; got ${server.launchSpecs}",
+    )
   }
 
   // ── rebuild build failure ──────────────────────────────────────────

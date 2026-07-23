@@ -3,6 +3,7 @@ package dev.paperplane.cli.devserver
 import dev.paperplane.cli.Versions
 import dev.paperplane.cli.config.DevMode
 import dev.paperplane.cli.config.PaperPlaneConfig
+import dev.paperplane.cli.devserver.instant.InstantBanner
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.gradle.ProjectMetadata
@@ -13,6 +14,7 @@ import dev.paperplane.cli.plugins.PluginCache
 import dev.paperplane.cli.plugins.PluginLockfile
 import dev.paperplane.cli.plugins.PluginResolver
 import dev.paperplane.cli.server.JbrDownloader
+import dev.paperplane.cli.server.LaunchSpec
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.ui.TerminalUI
@@ -101,7 +103,28 @@ internal class DevSession(
         buildConfigFiles.map { FileWatcher.normalizePath(it.absolutePath) }.toSet()
     if (changedFiles.any { it in buildConfigPaths }) {
       gradle.close()
+      cachedFastMeta = null
     }
+  }
+
+  private var cachedFastMeta: ProjectMetadata? = null
+
+  /**
+   * The `ppMetadataFast` result for the current build config — classes dirs, resources dir, runtime
+   * classpath — cached for the session and dropped by [maybeInvalidateGradleConnection].
+   *
+   * One cache, deliberately. Both the instant lane and the hot-reload load request steer off these
+   * paths, and a build-config edit (adding `kotlin("jvm")`, changing `sourceSets`) moves them. Two
+   * caches meant one could refresh while the other kept sending a classes dir that no longer
+   * receives output — the host would reload from a dead directory, report success, and the CLI
+   * would confirm a baseline for code nobody is running.
+   */
+  internal fun fastMetadata(): ProjectMetadata? =
+      cachedFastMeta ?: gradle.metadataFast().metadataOrNull?.also { cachedFastMeta = it }
+
+  /** Test seam: pre-seed or clear the cache without running Gradle. */
+  internal fun seedFastMetadata(metadata: ProjectMetadata?) {
+    cachedFastMeta = metadata
   }
 
   /**
@@ -184,7 +207,10 @@ internal class DevSession(
     val started = System.currentTimeMillis()
     val result = ui.spin("Reading project metadata...") { gradle.metadata() }
     when (result) {
-      is MetadataResult.Success -> ppDir.mkdirs()
+      is MetadataResult.Success -> {
+        ppDir.mkdirs()
+        pluginMainClass = result.metadata.mainClass
+      }
       MetadataResult.PluginNotApplied -> {
         metadataResolutionError()
         gradle.close()
@@ -238,13 +264,13 @@ internal class DevSession(
       serverManager: PaperServerManager,
   ): BuildOutcome {
     val buildStart = System.currentTimeMillis()
-    serverManager.sendCompanionStatus(CompanionWire.STATE_BUILDING)
+    serverManager.ipc.sendStatus(CompanionWire.STATE_BUILDING)
     val buildSuccess = ui.spin("Building...") { gradle.build() }
     val buildDuration = formatDuration(System.currentTimeMillis() - buildStart)
 
     if (!buildSuccess) {
       ui.error("Build failed", buildDuration)
-      serverManager.sendCompanionStatus(CompanionWire.STATE_ERROR, message = "Build failed")
+      serverManager.ipc.sendStatus(CompanionWire.STATE_ERROR, message = "Build failed")
       return BuildOutcome.BuildFailed
     }
     ui.success("Build succeeded", buildDuration)
@@ -311,12 +337,23 @@ internal class DevSession(
    * Emits the three-line server summary (address / plugin / mode). Caller is inside a phase; this
    * function commits whatever the phase has emitted so far (build/server-ready lines) into a
    * separate visual sub-block above, then appends the info lines into a fresh sub-block.
+   *
+   * An armed instant lane rides the mode line as a suffix; a lane that was asked for and could not
+   * arm gets a warning of its own, because that is the one instant state the user did not choose.
    */
-  fun showServerInfo(metadata: ProjectMetadata, serverAddress: String, modeLabel: String) {
+  fun showServerInfo(
+      metadata: ProjectMetadata,
+      serverAddress: String,
+      modeLabel: String,
+      instant: InstantBanner = InstantBanner.Disabled,
+  ) {
     ui.nextSection()
     ui.info("Server:", serverAddress)
     ui.info("Plugin:", "${metadata.pluginName} v${metadata.version}")
-    ui.info("Mode:", modeLabel)
+    ui.info("Mode:", if (instant is InstantBanner.Armed) "$modeLabel + instant" else modeLabel)
+    if (instant is InstantBanner.Unavailable) {
+      ui.warning("Instant unavailable — ${instant.reason}; changes take a full reload")
+    }
   }
 
   /**
@@ -371,7 +408,7 @@ internal class DevSession(
    */
   fun handleFixAttempt(serverManager: PaperServerManager?): FixAttempt {
     val buildStart = System.currentTimeMillis()
-    serverManager?.sendCompanionStatus(CompanionWire.STATE_BUILDING)
+    serverManager?.ipc?.sendStatus(CompanionWire.STATE_BUILDING)
     val buildSuccess = gradle.build()
     val buildDuration = formatDuration(System.currentTimeMillis() - buildStart)
 
@@ -400,24 +437,35 @@ internal class DevSession(
    * Blocks on the main file watcher. On every change, wraps [onChanged] in a phase with an
    * automatic "Change detected" prefix. [healthCheck] runs between phases and can emit an error
    * into the pinned watching footer if it decides to exit the loop.
+   *
+   * [onForceSwap] is the instant tier's manual escape hatch: when non-null, a line-buffered stdin
+   * listener runs alongside the watcher, and typing `s`⏎ triggers a full swap of the current build
+   * — the user-side reset to ground truth when in-place patches leave them in doubt. Rebuilds are
+   * serialized on one lock, so a forced swap and a file-change rebuild can never interleave their
+   * phases.
    */
   fun runMainWatchLoop(
       onChanged: TerminalUI.(changedFiles: List<String>) -> PhaseEnd,
       healthCheck: () -> Boolean,
       cleanup: () -> Unit,
+      onForceSwap: (TerminalUI.() -> PhaseEnd)? = null,
   ) {
     val srcDir = File(projectDir, "src")
+    val rebuildLock = Any()
     val watcher =
         FileWatcher(srcDir, config.dev.debounceMs, extraFiles = buildConfigFiles) { changedFiles ->
-          maybeInvalidateGradleConnection(changedFiles)
-          ui.phase {
-            val shortName = changedFiles.firstOrNull()?.let { File(it).name } ?: "files"
-            val extra = if (changedFiles.size > 1) " (+${changedFiles.size - 1} more)" else ""
-            change("Change detected: $shortName$extra")
-            onChanged(changedFiles)
+          synchronized(rebuildLock) {
+            maybeInvalidateGradleConnection(changedFiles)
+            ui.phase {
+              val shortName = changedFiles.firstOrNull()?.let { File(it).name } ?: "files"
+              val extra = if (changedFiles.size > 1) " (+${changedFiles.size - 1} more)" else ""
+              change("Change detected: $shortName$extra")
+              onChanged(changedFiles)
+            }
           }
         }
     watcher.start()
+    if (onForceSwap != null) startForceSwapListener(rebuildLock, onForceSwap)
 
     try {
       while (true) {
@@ -434,6 +482,47 @@ internal class DevSession(
   }
 
   /**
+   * Daemon thread reading stdin line-buffered (`s`⏎ — no raw mode, so Ctrl+C keeps working). EOF
+   * (closed stdin — piped/headless runs) ends the listener quietly. The thread is a daemon and
+   * blocks harmlessly on stdin across the session; it dies with the process.
+   */
+  private fun startForceSwapListener(rebuildLock: Any, onForceSwap: TerminalUI.() -> PhaseEnd) {
+    Thread(
+            {
+              while (true) {
+                val line =
+                    try {
+                      readlnOrNull() ?: break
+                    } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                      // Detached/unreadable stdin — the escape hatch just isn't available.
+                      ui.status("Force-swap key disabled: stdin unreadable (${e.message})")
+                      break
+                    }
+                if (!line.trim().equals("s", ignoreCase = true)) continue
+                // The rebuild is caught per keypress, not around the loop: a throw from one forced
+                // swap used to kill the listener thread outright, silently removing the escape
+                // hatch for the rest of the session with nothing printed.
+                try {
+                  synchronized(rebuildLock) {
+                    ui.phase {
+                      change("Manual full swap requested")
+                      onForceSwap()
+                    }
+                  }
+                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                  ui.error("Manual full swap failed: ${e.javaClass.simpleName}: ${e.message}")
+                }
+              }
+            },
+            "instant-force-swap",
+        )
+        .apply {
+          isDaemon = true
+          start()
+        }
+  }
+
+  /**
    * Starts a Paper server and emits the standard cleanupStale → configure → deploy plugin/companion
    * → start → waitForReady → success/error ribbon. Used by initial startup in all three modes and
    * by the fix-recovery callback. Returns a [ServerStartResult]: [ServerStartResult.Running] on
@@ -446,11 +535,10 @@ internal class DevSession(
    * the jar is dropped into `plugins/` ([PaperServerManager.copyPluginToPluginsDir]) and Paper
    * loads it natively; no LoadRequest is written and the ready signal is the whole story.
    *
+   * The JVM launch itself always uses the session-wide [launchSpec] — javaBin, JBR flags, and the
+   * redefinition agent are identical for every server in every mode by construction.
+   *
    * Optional parameters let each mode tailor the flow:
-   * - [jvmArgs] defaults to [config].server.jvmArgs; HotReloadMode appends
-   *   `-XX:+AllowEnhancedClassRedefinition` when JBR is active.
-   * - [hotReload] and [javaBin] are forwarded to [PaperServerManager.start] — HotReloadMode sets
-   *   them so the agent gets wired up and the JBR java binary is used.
    * - [extraConfigure] runs immediately after [PaperServerManager.configure] and before the plugin
    *   deploy. BlueGreenMode uses it to inject [PaperServerManager.configureVelocityForwarding],
    *   which must overwrite paper-global.yml that `configure()` just wrote.
@@ -462,9 +550,7 @@ internal class DevSession(
       serverManager: PaperServerManager,
       metadata: ProjectMetadata,
       paperJar: File,
-      jvmArgs: List<String> = config.server.jvmArgs,
       hotReload: Boolean = false,
-      javaBin: String = "java",
       spinLabel: String = "Starting Paper ${resolveMcVersion(metadata)} server...",
       readyMessage: String = "Paper ${resolveMcVersion(metadata)} server ready",
       extraConfigure: (PaperServerManager) -> Unit = {},
@@ -495,12 +581,12 @@ internal class DevSession(
     val serverStart = System.currentTimeMillis()
     // start() clears the previous run's handshake file and companion-error flag itself, so a
     // crashed session's leftovers can't be consumed as fresh.
-    serverManager.start(paperJar, jvmArgs, hotReload = hotReload, javaBin = javaBin)
+    serverManager.start(paperJar, launchSpec)
     val ready = ui.spin(spinLabel) { serverManager.waitForReady() }
     val serverDuration = formatDuration(System.currentTimeMillis() - serverStart)
     if (!ready) {
       ui.error("Server failed to start", serverDuration)
-      serverManager.sendCompanionStatus(
+      serverManager.ipc.sendStatus(
           CompanionWire.STATE_ERROR,
           message = "Server failed to start",
       )
@@ -512,7 +598,7 @@ internal class DevSession(
     // whole story.
     if (stagedJarPath == null) {
       ui.success(readyMessage, serverDuration)
-      serverManager.sendCompanionStatus(CompanionWire.STATE_READY, duration = serverDuration)
+      serverManager.ipc.sendStatus(CompanionWire.STATE_READY, duration = serverDuration)
       return ServerStartResult.Running(RunningState(metadata, paperJar))
     }
 
@@ -552,13 +638,13 @@ internal class DevSession(
         ui.renderLeakWarnings(loadResult.report)
         ui.success("Plugin loaded")
         ui.success(readyMessage, serverDuration)
-        serverManager.sendCompanionStatus(CompanionWire.STATE_READY, duration = serverDuration)
+        serverManager.ipc.sendStatus(CompanionWire.STATE_READY, duration = serverDuration)
         ServerStartResult.Running(RunningState(metadata, paperJar))
       }
       is LoadWaitResult.Failed -> {
         ui.error("Plugin failed to load: ${loadResult.message}")
         loadFailureHint(loadResult)?.let { ui.status(it) }
-        serverManager.sendCompanionStatus(CompanionWire.STATE_ERROR, message = "Plugin load failed")
+        serverManager.ipc.sendStatus(CompanionWire.STATE_ERROR, message = "Plugin load failed")
         // A rejected load is recoverable via a source/config edit — stop the just-started server so
         // no stale instance lingers while the user fixes it, and let fix recovery keep the session
         // alive (a fresh server is started on the next successful rebuild).
@@ -568,7 +654,7 @@ internal class DevSession(
       LoadWaitResult.TimedOut -> {
         ui.error("Timed out waiting for the plugin to load")
         loadFailureHint(loadResult)?.let { ui.status(it) }
-        serverManager.sendCompanionStatus(
+        serverManager.ipc.sendStatus(
             CompanionWire.STATE_ERROR,
             message = "Plugin load timed out",
         )
@@ -590,8 +676,8 @@ internal class DevSession(
       metadata: ProjectMetadata,
       stagedJarPath: String,
   ): String {
-    val requestId = LoadRequest.newId()
-    serverManager.sendLoadRequest(
+    val requestId = newRequestId()
+    serverManager.ipc.sendLoadRequest(
         LoadRequest(
             requestId = requestId,
             jarPath = stagedJarPath,
@@ -638,6 +724,33 @@ internal class DevSession(
   }
 
   fun formatDuration(ms: Long): String = formatDurationMs(ms)
+
+  /**
+   * The plugin main class from the last successful [resolveMetadata], for [launchSpec]'s agent
+   * package filter. Null only if no metadata ever resolved, in which case no server ever starts.
+   */
+  private var pluginMainClass: String? = null
+
+  /**
+   * The launch identity for every server this session starts, in every mode and every recovery
+   * path. Built lazily exactly once ([resolveJava] may download JBR under `jbr: on`, so it must not
+   * run before the first server actually starts) and never rebuilt — the structural form of the
+   * "mirror the args" invariant.
+   *
+   * The laziness is also what makes [pluginMainClass] available: every start path runs
+   * [resolveMetadata] first, so the agent's package filter is resolved by the time the first server
+   * launches. A main class that moved package mid-session keeps the original filter, and its
+   * classes then simply have no load record — a refusal and a normal swap, never a wrong patch.
+   */
+  val launchSpec: LaunchSpec by lazy {
+    val runtime = resolveJava()
+    LaunchSpec.build(
+        runtime.bin,
+        runtime.isJbr,
+        config.server.jvmArgs,
+        recordedPackages = pluginMainClass?.let(LaunchSpec::recordedPackagesFor).orEmpty(),
+    )
+  }
 
   data class JavaRuntime(val bin: String, val isJbr: Boolean)
 

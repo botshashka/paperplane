@@ -2,8 +2,8 @@ package dev.paperplane.cli.devserver
 
 import dev.paperplane.cli.devserver.DevSession.RunningState
 import dev.paperplane.cli.devserver.DevSession.StartupOutcome
-import dev.paperplane.cli.gradle.BuildSnapshot
-import dev.paperplane.cli.gradle.ClassChanges
+import dev.paperplane.cli.devserver.instant.BaselineTracker
+import dev.paperplane.cli.devserver.instant.InstantLane
 import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.ipc.CompanionWire
@@ -26,49 +26,39 @@ internal open class HotReloadMode(
 
     /**
      * Pure helper: build a [LoadRequest] from a rebuild's inputs. Extracted so the strategy
-     * selection (HOTSWAP vs DIRECTORY vs JAR) can be tested without standing up a full
-     * HotReloadMode.
+     * selection (DIRECTORY vs JAR) can be tested without standing up a full HotReloadMode.
      *
      * Strategy selection rules:
-     * - No fastMeta or no classesDir → JAR fallback (empty classesDirs, empty changedClasses).
-     * - Have fastMeta + only modified classes (no add/remove) → HOTSWAP (changedClasses populated).
-     * - Have fastMeta + structural change → DIRECTORY (classesDirs populated, changedClasses
-     *   empty).
+     * - No fastMeta or no classesDir → JAR fallback (empty classesDirs).
+     * - Have fastMeta → DIRECTORY (classesDirs populated).
      */
     internal fun buildLoadRequest(
         metadata: ProjectMetadata,
         fastMeta: ProjectMetadata?,
-        changes: ClassChanges,
         stagedJarPath: String,
         leakDiagnostics: String = "summary",
     ): LoadRequest {
       val classesDirs: List<String>
       val resourcesDir: String
       val runtimeClasspath: List<String>
-      val changedClasses: List<String>
 
       if (fastMeta != null && fastMeta.classesDir.isNotEmpty()) {
         classesDirs = fastMeta.effectiveClassesDirs
         resourcesDir = fastMeta.resourcesDir
         runtimeClasspath = fastMeta.runtimeClasspath
-        changedClasses =
-            if (changes.noNewOrRemovedClasses && changes.modified.isNotEmpty()) changes.modified
-            else emptyList()
       } else {
         classesDirs = emptyList()
         resourcesDir = ""
         runtimeClasspath = emptyList()
-        changedClasses = emptyList()
       }
 
       return LoadRequest(
-          requestId = LoadRequest.newId(),
+          requestId = newRequestId(),
           jarPath = stagedJarPath,
           pluginName = metadata.pluginName,
           classesDirs = classesDirs,
           resourcesDir = resourcesDir,
           runtimeClasspath = runtimeClasspath,
-          changedClasses = changedClasses,
           leakDiagnostics = leakDiagnostics,
       )
     }
@@ -88,14 +78,8 @@ internal open class HotReloadMode(
         !builtJarExists || fastMeta == null || fastMeta.classesDir.isEmpty()
   }
 
-  private var buildSnapshot: BuildSnapshot? = null
-  // Fast-path metadata (classes dirs for directory/hotswap reloads), fetched once. Internal so
-  // tests
-  // can seed it to exercise the JAR-fallback vs directory decision in [triggerReload].
-  internal var cachedFastMeta: ProjectMetadata? = null
-  // Baseline for the next rebuild's class diff. Internal so tests can verify it stays current.
-  internal var lastPostBuildSnapshot: Map<String, Long>? = null
-  private val javaRuntime by lazy { session.resolveJava() }
+  internal val lane = InstantLane(session)
+  internal val baseline = BaselineTracker()
 
   // The live server state, set once startup succeeds and refreshed on each leak-restart. Held in a
   // field (not just a run() local) so waitAndReport can restart the server with the same paperJar.
@@ -137,6 +121,7 @@ internal open class HotReloadMode(
           session.syncOpsBackToConfig(serverManager)
           session.gradle.close()
         },
+        onForceSwap = { rebuild(runningState!!.metadata, forceFullSwap = true) },
     )
   }
 
@@ -185,9 +170,7 @@ internal open class HotReloadMode(
                       serverManager = serverManager,
                       metadata = metadata,
                       paperJar = paperJar,
-                      jvmArgs = hotReloadJvmArgs(),
                       hotReload = true,
-                      javaBin = javaRuntime.bin,
                   )
           ) {
             is DevSession.ServerStartResult.Running -> result.state
@@ -197,20 +180,18 @@ internal open class HotReloadMode(
             }
             DevSession.ServerStartResult.Aborted -> return@phase PhaseEnd.None
           }
+      lane.confirmFullSwap(baseline)
       session.showServerInfo(
           metadata,
           "localhost:${PaperServerManager.DEFAULT_PORT}",
-          if (javaRuntime.isJbr) "hot-reload (enhanced — JBR)" else "hot-reload",
+          if (session.launchSpec.isJbr) "hot-reload (enhanced — JBR)" else "hot-reload",
+          instant = lane.bannerState(serverManager),
       )
       outcome = StartupOutcome.Running(state)
       PhaseEnd.Watching
     }
     return outcome
   }
-
-  private fun hotReloadJvmArgs(): List<String> =
-      if (javaRuntime.isJbr) session.config.server.jvmArgs + "-XX:+AllowEnhancedClassRedefinition"
-      else session.config.server.jvmArgs
 
   /**
    * Blocks on the fix-recovery file watcher. Returns the recovered [RunningState] on a successful
@@ -231,9 +212,10 @@ internal open class HotReloadMode(
       }
 
   /**
-   * Starts the server after a successful fix-recovery rebuild. Must mirror [runStartup]'s startup
-   * args — the agent/JBR wiring (`hotReload = true`, [hotReloadJvmArgs], the JBR [javaBin]) — so a
-   * recovered server isn't silently downgraded to a plain JVM without the redefinition agent.
+   * Starts the server after a successful fix-recovery rebuild. The JVM launch identity (agent/JBR
+   * wiring) comes from the session-wide [DevSession.launchSpec] like every other start; what this
+   * call must still mirror from [runStartup] is `hotReload = true` — the staged-deploy strategy —
+   * so the recovered server host-loads the plugin instead of leaving a stale jar in `plugins/`.
    * Returns null on a still-failing load so the fix-recovery loop keeps waiting for the next edit.
    */
   internal fun startAfterFix(attempt: DevSession.FixAttempt.Success): RunningState? =
@@ -242,92 +224,77 @@ internal open class HotReloadMode(
               serverManager = serverManager,
               metadata = attempt.metadata,
               paperJar = attempt.paperJar,
-              jvmArgs = hotReloadJvmArgs(),
               hotReload = true,
-              javaBin = javaRuntime.bin,
           )
           .stateOrNull
+          ?.also { lane.confirmFullSwap(baseline) }
 
   // ── Rebuild ──────────────────────────────────────────────────────────
 
-  /** Internal for tests: the awaiting-fix cold-start branch is driven directly. */
-  internal fun rebuild(metadata: ProjectMetadata): PhaseEnd {
+  /**
+   * Internal for tests: the awaiting-fix cold-start branch is driven directly. The instant lane
+   * runs first (compile + classify + in-place patch when admissible); anything it can't vouch for
+   * falls through to the full host reload. [forceFullSwap] is the manual escape hatch — skip the
+   * lane and reload the current build, resetting to ground truth.
+   */
+  internal fun rebuild(metadata: ProjectMetadata, forceFullSwap: Boolean = false): PhaseEnd {
     val totalStart = System.currentTimeMillis()
-    val preBuildSnapshot = snapshotBeforeBuild(metadata)
 
-    if (cachedFastMeta == null) cachedFastMeta = session.gradle.metadataFast().metadataOrNull
-
-    serverManager.sendCompanionStatus(CompanionWire.STATE_BUILDING)
-    val buildStart = System.currentTimeMillis()
-    val buildSuccess = session.gradle.compileOnly()
-    val buildDuration = session.formatDuration(System.currentTimeMillis() - buildStart)
-
-    if (!buildSuccess) {
-      session.ui.error("Build failed", buildDuration)
-      serverManager.sendCompanionStatus(CompanionWire.STATE_ERROR, message = "Build failed")
-      return PhaseEnd.Waiting
+    laneSkippingRebuild(metadata, totalStart, forceFullSwap)?.let {
+      return it
     }
-    session.ui.success("Build succeeded", buildDuration)
-
-    val postBuildSnapshot = buildSnapshot!!.take()
-    lastPostBuildSnapshot = postBuildSnapshot
-
-    // A failed leak-restart left the server deliberately down. There's no host to answer a reload
-    // request, so skip the hot-reload dance (triggerReload/waitAndReport) and cold-start the server
-    // instead — this successful build is the fix that lets it come back up. The snapshot above is
-    // still recorded so the next rebuild diffs against this build, not the pre-failure one.
-    if (serverDownAwaitingFix) return restartAfterAwaitingFix(metadata)
-
-    val changes = BuildSnapshot.diff(preBuildSnapshot, postBuildSnapshot)
-
-    val requestId = triggerReload(metadata, changes)
-    return waitAndReport(metadata, totalStart, requestId)
+    lane.runOrEscalate(serverManager, metadata, baseline, totalStart, "full reload")?.let {
+      return it
+    }
+    return fullReload(metadata, totalStart)
   }
 
-  private fun snapshotBeforeBuild(metadata: ProjectMetadata): Map<String, Long> {
-    val snapshotDir =
-        if (cachedFastMeta != null && cachedFastMeta!!.effectiveClassesDirs.isNotEmpty()) {
-          File(cachedFastMeta!!.effectiveClassesDirs.first())
-        } else if (metadata.effectiveClassesDirs.isNotEmpty()) {
-          metadata.effectiveClassesDirs.map { File(it) }.firstOrNull { it.exists() }
-              ?: File(metadata.effectiveClassesDirs.first())
-        } else {
-          val javaDir = File(session.projectDir, "build/classes/java/main")
-          val kotlinDir = File(session.projectDir, "build/classes/kotlin/main")
-          if (javaDir.exists()) javaDir else kotlinDir
-        }
-    if (buildSnapshot == null) buildSnapshot = BuildSnapshot(snapshotDir)
-    return lastPostBuildSnapshot ?: buildSnapshot!!.take()
+  /**
+   * The two paths that bypass the lane, or null when the lane should run. A failed leak-restart
+   * left the server deliberately down — there's no live server to patch or to answer a reload
+   * request, so compile and cold-start instead; this successful build is the fix that lets it come
+   * back up. [forceFullSwap] is the manual escape hatch.
+   */
+  private fun laneSkippingRebuild(
+      metadata: ProjectMetadata,
+      totalStart: Long,
+      forceFullSwap: Boolean,
+  ): PhaseEnd? {
+    if (!serverDownAwaitingFix && !forceFullSwap) return null
+    if (!lane.compile(serverManager)) return PhaseEnd.Waiting
+    return if (serverDownAwaitingFix) restartAfterAwaitingFix(metadata)
+    else fullReload(metadata, totalStart)
+  }
+
+  private fun fullReload(metadata: ProjectMetadata, totalStart: Long): PhaseEnd {
+    val requestId = triggerReload(metadata)
+    return waitAndReport(metadata, totalStart, requestId)
   }
 
   /**
    * Sends the reload request over the companion socket and returns its requestId so [waitAndReport]
    * can match the result. Internal so tests can drive the JAR-(re)build decision directly.
    */
-  internal fun triggerReload(metadata: ProjectMetadata, changes: ClassChanges): String {
-    // Restage the user JAR. It is load-bearing only in JAR-fallback mode, and rebuild() ran
+  internal fun triggerReload(metadata: ProjectMetadata): String {
+    // Restage the user JAR. It is load-bearing only in JAR-fallback mode, and the rebuild ran
     // `classes`, not `jar`, so (re)build the artifact whenever the host will actually load it —
     // otherwise a stale first-build JAR is staged and the reload silently runs old code. See
     // [needsJarBuild].
+    val fastMeta = session.fastMetadata()
     val builtJar = File(session.projectDir, metadata.jarPath)
-    if (needsJarBuild(cachedFastMeta, builtJar.exists())) session.gradle.build()
+    if (needsJarBuild(fastMeta, builtJar.exists())) session.gradle.build()
     val stagedJarPath = serverManager.stagePlugin(builtJar)
 
     val request =
         buildLoadRequest(
             metadata,
-            cachedFastMeta,
-            changes,
+            fastMeta,
             stagedJarPath,
             session.leakDiagnosticsWireValue(),
         )
-    when {
-      request.classesDirs.isEmpty() -> session.ui.info("Strategy:", "jar (fallback)")
-      request.changedClasses.isNotEmpty() ->
-          session.ui.info("Strategy:", "hotswap (${changes.modified.size} modified)")
-      else -> session.ui.info("Strategy:", "directory reload")
-    }
-    serverManager.sendLoadRequest(request)
+    if (request.classesDirs.isEmpty()) session.ui.info("Strategy:", "jar (fallback)")
+    else session.ui.info("Strategy:", "directory reload")
+    serverManager.ipc.sendLoadRequest(request)
     return request.requestId
   }
 
@@ -351,12 +318,13 @@ internal open class HotReloadMode(
             val totalDuration = session.formatDuration(System.currentTimeMillis() - totalStart)
             session.ui.success("Plugin reloaded", reloadDuration)
             session.ui.totalTime(totalDuration)
-            serverManager.sendCompanionStatus(CompanionWire.STATE_READY, duration = totalDuration)
+            serverManager.ipc.sendStatus(CompanionWire.STATE_READY, duration = totalDuration)
+            lane.confirmFullSwap(baseline)
             PhaseEnd.Watching
           }
           is LoadWaitResult.Failed -> {
             session.ui.error("Reload failed: ${result.message}", reloadDuration)
-            serverManager.sendCompanionStatus(
+            serverManager.ipc.sendStatus(
                 CompanionWire.STATE_ERROR,
                 message = "Hot-reload failed",
             )
@@ -367,7 +335,7 @@ internal open class HotReloadMode(
                 "Hot-reload failed (server still running with old plugin)",
                 reloadDuration,
             )
-            serverManager.sendCompanionStatus(
+            serverManager.ipc.sendStatus(
                 CompanionWire.STATE_ERROR,
                 message = "Hot-reload failed",
             )
@@ -416,9 +384,11 @@ internal open class HotReloadMode(
       )
     }
     serverManager.stop()
+    baseline.reset()
     return when (val restarted = startHotReloadServer(metadata)) {
       is DevSession.ServerStartResult.Running -> {
         runningState = restarted.state
+        lane.confirmFullSwap(baseline)
         PhaseEnd.Watching
       }
       DevSession.ServerStartResult.LoadFailed,
@@ -440,6 +410,7 @@ internal open class HotReloadMode(
         is DevSession.ServerStartResult.Running -> {
           serverDownAwaitingFix = false
           runningState = restarted.state
+          lane.confirmFullSwap(baseline)
           PhaseEnd.Watching
         }
         DevSession.ServerStartResult.LoadFailed,
@@ -447,18 +418,16 @@ internal open class HotReloadMode(
       }
 
   /**
-   * Starts (or restarts) the server with the same hot-reload wiring initial startup uses —
-   * `hotReload = true`, the JBR-aware [hotReloadJvmArgs], and the JBR [javaBin] — reusing the last
-   * good [runningState]'s paperJar. Shared by the leak-restart and awaiting-fix cold-start paths so
-   * neither can silently drop the redefinition agent.
+   * Starts (or restarts) the server with the same staged-deploy wiring initial startup uses
+   * (`hotReload = true`), reusing the last good [runningState]'s paperJar. The JVM launch identity
+   * comes from the session-wide [DevSession.launchSpec]. Shared by the leak-restart and
+   * awaiting-fix cold-start paths so neither can silently deploy differently than startup did.
    */
   private fun startHotReloadServer(metadata: ProjectMetadata): DevSession.ServerStartResult =
       session.startServerAndReport(
           serverManager = serverManager,
           metadata = metadata,
           paperJar = runningState!!.paperJar,
-          jvmArgs = hotReloadJvmArgs(),
           hotReload = true,
-          javaBin = javaRuntime.bin,
       )
 }

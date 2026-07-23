@@ -1,6 +1,7 @@
 package dev.paperplane.cli.testing
 
 import com.sun.net.httpserver.HttpServer
+import java.net.InetAddress
 import java.net.InetSocketAddress
 
 /**
@@ -12,10 +13,24 @@ import java.net.InetSocketAddress
  * Paper/Velocity/Fill server tests.
  */
 class LocalHttpServer {
-  private val server: HttpServer = HttpServer.create(InetSocketAddress(0), 0)
+  // Bind the loopback address explicitly, never the wildcard. A wildcard bind (0.0.0.0:0) can be
+  // handed a port that another process already holds on 127.0.0.1 only — BSD/macOS permits the
+  // wildcard+specific pair — and the client's connect to localhost then lands on *that* process
+  // instead of us. (Observed once as an H2 TCP server answering a test's GET.) Binding loopback
+  // makes the port allocator see the conflict and pick a genuinely free port.
+  private val server: HttpServer =
+      HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
 
   /** Base URL (scheme + host + ephemeral port) the test's HTTP client should target. */
   val baseUrl: String
+
+  /**
+   * Request URI (path plus query string) of the most recent request any handler served — lets a
+   * test assert on the query parameters its client built. Empty until the first request.
+   */
+  @Volatile
+  var lastRequestUri: String = ""
+    private set
 
   init {
     server.start()
@@ -26,6 +41,7 @@ class LocalHttpServer {
   fun serveText(path: String, body: String) {
     val bytes = body.toByteArray()
     server.createContext(path) { exchange ->
+      lastRequestUri = exchange.requestURI.toString()
       exchange.sendResponseHeaders(200, bytes.size.toLong())
       exchange.responseBody.use { it.write(bytes) }
     }
@@ -34,6 +50,7 @@ class LocalHttpServer {
   /** Serves raw [bytes] (HTTP 200) at [path]. */
   fun serveBytes(path: String, bytes: ByteArray) {
     server.createContext(path) { exchange ->
+      lastRequestUri = exchange.requestURI.toString()
       exchange.sendResponseHeaders(200, bytes.size.toLong())
       exchange.responseBody.use { it.write(bytes) }
     }
@@ -41,7 +58,10 @@ class LocalHttpServer {
 
   /** Serves [status] with an empty body at [path] (for error-path tests). */
   fun serveStatus(path: String, status: Int) {
-    server.createContext(path) { exchange -> exchange.sendResponseHeaders(status, -1) }
+    server.createContext(path) { exchange ->
+      lastRequestUri = exchange.requestURI.toString()
+      exchange.sendResponseHeaders(status, -1)
+    }
   }
 
   /**

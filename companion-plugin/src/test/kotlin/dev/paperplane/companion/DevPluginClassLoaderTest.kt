@@ -12,8 +12,6 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import org.mockbukkit.mockbukkit.MockBukkit
 import org.mockbukkit.mockbukkit.ServerMock
-import org.objectweb.asm.ClassWriter
-import org.objectweb.asm.Opcodes
 
 class DevPluginClassLoaderTest {
 
@@ -35,24 +33,10 @@ class DevPluginClassLoaderTest {
 
   // ── Helpers ─────────────────────────────────────────────────────────
 
-  private fun generateClass(name: String): ByteArray {
-    val cw = ClassWriter(0)
-    cw.visit(Opcodes.V21, Opcodes.ACC_PUBLIC, name, null, "java/lang/Object", null)
-    val mv = cw.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null)
-    mv.visitCode()
-    mv.visitVarInsn(Opcodes.ALOAD, 0)
-    mv.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false)
-    mv.visitInsn(Opcodes.RETURN)
-    mv.visitMaxs(1, 1)
-    mv.visitEnd()
-    cw.visitEnd()
-    return cw.toByteArray()
-  }
-
   private fun writeClassFile(dir: File, internalName: String): File {
     val classFile = File(dir, "$internalName.class")
     classFile.parentFile.mkdirs()
-    classFile.writeBytes(generateClass(internalName))
+    classFile.writeBytes(BytecodeFixtures.emptyClass(internalName))
     return classFile
   }
 
@@ -79,7 +63,7 @@ class DevPluginClassLoaderTest {
     val jarFile = File(tempDir, "test.jar")
     JarOutputStream(jarFile.outputStream()).use { jos ->
       jos.putNextEntry(JarEntry("com/example/InJar.class"))
-      jos.write(generateClass("com/example/InJar"))
+      jos.write(BytecodeFixtures.emptyClass("com/example/InJar"))
       jos.closeEntry()
     }
 

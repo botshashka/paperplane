@@ -13,8 +13,6 @@ import org.junit.jupiter.api.assertDoesNotThrow
 import org.junit.jupiter.api.io.TempDir
 import org.mockbukkit.mockbukkit.MockBukkit
 import org.mockbukkit.mockbukkit.ServerMock
-import org.objectweb.asm.ClassWriter
-import org.objectweb.asm.Opcodes
 
 class DevPluginClassLoaderLifecycleTest {
 
@@ -34,50 +32,10 @@ class DevPluginClassLoaderLifecycleTest {
 
   // ── Helpers ─────────────────────────────────────────────────────────
 
-  private fun generateClass(internalName: String): ByteArray {
-    val cw = ClassWriter(0)
-    cw.visit(Opcodes.V21, Opcodes.ACC_PUBLIC, internalName, null, "java/lang/Object", null)
-    val mv = cw.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null)
-    mv.visitCode()
-    mv.visitVarInsn(Opcodes.ALOAD, 0)
-    mv.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false)
-    mv.visitInsn(Opcodes.RETURN)
-    mv.visitMaxs(1, 1)
-    mv.visitEnd()
-    cw.visitEnd()
-    return cw.toByteArray()
-  }
-
-  /** Generates a class with a static method getValue() that returns the given int constant. */
-  private fun generateClassWithValue(internalName: String, value: Int): ByteArray {
-    val cw = ClassWriter(0)
-    cw.visit(Opcodes.V21, Opcodes.ACC_PUBLIC, internalName, null, "java/lang/Object", null)
-
-    // Default constructor
-    val init = cw.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null)
-    init.visitCode()
-    init.visitVarInsn(Opcodes.ALOAD, 0)
-    init.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false)
-    init.visitInsn(Opcodes.RETURN)
-    init.visitMaxs(1, 1)
-    init.visitEnd()
-
-    // public static int getValue() { return <value>; }
-    val mv = cw.visitMethod(Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "getValue", "()I", null, null)
-    mv.visitCode()
-    mv.visitLdcInsn(value)
-    mv.visitInsn(Opcodes.IRETURN)
-    mv.visitMaxs(1, 0)
-    mv.visitEnd()
-
-    cw.visitEnd()
-    return cw.toByteArray()
-  }
-
   private fun writeClassFile(dir: File, internalName: String, bytes: ByteArray? = null): File {
     val classFile = File(dir, "$internalName.class")
     classFile.parentFile.mkdirs()
-    classFile.writeBytes(bytes ?: generateClass(internalName))
+    classFile.writeBytes(bytes ?: BytecodeFixtures.emptyClass(internalName))
     return classFile
   }
 
@@ -104,7 +62,7 @@ class DevPluginClassLoaderLifecycleTest {
     val jarFile = File(tempDir, "test.jar")
     JarOutputStream(jarFile.outputStream()).use { jos ->
       jos.putNextEntry(JarEntry("com/example/JarClass.class"))
-      jos.write(generateClass("com/example/JarClass"))
+      jos.write(BytecodeFixtures.emptyClass("com/example/JarClass"))
       jos.closeEntry()
     }
 
@@ -181,13 +139,13 @@ class DevPluginClassLoaderLifecycleTest {
     writeClassFile(
         dirA,
         "com/example/TestClass",
-        generateClassWithValue("com/example/TestClass", 1),
+        BytecodeFixtures.classWithStaticValue("com/example/TestClass", 1),
     )
     // Dir B has TestClass with getValue() returning 2
     writeClassFile(
         dirB,
         "com/example/TestClass",
-        generateClassWithValue("com/example/TestClass", 2),
+        BytecodeFixtures.classWithStaticValue("com/example/TestClass", 2),
     )
 
     val loaderA =

@@ -25,9 +25,11 @@ object CompanionSocketFile {
   /**
    * Version of the socket message schema. Bumped on any wire-shape change; the hello/welcome
    * handshake carries it so a stale companion jar can't silently misparse. (Versions 1–2 were the
-   * retired flag-file protocol's `companion-config.json`/`companion-status.json` markers.)
+   * retired flag-file protocol's `companion-config.json`/`companion-status.json` markers; version 3
+   * predates the instant tier — v4 adds `instantSwap`/`instantReport`, welcome capabilities, and
+   * removes the load request's `changedClasses`.)
    */
-  const val PROTOCOL_VERSION = 3
+  const val PROTOCOL_VERSION = 4
 
   private const val FILE_NAME = "companion-socket.json"
   private const val MAX_PORT = 65535

@@ -472,55 +472,189 @@ class CompanionMessageHandlerTest {
     assertTrue(report.message!!.contains("helpMap resolution blew up"))
   }
 
-  // ── Hot-swap fast-path eligibility ──────────────────────────────────
-  // tryHotSwap needs live instrumentation that isn't available in tests, so drive the pure
-  // eligibility predicate directly.
+  // ── Instant swaps ───────────────────────────────────────────────────
+  // A real redefinition needs live instrumentation that isn't available under MockBukkit, so
+  // these pin the refusal ladder — every request is ANSWERED with a reason, never silent.
+
+  private fun instantRequest(
+      id: String,
+      pluginName: String = "Sample",
+      fqcn: String = "com.example.Foo",
+  ) =
+      HostInstantSwapRequest(
+          requestId = id,
+          pluginName = pluginName,
+          classes =
+              listOf(
+                  HostInstantClassEntry(
+                      fqcn = fqcn,
+                      expectedCrc32 = 42L,
+                      data = java.util.Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3)),
+                  )
+              ),
+      )
 
   @Test
-  fun `hot-swap is eligible for a method-body edit on a loaded plugin below the leak limit`() {
+  fun `an instant swap for an unloaded plugin is refused with the reason echoed on the id`() {
+    handler.handleInstantSwap(instantRequest("i1"))
+
+    val report = ipc.instantReports.single()
+    assertEquals("i1", report.requestId, "the report must echo the request id for CLI matching")
+    assertEquals(HostInstantSwapStatus.REFUSED, report.status)
     assertTrue(
-        handler.hotSwapEligible(
-            wasLoaded = true,
-            leakLimitReached = false,
-            changedClasses = listOf("com.example.Plugin"),
-            classesDirs = listOf("/build/classes"),
-        )
+        report.reason!!.contains("not loaded"),
+        "the refusal must say why; got: ${report.reason}",
     )
   }
 
   @Test
-  fun `hot-swap is ineligible once the leak limit is reached`() {
-    // The regression: a method-body edit while leakLimitReached would take the fast path
-    // and report Ok with no action, deferring the leak-restart forever. It must fall
-    // through to the full reload so the host's refusal carries action=restart.
-    assertFalse(
-        handler.hotSwapEligible(
-            wasLoaded = true,
-            leakLimitReached = true,
-            changedClasses = listOf("com.example.Plugin"),
-            classesDirs = listOf("/build/classes"),
-        )
+  fun `an instant swap past the leak limit is refused so the restart signal is not starved`() {
+    // Past the limit, a patch would report Ok with no `action`, deferring the leak-restart
+    // indefinitely; the refusal routes the change through the full reload whose report carries
+    // action=restart.
+    val trippedHost =
+        object : RecordingHost(fakeServer, javaClass.classLoader, probe) {
+          override val leakLimitReached: Boolean = true
+        }
+    val trippedHandler = CompanionMessageHandler(hostingPlugin, { trippedHost }, ipc, serverRoot)
+    trippedHandler.handleLoadRequest(request("r1")) // memoizes the host
+    ipc.instantReports.clear()
+
+    trippedHandler.handleInstantSwap(instantRequest("i2"))
+
+    val report = ipc.instantReports.single()
+    assertEquals(HostInstantSwapStatus.REFUSED, report.status)
+    assertTrue(
+        report.reason!!.contains("leak limit"),
+        "the refusal must name the leak limit; got: ${report.reason}",
     )
   }
 
   @Test
-  fun `hot-swap is ineligible on a fresh load, a structural change, or a jar-only reload`() {
-    assertFalse(
-        handler.hotSwapEligible(
-            false,
-            false,
-            listOf("com.example.Plugin"),
-            listOf("/build/classes"),
-        ),
-        "not yet loaded → fresh load, not a swap",
+  fun `an instant swap without instrumentation is refused, never silent`() {
+    MockBukkit.createMockPlugin("Sample") // loaded natively, so the loader resolves
+
+    handler.handleInstantSwap(instantRequest("i3"))
+
+    val report = ipc.instantReports.single()
+    assertEquals("i3", report.requestId)
+    assertEquals(HostInstantSwapStatus.REFUSED, report.status)
+    assertTrue(
+        report.reason!!.contains("instrumentation"),
+        "the refusal must name the missing agent; got: ${report.reason}",
     )
-    assertFalse(
-        handler.hotSwapEligible(true, false, emptyList(), listOf("/build/classes")),
-        "no changed classes → structural change, needs a full reload",
+  }
+
+  @Test
+  fun `an instant swap naming a different plugin than the hosted one is refused as not loaded`() {
+    // In hot-reload mode the host owns exactly one plugin. Answering a request for someone else
+    // with the hosted plugin's loader would push the refusal down into the swapper, which can only
+    // report it as "no load record" — true of the wrong class, and useless to whoever reads it.
+    val hosted = MockBukkit.createMockPlugin("Hosted")
+    MockBukkit.createMockPlugin(
+        "Sample"
+    ) // also loaded natively: the host branch must not fall through
+    val hostingOther =
+        object : RecordingHost(fakeServer, javaClass.classLoader, probe) {
+          override fun current() = hosted
+        }
+    val otherHandler = CompanionMessageHandler(hostingPlugin, { hostingOther }, ipc, serverRoot)
+    otherHandler.handleLoadRequest(request("r1")) // memoizes the host
+    ipc.instantReports.clear()
+
+    otherHandler.handleInstantSwap(instantRequest("i4", pluginName = "Sample"))
+
+    val report = ipc.instantReports.single()
+    assertEquals(HostInstantSwapStatus.REFUSED, report.status)
+    assertTrue(
+        report.reason!!.contains("Sample is not loaded"),
+        "the refusal must name the plugin that isn't hosted; got: ${report.reason}",
     )
-    assertFalse(
-        handler.hotSwapEligible(true, false, listOf("com.example.Plugin"), emptyList()),
-        "no classes dir → jar fallback, nothing to redefine from",
+  }
+
+  @Test
+  fun `an instant swap for a disabled native plugin is refused as not loaded`() {
+    // A disabled plugin's classes may still be resident, but the server has shut it down —
+    // redefining into it is never what the CLI vouched for.
+    val sample = MockBukkit.createMockPlugin("Sample")
+    server.pluginManager.disablePlugin(sample)
+
+    handler.handleInstantSwap(instantRequest("i5"))
+
+    val report = ipc.instantReports.single()
+    assertEquals(HostInstantSwapStatus.REFUSED, report.status)
+    assertTrue(
+        // Not a bare "not loaded" check: the swapper's own "instrumentation agent not loaded"
+        // would satisfy that, and this must refuse before the swapper is ever reached.
+        report.reason!!.contains("Sample is not loaded"),
+        "a disabled plugin must be refused before the swapper runs; got: ${report.reason}",
+    )
+  }
+
+  /**
+   * A real [InstantSwapper] over a fake agent whose CRC registry answers a define record that
+   * matches nothing — i.e. every request lands on the define-mismatch branch, which is where the
+   * source-bytes fallback (and the refusal that replaces it) lives. The patched class is this test
+   * class itself, so the force-load resolves against the app classloader.
+   */
+  private fun mismatchingSwapper() =
+      InstantSwapper(
+          Logger.getLogger("mismatchingSwapper"),
+          instrumentationProvider = { FakeInstrumentation() },
+          loadedCrcProvider = { _, _ -> 0xD1FFL },
+          wasPatchedProvider = { _, _ -> false },
+          crcUpdater = { _, _, _ -> },
+      )
+
+  private val loadableFqcn = "dev.paperplane.companion.CompanionMessageHandlerTest"
+
+  @Test
+  fun `a legacy native plugin is denied the source-bytes fallback`() {
+    // No api-version in plugin.yml means Paper treats the plugin as legacy, and Commodore's
+    // rewrite is then semantic (NMS renames, material conversion) rather than a re-encode.
+    // Vouching for raw build bytes there would strip the rewrite and the method would die with
+    // NoSuchMethodError at the next call.
+    val sample = MockBukkit.createMockPlugin("Sample")
+    assertNull(sample.description.apiVersion, "the fixture must be a legacy plugin to be a test")
+    val legacyHandler =
+        CompanionMessageHandler(hostingPlugin, { fakeHost }, ipc, serverRoot) {
+          mismatchingSwapper()
+        }
+
+    legacyHandler.handleInstantSwap(instantRequest("i6", fqcn = loadableFqcn))
+
+    val report = ipc.instantReports.single()
+    assertEquals(HostInstantSwapStatus.REFUSED, report.status)
+    assertTrue(
+        report.reason!!.contains("rewrites"),
+        "the refusal must name the define-time rewrite; got: ${report.reason}",
+    )
+  }
+
+  @Test
+  fun `a hosted plugin keeps the source-bytes fallback`() {
+    // The dev host defines the inner plugin's classes itself and applies no rewrite, so a define
+    // mismatch there still gets to consult the loader's source bytes — the refusal is the ordinary
+    // drift one, not the legacy-rewrite one.
+    val hosted = MockBukkit.createMockPlugin("Sample")
+    val hostingSample =
+        object : RecordingHost(fakeServer, javaClass.classLoader, probe) {
+          override fun current() = hosted
+        }
+    val hostedHandler =
+        CompanionMessageHandler(hostingPlugin, { hostingSample }, ipc, serverRoot) {
+          mismatchingSwapper()
+        }
+    hostedHandler.handleLoadRequest(request("r1")) // memoizes the host
+    ipc.instantReports.clear()
+
+    hostedHandler.handleInstantSwap(instantRequest("i7", fqcn = loadableFqcn))
+
+    val report = ipc.instantReports.single()
+    assertEquals(HostInstantSwapStatus.REFUSED, report.status)
+    assertTrue(
+        report.reason!!.contains("baseline drift"),
+        "a hosted plugin must reach the source-bytes check; got: ${report.reason}",
     )
   }
 
@@ -584,6 +718,7 @@ class CompanionMessageHandlerTest {
   /** Records everything the handler sends, plus the relative ordering of sends. */
   private class RecordingIpc : CompanionIpc {
     val reports = mutableListOf<HostLoadReport>()
+    val instantReports = mutableListOf<HostInstantSwapReport>()
     val progress = mutableListOf<Pair<String, String>>()
     var saveCompletions = 0
     val order = mutableListOf<String>()
@@ -591,6 +726,11 @@ class CompanionMessageHandlerTest {
     override fun sendReport(report: HostLoadReport) {
       reports += report
       order += "report"
+    }
+
+    override fun sendInstantReport(report: HostInstantSwapReport) {
+      instantReports += report
+      order += "instantReport"
     }
 
     override fun sendSaveComplete() {
@@ -631,7 +771,7 @@ class CompanionMessageHandlerTest {
 
     override fun isLoaded(): Boolean = isLoadedResult
 
-    override fun current() = null
+    override fun current(): org.bukkit.plugin.java.JavaPlugin? = null
 
     override val leakLimitReached: Boolean = false
   }

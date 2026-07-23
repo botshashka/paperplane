@@ -33,6 +33,12 @@ class CompanionPlugin : JavaPlugin() {
                     Runnable { messageHandler.handleLoadRequest(request) },
                 )
               },
+              onInstantSwap = { request ->
+                server.scheduler.runTask(
+                    this,
+                    Runnable { messageHandler.handleInstantSwap(request) },
+                )
+              },
           )
       // The host is built lazily on the first load request (hot-reload only). Probing Paper
       // internals here would fail-fast the whole companion on Paper versions that predate the

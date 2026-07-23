@@ -2,6 +2,8 @@ package dev.paperplane.cli.devserver
 
 import dev.paperplane.cli.devserver.DevSession.RunningState
 import dev.paperplane.cli.devserver.DevSession.StartupOutcome
+import dev.paperplane.cli.devserver.instant.BaselineTracker
+import dev.paperplane.cli.devserver.instant.InstantLane
 import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.ipc.CompanionWire
@@ -56,6 +58,11 @@ internal open class BlueGreenMode(
   }
 
   private var activeSlot = Slot.SERVER
+
+  // The instant fast lane, and one confirmed-loaded baseline per slot: each backend JVM runs its
+  // own plugin incarnation, so what is "confirmed loaded" is a per-slot fact.
+  internal val lane = InstantLane(session)
+  internal val baselines = mapOf(Slot.SERVER to BaselineTracker(), Slot.SWAP to BaselineTracker())
 
   /**
    * Post-swap pre-warm runs in the background so the main loop can return to "Watching" quickly. If
@@ -127,6 +134,9 @@ internal open class BlueGreenMode(
 
     session.runMainWatchLoop(
         onChanged = { _ -> rebuildAndUpdateSlot(state.metadata, state.paperJar) },
+        onForceSwap = {
+          rebuildAndUpdateSlot(state.metadata, state.paperJar, forceFullSwap = true)
+        },
         healthCheck = {
           if (!shuttingDown.get() && !velocityManager.isRunning()) {
             session.ui.error("Proxy process exited unexpectedly")
@@ -168,10 +178,12 @@ internal open class BlueGreenMode(
             }
             DevSession.ServerStartResult.Aborted -> return@phase PhaseEnd.None
           }
+      lane.confirmFullSwap(baselines[activeSlot]!!)
       session.showServerInfo(
           metadata,
           "localhost:${PaperServerManager.DEFAULT_PORT} (via proxy)",
           "blue-green (zero-downtime)",
+          instant = lane.bannerState(servers[activeSlot]!!),
       )
       outcome = StartupOutcome.Running(state)
       PhaseEnd.Watching
@@ -201,8 +213,12 @@ internal open class BlueGreenMode(
    * Wraps [rebuild] so it can update [activeSlot] as a side effect while returning only [PhaseEnd]
    * to the watcher callback.
    */
-  private fun rebuildAndUpdateSlot(metadata: ProjectMetadata, paperJar: File): PhaseEnd {
-    val (newSlot, end) = rebuild(metadata, paperJar)
+  private fun rebuildAndUpdateSlot(
+      metadata: ProjectMetadata,
+      paperJar: File,
+      forceFullSwap: Boolean = false,
+  ): PhaseEnd {
+    val (newSlot, end) = rebuild(metadata, paperJar, forceFullSwap)
     activeSlot = newSlot
     return end
   }
@@ -251,13 +267,28 @@ internal open class BlueGreenMode(
 
   // ── Rebuild ──────────────────────────────────────────────────────────
 
-  /** Internal for tests: the deploy/transfer/pre-warm cycle is driven directly. */
-  internal fun rebuild(metadata: ProjectMetadata, paperJar: File): Pair<Slot, PhaseEnd> {
+  /**
+   * Internal for tests: the deploy/transfer/pre-warm cycle is driven directly. The instant lane
+   * runs first, against the live active backend and BEFORE any world save or standby teardown — a
+   * patched cycle never touches the standby at all (its stale jar is benign: every fall-through
+   * swap re-deploys before transferring). [forceFullSwap] skips the lane (manual escape hatch).
+   */
+  internal fun rebuild(
+      metadata: ProjectMetadata,
+      paperJar: File,
+      forceFullSwap: Boolean = false,
+  ): Pair<Slot, PhaseEnd> {
     val totalStart = System.currentTimeMillis()
     val active = servers[activeSlot]!!
     val standbySlot = activeSlot.other()
     val standby = servers[standbySlot]!!
     val builtJar = File(session.projectDir, metadata.jarPath)
+
+    if (!forceFullSwap) {
+      lane.runOrEscalate(active, metadata, baselines[activeSlot]!!, totalStart, "full swap")?.let {
+        return activeSlot to it
+      }
+    }
 
     if (!buildAndSync(active, standby, standbySlot, builtJar)) {
       return activeSlot to PhaseEnd.Waiting
@@ -265,6 +296,10 @@ internal open class BlueGreenMode(
     if (!deployAndTransfer(standby, standbySlot, active, builtJar, paperJar, totalStart)) {
       return activeSlot to PhaseEnd.Waiting
     }
+    // The promoted standby is verifiably running this build; the retiring active's baseline is
+    // stale until its pre-warm replacement confirms on a future swap.
+    lane.confirmFullSwap(baselines[standbySlot]!!)
+    baselines[activeSlot]!!.reset()
 
     // Pre-warm old active as next standby
     preWarmThread =
@@ -305,7 +340,7 @@ internal open class BlueGreenMode(
 
     if (standby.isRunning()) standby.stop()
 
-    active.sendCompanionStatus(CompanionWire.STATE_BUILDING)
+    active.ipc.sendStatus(CompanionWire.STATE_BUILDING)
     val buildStart = System.currentTimeMillis()
 
     val syncThread =
@@ -321,7 +356,7 @@ internal open class BlueGreenMode(
 
     if (!buildSuccess) {
       session.ui.error("Build failed", buildDuration)
-      active.sendCompanionStatus(CompanionWire.STATE_ERROR, message = "Build failed")
+      active.ipc.sendStatus(CompanionWire.STATE_ERROR, message = "Build failed")
       return false
     }
     session.ui.success("Build succeeded", buildDuration)
@@ -348,7 +383,7 @@ internal open class BlueGreenMode(
     standby.cleanupStale()
 
     val serverStart = System.currentTimeMillis()
-    standby.start(paperJar, session.config.server.jvmArgs)
+    standby.start(paperJar, session.launchSpec)
     val ready =
         session.ui.spin("Starting ${standbySlot.serverName} server...") { standby.waitForReady() }
     val serverDuration = session.formatDuration(System.currentTimeMillis() - serverStart)
@@ -356,7 +391,7 @@ internal open class BlueGreenMode(
     if (!ready) {
       session.ui.error("Standby server failed to start", serverDuration)
       standby.stop()
-      active.sendCompanionStatus(CompanionWire.STATE_ERROR, message = "Standby failed to start")
+      active.ipc.sendStatus(CompanionWire.STATE_ERROR, message = "Standby failed to start")
       return false
     }
 
@@ -366,7 +401,7 @@ internal open class BlueGreenMode(
     Thread.sleep(TRANSFER_SETTLE_DELAY_MS)
 
     val totalDuration = session.formatDuration(System.currentTimeMillis() - totalStart)
-    standby.sendCompanionStatus(CompanionWire.STATE_READY, duration = totalDuration)
+    standby.ipc.sendStatus(CompanionWire.STATE_READY, duration = totalDuration)
 
     session.ui.success("Server ready (${standbySlot.serverName})", serverDuration)
     session.ui.totalTime(totalDuration)
@@ -390,7 +425,7 @@ internal open class BlueGreenMode(
       standby.copyCompanion()
       // Pre-warmed standby runs silently — its logs would interleave with the active server's.
       standby.logSuppressed = true
-      standby.start(paperJar, session.config.server.jvmArgs)
+      standby.start(paperJar, session.launchSpec)
       standby.waitForReady()
     } catch (_: Exception) {
       // Pre-warm is best-effort; failure here doesn't affect the active server
@@ -423,13 +458,14 @@ internal open class BlueGreenMode(
     blue.copyCompanion()
 
     val serverStart = System.currentTimeMillis()
-    blue.start(paperJar, session.config.server.jvmArgs)
+    blue.start(paperJar, session.launchSpec)
     val ready = blue.waitForReady()
     val serverDuration = session.formatDuration(System.currentTimeMillis() - serverStart)
     return if (ready) {
       session.ui.success("Server ready", serverDuration)
-      blue.sendCompanionStatus(CompanionWire.STATE_READY, duration = serverDuration)
+      blue.ipc.sendStatus(CompanionWire.STATE_READY, duration = serverDuration)
       velocityManager.writeActiveServer("server")
+      lane.confirmFullSwap(baselines[Slot.SERVER]!!)
       RunningState(metadata, paperJar)
     } else {
       session.ui.error("Server failed to start", serverDuration)

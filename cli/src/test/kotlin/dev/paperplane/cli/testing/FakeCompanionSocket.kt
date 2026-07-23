@@ -27,12 +27,14 @@ import java.util.concurrent.TimeUnit
 class FakeCompanionSocket(
     private val serverDir: File,
     private val token: String = "test-token",
-    private val protocolVersion: Int = 3,
+    private val protocolVersion: Int = dev.paperplane.cli.ipc.CompanionSocketFile.PROTOCOL_VERSION,
     private val welcomeProtocolVersion: Int = protocolVersion,
     /** When false, the fake accepts the connection but never answers the hello (handshake hang). */
     private val answerHello: Boolean = true,
     /** Snapshot the welcome reports for `serverReady`. */
     private val serverReadyOnWelcome: Boolean = false,
+    /** The redefine capability the welcome advertises; null omits the field entirely. */
+    private val capability: String? = "body-only",
 ) : AutoCloseable {
   private val gson = Gson()
   private val serverSocket = ServerSocket()
@@ -105,6 +107,7 @@ class FakeCompanionSocket(
               addProperty("type", "welcome")
               addProperty("protocolVersion", welcomeProtocolVersion)
               addProperty("serverReady", serverReadyOnWelcome)
+              capability?.let { addProperty("capability", it) }
             }
             .toString()
     )

@@ -2,13 +2,19 @@ package dev.paperplane.cli.ipc
 
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import dev.paperplane.cli.devserver.InstantSwapRequest
+import dev.paperplane.cli.devserver.InstantSwapStatus
+import dev.paperplane.cli.devserver.InstantWaitResult
 import dev.paperplane.cli.devserver.LoadRequest
 import dev.paperplane.cli.devserver.LoadStatus
 import dev.paperplane.cli.devserver.LoadWaitResult
 import dev.paperplane.cli.devserver.ReloadStrategy
+import dev.paperplane.cli.devserver.instant.RedefineCapability
 import dev.paperplane.cli.testing.FakeCompanionSocket
 import java.io.File
+import java.util.Base64
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -18,7 +24,8 @@ import org.junit.jupiter.api.io.TempDir
 /**
  * Replays a REAL captured protocol log — `fixtures/protocol-log-real-session.ndjson`, the
  * `dev.protocol-log` tee of an actual `ppl dev` session against Paper 1.21.4 (boot → initial fresh
- * load → structural-edit full reload → body-edit hotswap) — through the CLI's codec and client.
+ * load, then two structural-edit full reloads each followed by a body-edit instant patch, then a
+ * comment-only edit's no-change rebuild) — through the CLI's codec and client.
  *
  * This is the golden source of truth for the wire shape (per the repo's captured-real-fixtures
  * standard): hand-rolled fixtures elsewhere test edge cases, but THIS file pins what the companion
@@ -54,26 +61,39 @@ class ProtocolLogReplayTest {
     // codec drifted from the wire.
     events.forEachIndexed { i, event -> assertNotNull(event, "recv line $i failed to decode") }
 
-    // The session's semantic arc: handshake welcome, explicit readiness, then three load cycles
-    // (fresh → reload → hotswap), each streaming a loading stage before its report.
+    // The session's semantic arc: handshake welcome (with the JVM's redefine capabilities),
+    // explicit readiness, then a fresh load, a full reload, and an instant patch.
     val welcome = assertInstanceOf(CompanionEvent.Welcome::class.java, events.first())
     assertEquals(CompanionSocketFile.PROTOCOL_VERSION, welcome.protocolVersion)
     assertEquals(false, welcome.serverReady, "the CLI connected before ServerLoadEvent")
+    assertEquals(
+        RedefineCapability.BODY_ONLY,
+        welcome.capability,
+        "the LaunchSpec always attaches the agent — welcome must say so",
+    )
     assertEquals(CompanionEvent.Ready, events[1], "readiness arrived as an explicit event")
 
     val reports = events.filterIsInstance<CompanionEvent.Report>().map { it.report }
     assertEquals(3, reports.size)
     assertEquals(
-        listOf(ReloadStrategy.FRESH, ReloadStrategy.RELOAD, ReloadStrategy.HOTSWAP),
+        listOf(ReloadStrategy.FRESH, ReloadStrategy.RELOAD, ReloadStrategy.RELOAD),
         reports.map { it.strategy },
-        "the session exercised all three strategies",
+        "the session exercised both load strategies",
     )
     assertTrue(reports.all { it.status == LoadStatus.OK })
     assertTrue(reports.all { it.requestId.isNotEmpty() })
-    assertTrue(reports.all { it.pluginName == "Smoketest" })
+    assertTrue(reports.all { it.pluginName == "smoketest" })
+
+    val instantReports = events.filterIsInstance<CompanionEvent.InstantReport>().map { it.report }
+    assertEquals(2, instantReports.size, "the session exercised two instant patches")
+    for (instant in instantReports) {
+      assertEquals(InstantSwapStatus.OK, instant.status)
+      assertTrue(instant.patched >= 1, "each body edit patched at least one class")
+      assertTrue(instant.requestId.isNotEmpty())
+    }
 
     val progress = events.filterIsInstance<CompanionEvent.LoadProgress>()
-    assertEquals(3, progress.size)
+    assertEquals(3, progress.size, "each real load streamed a loading stage")
     assertTrue(progress.all { it.stage == "loading" })
     assertEquals(
         reports.map { it.requestId },
@@ -100,33 +120,63 @@ class ProtocolLogReplayTest {
       val request = gson.fromJson(load, LoadRequest::class.java)
       assertTrue(request.requestId.isNotEmpty())
       assertTrue(request.jarPath.endsWith("smoketest-1.0.0.jar"))
-      assertEquals("Smoketest", request.pluginName)
+      assertEquals("smoketest", request.pluginName)
       assertTrue(request.classesDirs.isNotEmpty(), "real hot-reload sessions carry classesDirs")
       assertEquals("summary", request.leakDiagnostics)
+      assertFalse(load.has("changedClasses"), "v4 removed changedClasses from the load request")
     }
-    // The reload cycles (not the initial load) carried the changed class for the hotswap ladder.
-    assertEquals(
-        listOf(
-            emptyList(),
-            listOf("me.dev.smoketest.Smoketest"),
-            listOf("me.dev.smoketest.Smoketest"),
-        ),
-        loads.map { load -> load.getAsJsonArray("changedClasses").map { it.asString } },
-    )
 
-    // The status stream: post-load ready, then building→ready per rebuild.
+    // The instant patch carried real class bytes and the expected loaded CRC.
+    val instantSwaps = sends.filter { it.get("type")?.asString == "instantSwap" }
+    assertEquals(2, instantSwaps.size)
+    for (swapJson in instantSwaps) {
+      val swap = gson.fromJson(swapJson, InstantSwapRequest::class.java)
+      assertTrue(swap.requestId.isNotEmpty())
+      assertEquals("smoketest", swap.pluginName)
+      assertTrue(swap.classes.isNotEmpty(), "each body edit sent at least one class payload")
+      for (entry in swap.classes) {
+        assertTrue(entry.fqcn.isNotEmpty())
+        assertTrue(entry.expectedCrc32 != 0L, "patches carry the expected loaded CRC")
+        assertTrue(
+            Base64.getDecoder().decode(entry.data).isNotEmpty(),
+            "class bytes travel base64-encoded on the wire",
+        )
+      }
+    }
+
+    // The status stream: post-load ready, then building→ready per rebuild (reload, instant,
+    // reload, instant, no-change).
     val states =
         sends.filter { it.get("type")?.asString == "status" }.map { it.get("state").asString }
-    assertEquals(listOf("ready", "building", "ready", "building", "ready"), states)
+    assertEquals(
+        listOf(
+            "ready",
+            "building",
+            "ready",
+            "building",
+            "ready",
+            "building",
+            "ready",
+            "building",
+            "ready",
+            "building",
+            "ready",
+        ),
+        states,
+    )
   }
 
   @Test
   fun `a live client replaying the captured session resolves every wait like the real one did`() {
     val recvLines = entries().filter { it.dir == "recv" }.map { it.line }
-    // The reports in capture order, used to drive awaitReport with the session's real requestIds.
+    // The reports in capture order, used to drive the awaits with the session's real requestIds.
     val reportIds =
         recvLines
             .mapNotNull { CompanionWire.decode(it) as? CompanionEvent.Report }
+            .map { it.report.requestId }
+    val instantIds =
+        recvLines
+            .mapNotNull { CompanionWire.decode(it) as? CompanionEvent.InstantReport }
             .map { it.report.requestId }
 
     FakeCompanionSocket(serverDir).use { companion ->
@@ -151,6 +201,14 @@ class ProtocolLogReplayTest {
               LoadWaitResult.Ok::class.java,
               result,
               "captured report $id must resolve Ok on replay",
+          )
+        }
+        for (id in instantIds) {
+          val result = client.awaitInstantReport(id, 5_000) { true }
+          assertInstanceOf(
+              InstantWaitResult.Answered::class.java,
+              result,
+              "captured instant report $id must resolve on replay",
           )
         }
       }
