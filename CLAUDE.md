@@ -16,7 +16,6 @@ PaperPlane (`ppl`) is a CLI dev tool for Minecraft Paper plugin development. It 
 ./ppl dev            # start dev server with file watching
 ./ppl create         # scaffold a new Paper plugin project (alias: ppl new)
 ./ppl init           # add PaperPlane to an existing project (alias: ppl setup)
-./ppl test           # run tests via Gradle Tooling API
 ./ppl clean          # clean .paperplane directory
 
 # Run tests

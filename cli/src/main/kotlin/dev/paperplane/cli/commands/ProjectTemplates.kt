@@ -361,7 +361,7 @@ internal object ProjectTemplates {
         ## Test
 
         ```bash
-        ppl test
+        ./gradlew test
         ```
 
         ## Build

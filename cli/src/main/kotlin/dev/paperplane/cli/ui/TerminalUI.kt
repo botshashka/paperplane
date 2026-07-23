@@ -208,38 +208,12 @@ class TerminalUI(terminal: Terminal) {
     }
   }
 
-  fun testFailure(errorText: String) {
-    val lines = errorText.lines().filter { it.isNotBlank() }
-    for (errLine in lines) {
-      emit("       ${red(errLine)}")
-    }
-  }
-
   fun blank() {
     emit("")
   }
 
   fun fileCreated(path: String) {
     emit("  ${green("✓")} $path")
-  }
-
-  // Test output (Vitest-style)
-  fun testClass(name: String, passed: Boolean, duration: String) {
-    val icon = if (passed) green("✓") else red("✗")
-    emit("  $icon  $name ${dim(duration)}")
-  }
-
-  fun testCase(name: String, passed: Boolean, duration: String) {
-    val icon = if (passed) green("✓") else red("✗")
-    emit("     $icon $name ${dim(duration)}")
-  }
-
-  fun testSummary(passed: Int, failed: Int, total: Int, totalTime: String, testTime: String) {
-    emit("")
-    val passedText = green("$passed passed")
-    val failedText = if (failed > 0) "  ${red("$failed failed")}" else ""
-    emit("  Tests   $passedText$failedText  ${dim("($total)")}")
-    emit("  Time    $totalTime  ${dim("(tests $testTime)")}")
   }
 
   // ── Spinner ────────────────────────────────────────────────────────
