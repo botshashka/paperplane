@@ -12,11 +12,9 @@ import dev.paperplane.cli.commands.BuildCommand
 import dev.paperplane.cli.commands.CleanCommand
 import dev.paperplane.cli.commands.CreateCommand
 import dev.paperplane.cli.commands.DevCommand
-import dev.paperplane.cli.commands.FormatCommand
 import dev.paperplane.cli.commands.ImplodeCommand
 import dev.paperplane.cli.commands.InitCommand
 import dev.paperplane.cli.commands.PluginCommand
-import dev.paperplane.cli.commands.TestCommand
 import dev.paperplane.cli.commands.UpgradeCommand
 import dev.paperplane.cli.ui.AnsiTerminal
 import dev.paperplane.cli.ui.InteractivePrompts
@@ -27,7 +25,6 @@ class PaperPlane : CliktCommand(name = "ppl") {
       mapOf(
           "new" to listOf("create"),
           "setup" to listOf("init"),
-          "fmt" to listOf("format"),
           "p" to listOf("plugin"),
       )
 
@@ -72,8 +69,6 @@ fun main(args: Array<String>) {
       info("create", "Scaffold a new Paper plugin project")
       info("init", "Add PaperPlane to an existing project")
       info("build", "Build the deployable plugin jar")
-      info("test", "Run tests via Gradle")
-      info("format", "Format source code with Spotless")
       info("clean", "Clean .paperplane directory")
       info("plugin", "Manage dev-server plugin dependencies")
       info("upgrade", "Update ppl to the latest version")
@@ -92,8 +87,6 @@ fun main(args: Array<String>) {
           InitCommand(ui),
           DevCommand(ui, prompts),
           BuildCommand(ui),
-          TestCommand(ui),
-          FormatCommand(ui),
           CleanCommand(ui, prompts),
           PluginCommand(ui),
           UpgradeCommand(ui),

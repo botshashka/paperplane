@@ -102,48 +102,6 @@ class TerminalUITest {
   }
 
   @Test
-  fun `testClass renders pass and fail states`() {
-    val (ui, t) = newUi()
-    ui.testClass("FooTest", passed = true, duration = "12ms")
-    ui.testClass("BarTest", passed = false, duration = "5ms")
-    assertEquals(
-        listOf("  ✓  FooTest 12ms", "  ✗  BarTest 5ms"),
-        t.writes,
-    )
-  }
-
-  @Test
-  fun `testCase is indented deeper than testClass`() {
-    val (ui, t) = newUi()
-    ui.testCase("behaves correctly", passed = true, duration = "3ms")
-    assertEquals(listOf("     ✓ behaves correctly 3ms"), t.writes)
-  }
-
-  @Test
-  fun `testSummary emits a blank then the summary lines`() {
-    val (ui, t) = newUi()
-    ui.testSummary(passed = 5, failed = 0, total = 5, totalTime = "1.2s", testTime = "200ms")
-    assertEquals(
-        listOf("", "  Tests   5 passed  (5)", "  Time    1.2s  (tests 200ms)"),
-        t.writes,
-    )
-  }
-
-  @Test
-  fun `testSummary with failures shows the failed count`() {
-    val (ui, t) = newUi()
-    ui.testSummary(passed = 3, failed = 2, total = 5, totalTime = "1.2s", testTime = "200ms")
-    assertEquals(
-        listOf(
-            "",
-            "  Tests   3 passed  2 failed  (5)",
-            "  Time    1.2s  (tests 200ms)",
-        ),
-        t.writes,
-    )
-  }
-
-  @Test
   fun `buildError with line number prints file-colon-line then each error line`() {
     val (ui, t) = newUi()
     ui.buildError("src/Foo.kt", 42, "error: unresolved reference\nexpected: Bar")
@@ -161,13 +119,6 @@ class TerminalUITest {
         listOf("  Build output", "  stack trace", "  goes here"),
         t.writes,
     )
-  }
-
-  @Test
-  fun `testFailure renders with deep indent and skips blank lines`() {
-    val (ui, t) = newUi()
-    ui.testFailure("expected: foo\n\nactual: bar")
-    assertEquals(listOf("       expected: foo", "       actual: bar"), t.writes)
   }
 
   // ── Out-of-block primitives ────────────────────────────────────────

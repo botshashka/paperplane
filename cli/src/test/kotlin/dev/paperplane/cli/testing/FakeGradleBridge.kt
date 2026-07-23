@@ -19,8 +19,6 @@ class FakeGradleBridge(
     ui: TerminalUI,
     var nextBuildResult: Boolean = true,
     var nextCleanResult: Boolean = true,
-    var nextFormatResult: GradleBridge.FormatResult = GradleBridge.FormatResult(success = true),
-    var nextTestResult: Boolean = true,
     var nextMetadata: ProjectMetadata? =
         ProjectMetadata(
             jarPath = "build/libs/test.jar",
@@ -31,12 +29,6 @@ class FakeGradleBridge(
             version = "1.0.0",
         ),
     var nextMetadataFast: ProjectMetadata? = nextMetadata,
-    /**
-     * Optional callback invoked inside [test] before it returns. Lets tests recreate JUnit XML
-     * fixture files that the production code has already cleared, since `runTestsInBlock` wipes
-     * stale results before invoking gradle.test().
-     */
-    var onTest: () -> Unit = {},
 ) : GradleBridge(projectDir, ui) {
 
   /**
@@ -48,7 +40,7 @@ class FakeGradleBridge(
   /** See [nextMetadataResult]. */
   var nextMetadataFastResult: MetadataResult? = null
 
-  /** Ordered log of every method call, e.g. `["build", "metadata", "test(quiet=true)"]`. */
+  /** Ordered log of every method call, e.g. `["build", "metadata", "close"]`. */
   val calls: MutableList<String> = mutableListOf()
 
   override fun build(): Boolean {
@@ -64,17 +56,6 @@ class FakeGradleBridge(
   override fun clean(): Boolean {
     calls += "clean"
     return nextCleanResult
-  }
-
-  override fun format(check: Boolean): GradleBridge.FormatResult {
-    calls += "format(check=$check)"
-    return nextFormatResult
-  }
-
-  override fun test(quiet: Boolean, filter: String?): Boolean {
-    calls += "test(quiet=$quiet, filter=$filter)"
-    onTest()
-    return nextTestResult
   }
 
   override fun metadata(): MetadataResult {
