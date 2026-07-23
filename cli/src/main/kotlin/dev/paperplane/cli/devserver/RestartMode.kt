@@ -106,7 +106,7 @@ internal open class RestartMode(
           metadata,
           "localhost:${PaperServerManager.DEFAULT_PORT}",
           "restart",
-          instantLabel = lane.capabilityLabel(serverManager),
+          instant = lane.bannerState(serverManager),
       )
       outcome = StartupOutcome.Running(state)
       PhaseEnd.Watching

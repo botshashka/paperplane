@@ -3,6 +3,7 @@ package dev.paperplane.cli.devserver
 import dev.paperplane.cli.Versions
 import dev.paperplane.cli.config.DevMode
 import dev.paperplane.cli.config.PaperPlaneConfig
+import dev.paperplane.cli.devserver.instant.InstantBanner
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.gradle.ProjectMetadata
@@ -336,19 +337,23 @@ internal class DevSession(
    * Emits the three-line server summary (address / plugin / mode). Caller is inside a phase; this
    * function commits whatever the phase has emitted so far (build/server-ready lines) into a
    * separate visual sub-block above, then appends the info lines into a fresh sub-block.
+   *
+   * An armed instant lane rides the mode line as a suffix; a lane that was asked for and could not
+   * arm gets a warning of its own, because that is the one instant state the user did not choose.
    */
   fun showServerInfo(
       metadata: ProjectMetadata,
       serverAddress: String,
       modeLabel: String,
-      instantLabel: String? = null,
+      instant: InstantBanner = InstantBanner.Disabled,
   ) {
     ui.nextSection()
     ui.info("Server:", serverAddress)
     ui.info("Plugin:", "${metadata.pluginName} v${metadata.version}")
-    ui.info("Mode:", modeLabel)
-    // Always report the instant tier's ceiling and why — the honesty floor for the fast lane.
-    instantLabel?.let { ui.info("Instant:", it) }
+    ui.info("Mode:", if (instant is InstantBanner.Armed) "$modeLabel + instant" else modeLabel)
+    if (instant is InstantBanner.Unavailable) {
+      ui.warning("Instant unavailable — ${instant.reason}; changes take a full reload")
+    }
   }
 
   /**

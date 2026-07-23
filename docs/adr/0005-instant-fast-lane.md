@@ -97,9 +97,10 @@ verified application.
   baseline, and every patch honestly refuses).
 - **Honest reporting is the contract:** every rebuild ends in exactly one of
   "Patched N classes (instant)", "Instant: <named reason> — full swap", or
-  "No code changes"; a session-start banner reports the tier ceiling and why
-  (`body-only`, `off (…)`); and typing `s`⏎ forces a full swap — the
-  user-side reset to ground truth.
+  "No code changes"; the session-start banner marks an armed lane on the mode
+  line (`Mode: restart + instant`) and warns outright if the lane was asked
+  for and could not arm; and typing `s`⏎ forces a full swap — the user-side
+  reset to ground truth.
 
 ## Consequences
 

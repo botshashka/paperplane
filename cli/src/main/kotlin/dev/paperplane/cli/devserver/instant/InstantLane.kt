@@ -36,6 +36,25 @@ internal sealed class InstantOutcome {
 }
 
 /**
+ * What the session-start banner says about the instant lane. Armed is a suffix on the mode line
+ * rather than a line of its own: with one tier there is nothing to distinguish, and "restart +
+ * instant" says what the session does in the place the user already looks for it.
+ */
+internal sealed class InstantBanner {
+  /** Armed and verified against the live server. */
+  object Armed : InstantBanner()
+
+  /**
+   * Off because the user set `dev.instant: false`. The banner stays silent — reporting a state
+   * someone chose in their own config back to them is noise.
+   */
+  object Disabled : InstantBanner()
+
+  /** On, but the live server cannot patch. [reason] is user-facing. */
+  data class Unavailable(val reason: String) : InstantBanner()
+}
+
+/**
  * The universal fast lane every dev mode runs in front of its swap path: compile, classify the
  * change-set against the confirmed baseline, and — when the requirement fits the live JVM's
  * capability and the lifecycle gate passes — patch the running server in place over the socket.
@@ -250,15 +269,21 @@ internal class InstantLane(private val session: DevSession) {
   }
 
   /**
-   * The session-start banner value for "Instant:" — always report the tier ceiling and why.
-   * Resolved against the live server, so it must be called after the companion handshake.
+   * What the session-start banner should say about this lane. Resolved against the live server, so
+   * it must be called after the companion handshake.
+   *
+   * [InstantBanner.Unavailable] should be unreachable in a working install: `-javaagent` is
+   * attached unconditionally ([dev.paperplane.cli.server.LaunchSpec.attachAgent] is only false in
+   * tests), a jar the JVM can't open aborts startup long before a banner, and every mainstream JVM
+   * supports redefinition. It is reported anyway rather than assumed away — an on-by-default lane
+   * that silently isn't running is the one thing this banner exists to prevent.
    */
-  fun capabilityLabel(serverManager: PaperServerManager): String =
+  fun bannerState(serverManager: PaperServerManager): InstantBanner =
       when {
-        !session.config.dev.instant -> "off (dev.instant: false)"
+        !session.config.dev.instant -> InstantBanner.Disabled
         serverManager.ipc.redefineCapability() == RedefineCapability.NONE ->
-            "off (no agent in the server JVM)"
-        else -> "body-only"
+            InstantBanner.Unavailable("no agent in the server JVM")
+        else -> InstantBanner.Armed
       }
 
   private fun fastMeta(): ProjectMetadata? = session.fastMetadata()

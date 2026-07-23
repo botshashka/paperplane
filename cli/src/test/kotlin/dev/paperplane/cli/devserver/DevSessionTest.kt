@@ -3,6 +3,7 @@ package dev.paperplane.cli.devserver
 import dev.paperplane.cli.Versions
 import dev.paperplane.cli.config.DevMode
 import dev.paperplane.cli.config.PaperPlaneConfig
+import dev.paperplane.cli.devserver.instant.InstantBanner
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.gradle.ProjectMetadata
 import dev.paperplane.cli.server.PaperDownloader
@@ -413,5 +414,53 @@ class DevSessionTest {
     session.maybeInvalidateGradleConnection(listOf(unrelated))
 
     assertEquals(0, bridge.closeCount)
+  }
+
+  // ── Server-info banner ──────────────────────────────────────────────
+
+  private fun bannerLines(instant: InstantBanner): List<String> {
+    val fixture = DevSessionFixture(tempDir).withMetadata(pluginName = "Foo", version = "2.3.4")
+    fixture.session.showServerInfo(
+        checkNotNull(fixture.gradle.nextMetadata),
+        "localhost:25565",
+        "restart",
+        instant,
+    )
+    return fixture.terminal.writes
+  }
+
+  @Test
+  fun `an armed instant lane rides the mode line rather than taking one of its own`() {
+    val lines = bannerLines(InstantBanner.Armed)
+
+    assertTrue(lines.any { it.contains("Mode:") && it.contains("restart + instant") }, "$lines")
+    assertFalse(lines.any { it.contains("Instant:") }, "the tier gets no line of its own: $lines")
+  }
+
+  @Test
+  fun `a switched-off instant lane says nothing at all`() {
+    val lines = bannerLines(InstantBanner.Disabled)
+
+    assertTrue(lines.any { it.contains("Mode:") && it.contains("restart") }, "$lines")
+    assertFalse(lines.any { it.contains("instant", ignoreCase = true) }, "$lines")
+  }
+
+  @Test
+  fun `a lane that could not arm warns, naming the reason and the consequence`() {
+    // The one instant state the user did not choose. It should be unreachable in a working
+    // install, which is exactly why it must not degrade into a missing suffix nobody notices.
+    val lines = bannerLines(InstantBanner.Unavailable("no agent in the server JVM"))
+
+    assertFalse(
+        lines.any { it.contains("restart + instant") },
+        "an unavailable lane must not claim the mode suffix: $lines",
+    )
+    val warning = lines.single { it.contains("Instant unavailable") }
+    assertTrue(
+        warning.contains("\u26a0"),
+        "the line must read as a warning, not an info row: $warning",
+    )
+    assertTrue(warning.contains("no agent in the server JVM"), warning)
+    assertTrue(warning.contains("full reload"), "say what it costs the user: $warning")
   }
 }

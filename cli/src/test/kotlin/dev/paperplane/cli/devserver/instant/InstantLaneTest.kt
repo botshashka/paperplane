@@ -412,15 +412,21 @@ class InstantLaneTest {
   // ── Capability banner ───────────────────────────────────────────────
 
   @Test
-  fun `the capability label always reports the tier ceiling and why`() {
-    val bodyOnly = setup()
-    assertEquals("body-only", bodyOnly.lane.capabilityLabel(bodyOnly.server))
+  fun `the banner state distinguishes armed, switched off, and could not arm`() {
+    val armed = setup()
+    assertEquals(InstantBanner.Armed, armed.lane.bannerState(armed.server))
 
-    val none = setup(capability = RedefineCapability.NONE)
-    assertEquals("off (no agent in the server JVM)", none.lane.capabilityLabel(none.server))
-
+    // Off because the user asked for it — nothing to report back to them.
     val disabled = setup(instantEnabled = false)
-    assertEquals("off (dev.instant: false)", disabled.lane.capabilityLabel(disabled.server))
+    assertEquals(InstantBanner.Disabled, disabled.lane.bannerState(disabled.server))
+
+    // On, but the live server can't patch: the one instant state nobody chose, so it must be
+    // named rather than silently collapsing into "no + instant suffix".
+    val none = setup(capability = RedefineCapability.NONE)
+    assertEquals(
+        InstantBanner.Unavailable("no agent in the server JVM"),
+        none.lane.bannerState(none.server),
+    )
   }
 
   // ── Metadata invalidation ───────────────────────────────────────────

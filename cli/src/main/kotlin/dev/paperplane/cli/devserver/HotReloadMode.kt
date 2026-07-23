@@ -185,7 +185,7 @@ internal open class HotReloadMode(
           metadata,
           "localhost:${PaperServerManager.DEFAULT_PORT}",
           if (session.launchSpec.isJbr) "hot-reload (enhanced — JBR)" else "hot-reload",
-          instantLabel = lane.capabilityLabel(serverManager),
+          instant = lane.bannerState(serverManager),
       )
       outcome = StartupOutcome.Running(state)
       PhaseEnd.Watching
