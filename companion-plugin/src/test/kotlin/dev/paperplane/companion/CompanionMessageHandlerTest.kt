@@ -476,14 +476,18 @@ class CompanionMessageHandlerTest {
   // A real redefinition needs live instrumentation that isn't available under MockBukkit, so
   // these pin the refusal ladder — every request is ANSWERED with a reason, never silent.
 
-  private fun instantRequest(id: String, pluginName: String = "Sample") =
+  private fun instantRequest(
+      id: String,
+      pluginName: String = "Sample",
+      fqcn: String = "com.example.Foo",
+  ) =
       HostInstantSwapRequest(
           requestId = id,
           pluginName = pluginName,
           classes =
               listOf(
                   HostInstantClassEntry(
-                      fqcn = "com.example.Foo",
+                      fqcn = fqcn,
                       expectedCrc32 = 42L,
                       data = java.util.Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3)),
                   )
@@ -584,6 +588,73 @@ class CompanionMessageHandlerTest {
         // would satisfy that, and this must refuse before the swapper is ever reached.
         report.reason!!.contains("Sample is not loaded"),
         "a disabled plugin must be refused before the swapper runs; got: ${report.reason}",
+    )
+  }
+
+  /**
+   * A real [InstantSwapper] over a fake agent whose CRC registry answers a define record that
+   * matches nothing — i.e. every request lands on the define-mismatch branch, which is where the
+   * source-bytes fallback (and the refusal that replaces it) lives. The patched class is this test
+   * class itself, so the force-load resolves against the app classloader.
+   */
+  private fun mismatchingSwapper() =
+      InstantSwapper(
+          Logger.getLogger("mismatchingSwapper"),
+          instrumentationProvider = { FakeInstrumentation() },
+          loadedCrcProvider = { _, _ -> 0xD1FFL },
+          wasPatchedProvider = { _, _ -> false },
+          crcUpdater = { _, _, _ -> },
+      )
+
+  private val loadableFqcn = "dev.paperplane.companion.CompanionMessageHandlerTest"
+
+  @Test
+  fun `a legacy native plugin is denied the source-bytes fallback`() {
+    // No api-version in plugin.yml means Paper treats the plugin as legacy, and Commodore's
+    // rewrite is then semantic (NMS renames, material conversion) rather than a re-encode.
+    // Vouching for raw build bytes there would strip the rewrite and the method would die with
+    // NoSuchMethodError at the next call.
+    val sample = MockBukkit.createMockPlugin("Sample")
+    assertNull(sample.description.apiVersion, "the fixture must be a legacy plugin to be a test")
+    val legacyHandler =
+        CompanionMessageHandler(hostingPlugin, { fakeHost }, ipc, serverRoot) {
+          mismatchingSwapper()
+        }
+
+    legacyHandler.handleInstantSwap(instantRequest("i6", fqcn = loadableFqcn))
+
+    val report = ipc.instantReports.single()
+    assertEquals(HostInstantSwapStatus.REFUSED, report.status)
+    assertTrue(
+        report.reason!!.contains("rewrites"),
+        "the refusal must name the define-time rewrite; got: ${report.reason}",
+    )
+  }
+
+  @Test
+  fun `a hosted plugin keeps the source-bytes fallback`() {
+    // The dev host defines the inner plugin's classes itself and applies no rewrite, so a define
+    // mismatch there still gets to consult the loader's source bytes — the refusal is the ordinary
+    // drift one, not the legacy-rewrite one.
+    val hosted = MockBukkit.createMockPlugin("Sample")
+    val hostingSample =
+        object : RecordingHost(fakeServer, javaClass.classLoader, probe) {
+          override fun current() = hosted
+        }
+    val hostedHandler =
+        CompanionMessageHandler(hostingPlugin, { hostingSample }, ipc, serverRoot) {
+          mismatchingSwapper()
+        }
+    hostedHandler.handleLoadRequest(request("r1")) // memoizes the host
+    ipc.instantReports.clear()
+
+    hostedHandler.handleInstantSwap(instantRequest("i7", fqcn = loadableFqcn))
+
+    val report = ipc.instantReports.single()
+    assertEquals(HostInstantSwapStatus.REFUSED, report.status)
+    assertTrue(
+        report.reason!!.contains("baseline drift"),
+        "a hosted plugin must reach the source-bytes check; got: ${report.reason}",
     )
   }
 

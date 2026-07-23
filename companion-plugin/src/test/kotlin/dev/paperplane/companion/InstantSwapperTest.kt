@@ -129,6 +129,28 @@ class InstantSwapperTest {
   }
 
   @Test
+  fun `a legacy-rewritten plugin refuses the source fallback`() {
+    // Same shape as the admitting test above, but the server rewrites this plugin's bytecode
+    // semantically (no api-version → Commodore renames NMS types and converts materials). Raw
+    // build bytes would strip that rewrite and the method would die with NoSuchMethodError at the
+    // next call, so matching source bytes are no longer a licence to patch.
+    val fqcn = "com.example.Patch"
+    val v1 = BytecodeFixtures.classWithMarker("com/example/Patch", 1)
+    val transformed = BytecodeFixtures.classWithMarker("com/example/Patch", 99)
+    val v2 = BytecodeFixtures.classWithMarker("com/example/Patch", 2)
+    val loader = loaderWith(fqcn, v1)
+    crcRegistry[loader to fqcn] = crc(transformed)
+    val inst = FakeInstrumentation()
+
+    val outcome =
+        swapper(inst).apply(patchRequest(fqcn, crc(v1), v2), loader, sourceFallbackAllowed = false)
+
+    val refused = assertInstanceOf(InstantSwapper.Outcome.Refused::class.java, outcome)
+    assertTrue(refused.reason.contains("rewrites"), refused.reason)
+    assertTrue(inst.redefined.isEmpty(), "a refused request must touch nothing")
+  }
+
+  @Test
   fun `a jar-backed loader admits via the jar's central-directory CRC`() {
     // The native-mode shape end to end: the loader serves the class from a jar (so sourceCrc's
     // jar: URL branch runs and reads the central directory instead of inflating the entry), and

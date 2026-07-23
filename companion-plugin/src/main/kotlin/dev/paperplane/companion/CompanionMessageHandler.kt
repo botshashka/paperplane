@@ -240,8 +240,8 @@ class CompanionMessageHandler(
       )
       return
     }
-    val classLoader = resolveInstantLoader(request.pluginName)
-    if (classLoader == null) {
+    val target = resolveInstantTarget(request.pluginName)
+    if (target == null) {
       answer(HostInstantSwapStatus.REFUSED, reason = "plugin ${request.pluginName} is not loaded")
       return
     }
@@ -252,7 +252,7 @@ class CompanionMessageHandler(
     // answer from the companion", burying the real cause in a scheduler stack trace.
     val outcome =
         try {
-          swapper.apply(request, classLoader)
+          swapper.apply(request, target.classLoader, target.sourceFallbackAllowed)
         } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
           plugin.logger.log(Level.WARNING, "Instant swap failed unexpectedly", e)
           InstantSwapper.Outcome.Failed("${e.javaClass.simpleName}: ${e.message}")
@@ -274,9 +274,16 @@ class CompanionMessageHandler(
     }
   }
 
+  /** What a patch needs to know about the live plugin it targets. */
+  private class InstantTarget(
+      val classLoader: ClassLoader,
+      /** See [InstantSwapper.apply]. */
+      val sourceFallbackAllowed: Boolean,
+  )
+
   /**
-   * The classloader of the live plugin named [pluginName]: the host's inner plugin in hot-reload
-   * mode, or the natively loaded plugin (Paper's own `PluginClassLoader`) in restart/blue-green.
+   * The live plugin named [pluginName]: the host's inner plugin in hot-reload mode, or the natively
+   * loaded plugin (Paper's own `PluginClassLoader`) in restart/blue-green.
    *
    * Null whenever that plugin isn't running here — a request naming someone else, or a native
    * plugin that is loaded but disabled (its classes may be resident, but patching a plugin the
@@ -284,14 +291,24 @@ class CompanionMessageHandler(
    * push the honest "not loaded" refusal down into the swapper, which can only report it as the
    * misleading "no load record". A null `host?.current()` means the host is mid-reload with no
    * inner plugin, which still falls through to the native lookup.
+   *
+   * The dev host applies no define-time rewrite of its own, so a hosted plugin may always use the
+   * source-bytes fallback. A native plugin may only when it declares an `api-version`: without one
+   * Paper treats it as legacy and Commodore's rewrite is semantic, not just a re-encode.
    */
-  private fun resolveInstantLoader(pluginName: String): ClassLoader? {
+  private fun resolveInstantTarget(pluginName: String): InstantTarget? {
     val hosted = host?.current()
     if (hosted != null) {
-      return if (hosted.name == pluginName) hosted.javaClass.classLoader else null
+      return if (hosted.name == pluginName) {
+        InstantTarget(hosted.javaClass.classLoader, sourceFallbackAllowed = true)
+      } else null
     }
     val native = plugin.server.pluginManager.getPlugin(pluginName) ?: return null
-    return if (native.isEnabled) native.javaClass.classLoader else null
+    if (!native.isEnabled) return null
+    return InstantTarget(
+        native.javaClass.classLoader,
+        sourceFallbackAllowed = native.description.apiVersion != null,
+    )
   }
 
   /**

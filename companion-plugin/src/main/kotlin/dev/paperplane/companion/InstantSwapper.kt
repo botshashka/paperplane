@@ -22,7 +22,15 @@ import java.util.zip.CRC32
  * match literally — Paper's compatibility pass (Commodore) re-encodes every legacy-plugin class
  * between jar and defineClass — so a define-record mismatch falls back to comparing the defining
  * loader's raw source bytes against the baseline; patched classes must match their patch record
- * exactly. Any mismatch refuses the whole request. The JVM's own
+ * exactly. That fallback holds only where the re-encode is semantically neutral, which is the
+ * modern case: for a **legacy** plugin (no `api-version`) Commodore's rewrite also renames NMS
+ * types and converts materials, so redefining with the raw build bytes would strip live behavior
+ * and the method would die with `NoSuchMethodError` at the next call — those requests arrive with
+ * `sourceFallbackAllowed = false` and refuse instead. Known residual: a plugin declaring an
+ * `api-version` older than the server's can still receive semantic reroutes, so a body-only patch
+ * to a class using a rerouted API is a documented limitation (follow-up: run the new bytes through
+ * the server's own `processClass` before redefining, which removes the whole question). Any
+ * mismatch refuses the whole request. The JVM's own
  * [UnmodifiableClassException]/[UnsupportedOperationException] veto stays as the final backstop,
  * and `redefineClasses` is all-or-nothing, so a failure never leaves half a patch applied.
  */
@@ -51,7 +59,16 @@ class InstantSwapper(
     data class Failed(val reason: String) : Outcome()
   }
 
-  fun apply(request: HostInstantSwapRequest, pluginClassLoader: ClassLoader): Outcome {
+  /**
+   * [sourceFallbackAllowed] is false for a plugin whose bytecode the server rewrites *semantically*
+   * at define time (a legacy plugin, i.e. no `api-version` in plugin.yml), where the source-bytes
+   * fallback would vouch for bytes that lose the rewrite. See the class KDoc.
+   */
+  fun apply(
+      request: HostInstantSwapRequest,
+      pluginClassLoader: ClassLoader,
+      sourceFallbackAllowed: Boolean = true,
+  ): Outcome {
     val inst =
         instrumentationProvider() ?: return Outcome.Refused("instrumentation agent not loaded")
     if (!inst.isRedefineClassesSupported) {
@@ -114,6 +131,12 @@ class InstantSwapper(
           // The loader's own resource bytes are pre-transform — if THEY match the baseline, the
           // running class is verifiably derived from it. Never applies to a patched class: its
           // source no longer describes what's running, so only the patch record may vouch.
+          if (!sourceFallbackAllowed) {
+            return stop(
+                "the server rewrites ${entry.fqcn}'s bytecode at load (legacy api-version) — " +
+                    "a patch cannot preserve that rewrite"
+            )
+          }
           val sourceCrc = sourceCrc(definingLoader, entry.fqcn)
           if (wasPatchedProvider(definingLoader, entry.fqcn) || sourceCrc != entry.expectedCrc32) {
             logger.fine(
