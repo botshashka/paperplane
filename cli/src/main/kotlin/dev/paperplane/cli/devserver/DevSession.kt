@@ -106,7 +106,7 @@ internal class DevSession(
     }
   }
 
-  @Suppress("VariableNaming") private var cachedFastMeta: ProjectMetadata? = null
+  private var cachedFastMeta: ProjectMetadata? = null
 
   /**
    * The `ppMetadataFast` result for the current build config — classes dirs, resources dir, runtime

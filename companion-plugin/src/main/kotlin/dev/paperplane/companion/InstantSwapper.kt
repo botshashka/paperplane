@@ -213,6 +213,15 @@ class InstantSwapper(
    * CRC never matches and every class in the request takes it, on the main thread inside the tick
    * budget. The JDK caches the open `JarFile` behind `jar:` URLs, so the whole request reads one
    * already-parsed central directory.
+   *
+   * That cached handle is deliberate on both counts. It adds no file lock of its own: it is the
+   * same `JarFile` the defining loader already holds open for the process lifetime, so nothing here
+   * extends how long the plugin jar stays pinned (which matters on Windows, where an open handle
+   * blocks the deploy's replace). More importantly it is load-bearing for correctness — reading
+   * through the loader's own handle keeps the verify seeing the bytes that loader actually defines
+   * from, even after the file on disk has been replaced by the very build being verified against.
+   * Opening a fresh `ZipFile` on the path would read the post-replace bytes and cheerfully
+   * "confirm" a baseline the JVM is not running.
    */
   private fun jarEntryCrc(url: URL): Long? {
     if (!url.protocol.equals("jar", ignoreCase = true)) return null
