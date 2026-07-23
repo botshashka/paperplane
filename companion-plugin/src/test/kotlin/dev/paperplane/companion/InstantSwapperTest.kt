@@ -342,6 +342,28 @@ class InstantSwapperTest {
   }
 
   @Test
+  fun `a class resolved through a parent loader refuses instead of claiming a side effect`() {
+    // The registry is keyed by defining loader, so a class the parent loaded long ago has no
+    // record under the requested child. Reading "unrecorded" as "the force-load defined it"
+    // downgrades an honest Refused to Failed and tells the CLI something was touched when the
+    // class had been resident all along.
+    val fqcn = "com.example.Patch"
+    val v0 = BytecodeFixtures.classWithMarker("com/example/Patch", 0)
+    val v1 = BytecodeFixtures.classWithMarker("com/example/Patch", 1)
+    val v2 = BytecodeFixtures.classWithMarker("com/example/Patch", 2)
+    val parent = loaderWith(fqcn, v0)
+    val child = URLClassLoader(emptyArray(), parent)
+    crcRegistry[parent to fqcn] = crc(v0)
+    val inst = FakeInstrumentation()
+
+    val outcome = swapper(inst).apply(patchRequest(fqcn, crc(v1), v2), child)
+
+    val refused = assertInstanceOf(InstantSwapper.Outcome.Refused::class.java, outcome)
+    assertTrue(refused.reason.contains("baseline drift"), refused.reason)
+    assertTrue(inst.redefined.isEmpty(), "a refused request must touch nothing")
+  }
+
+  @Test
   fun `a class that fails to link refuses with the linkage error named`() {
     // A plugin class referencing a since-removed dependency throws NoClassDefFoundError on the
     // force-load — a LinkageError, which the ClassNotFoundException catch never sees.

@@ -76,7 +76,12 @@ class InstantSwapper(
       // Force-load a changed-but-unloaded class (no initialization) so a jar-backed loader's
       // stale bytes are in the redefinition batch too — otherwise a later lazy load would
       // resurrect the old bytes from the jar. The load also populates the agent's CRC registry.
-      val wasRecorded = loadedCrcProvider(pluginClassLoader, entry.fqcn) != AgentAccess.UNKNOWN_CRC
+      // Whether the force-load defines something new has to be sampled BEFORE it runs (the load
+      // hook records the class the moment it lands) and across the whole delegation chain, since
+      // the registry is keyed by defining loader and a parent may have held the class all along.
+      // Sampling the requested loader alone reads an already-loaded parent-owned class as
+      // unrecorded and latches `landed`, misreporting a later refusal as Failed.
+      val wasRecorded = recordedInChain(pluginClassLoader, entry.fqcn)
       val cls =
           try {
             Class.forName(entry.fqcn, false, pluginClassLoader)
@@ -162,6 +167,21 @@ class InstantSwapper(
         appliedClasses = applied,
     )
   }
+
+  /**
+   * Whether any loader [loader] can delegate to already has a load record for [fqcn] — i.e. whether
+   * resolving it can answer from a class that was defined before this request. Walks the parent
+   * chain because delegation is what decides which loader ends up defining, and only that loader
+   * keys the registry.
+   *
+   * Residual: a loader graph that resolves outside its parent chain (one plugin borrowing another's
+   * loader) reads as unrecorded, so a refusal there is reported as the more conservative Failed.
+   * Both outcomes send the CLI down the full swap path; only the "nothing was touched" promise
+   * differs.
+   */
+  private fun recordedInChain(loader: ClassLoader, fqcn: String): Boolean =
+      generateSequence(loader) { it.parent }
+          .any { loadedCrcProvider(it, fqcn) != AgentAccess.UNKNOWN_CRC }
 
   /**
    * CRC32 of the class-file bytes [loader]'s own source (jar or directory) serves for [fqcn], or
