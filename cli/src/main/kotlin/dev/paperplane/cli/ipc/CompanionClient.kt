@@ -307,71 +307,85 @@ internal class CompanionClient(
   }
 
   /**
-   * Waits for the companion's `saveComplete`. Like [awaitReport], the queue is polled before the
-   * liveness checks so a completion that lands exactly as the process dies still wins, and a
-   * dropped connection or dead process short-circuits the wait instead of blocking the whole
-   * timeout.
+   * The one await loop, and with it the one place the drain-before-liveness invariant is written
+   * down: an event that lands in the queue exactly as the process dies still wins, because losing
+   * it would report a crash for work that genuinely completed. A dropped connection or dead process
+   * short-circuits the wait rather than burning the whole timeout.
+   *
+   * [accept] maps a polled event to a terminal result, or null to keep waiting — which is how the
+   * report awaits discard answers to a previous request whose id no longer matches.
    */
-  fun awaitSaveComplete(timeoutMs: Long, isAlive: () -> Boolean): Boolean {
+  private fun <E, R> await(
+      queue: LinkedBlockingQueue<E>,
+      timeoutMs: Long,
+      isAlive: () -> Boolean,
+      onDisconnected: () -> R,
+      onTimeout: () -> R,
+      accept: (E) -> R?,
+  ): R {
     val deadline = System.currentTimeMillis() + timeoutMs
     while (true) {
       val remaining = deadline - System.currentTimeMillis()
-      val completed =
-          saveCompletions.poll(remaining.coerceIn(0, AWAIT_POLL_INTERVAL_MS), TimeUnit.MILLISECONDS)
-      if (completed != null) return true
-      if (!connected || !isAlive()) return false
-      if (remaining <= 0) return false
+      val event = queue.poll(remaining.coerceIn(0, AWAIT_POLL_INTERVAL_MS), TimeUnit.MILLISECONDS)
+      if (event != null) {
+        accept(event)?.let {
+          return it
+        }
+        continue
+      }
+      if (!connected || !isAlive()) return onDisconnected()
+      if (remaining <= 0) return onTimeout()
     }
   }
 
+  /** Waits for the companion's `saveComplete`; see [await] for the timing contract. */
+  fun awaitSaveComplete(timeoutMs: Long, isAlive: () -> Boolean): Boolean =
+      await(
+          saveCompletions,
+          timeoutMs,
+          isAlive,
+          onDisconnected = { false },
+          onTimeout = { false },
+          accept = { true },
+      )
+
   /**
    * Waits for the companion's [LoadReport] answering [expectedRequestId]. Reports for other request
-   * ids are discarded (stale answers from a previous reload). The queue is drained before the
-   * liveness checks so a report that arrived just as the process died still wins — the load
-   * genuinely completed.
+   * ids are stale answers from a previous reload — dropped, and the wait continues.
    */
   fun awaitReport(
       expectedRequestId: String,
       timeoutMs: Long,
       isAlive: () -> Boolean,
-  ): LoadWaitResult {
-    val deadline = System.currentTimeMillis() + timeoutMs
-    while (true) {
-      val remaining = deadline - System.currentTimeMillis()
-      val report =
-          reports.poll(remaining.coerceIn(0, AWAIT_POLL_INTERVAL_MS), TimeUnit.MILLISECONDS)
-      if (report != null) {
-        if (report.requestId == expectedRequestId) return report.toWaitResult()
-        continue // Stale requestId — drop and keep waiting.
-      }
-      if (!connected || !isAlive()) return LoadWaitResult.ServerExited
-      if (remaining <= 0) return LoadWaitResult.TimedOut
-    }
-  }
+  ): LoadWaitResult =
+      await(
+          reports,
+          timeoutMs,
+          isAlive,
+          onDisconnected = { LoadWaitResult.ServerExited },
+          onTimeout = { LoadWaitResult.TimedOut },
+          accept = { it.takeIf { r -> r.requestId == expectedRequestId }?.toWaitResult() },
+      )
 
   /**
-   * Waits for the [InstantSwapReport] answering [expectedRequestId]. Same contract as
-   * [awaitReport]: stale requestIds are dropped, the queue is drained before the liveness checks,
-   * and a dropped connection or dead process short-circuits the wait.
+   * Waits for the [InstantSwapReport] answering [expectedRequestId]; same contract as
+   * [awaitReport].
    */
   fun awaitInstantReport(
       expectedRequestId: String,
       timeoutMs: Long,
       isAlive: () -> Boolean,
-  ): InstantWaitResult {
-    val deadline = System.currentTimeMillis() + timeoutMs
-    while (true) {
-      val remaining = deadline - System.currentTimeMillis()
-      val report =
-          instantReports.poll(remaining.coerceIn(0, AWAIT_POLL_INTERVAL_MS), TimeUnit.MILLISECONDS)
-      if (report != null) {
-        if (report.requestId == expectedRequestId) return InstantWaitResult.Answered(report)
-        continue // Stale requestId — drop and keep waiting.
-      }
-      if (!connected || !isAlive()) return InstantWaitResult.ServerExited
-      if (remaining <= 0) return InstantWaitResult.TimedOut
-    }
-  }
+  ): InstantWaitResult =
+      await(
+          instantReports,
+          timeoutMs,
+          isAlive,
+          onDisconnected = { InstantWaitResult.ServerExited },
+          onTimeout = { InstantWaitResult.TimedOut },
+          accept = {
+            it.takeIf { r -> r.requestId == expectedRequestId }?.let(InstantWaitResult::Answered)
+          },
+      )
 
   private fun LoadReport.toWaitResult(): LoadWaitResult =
       if (status == LoadStatus.OK) LoadWaitResult.Ok(this)

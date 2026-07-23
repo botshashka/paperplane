@@ -64,16 +64,14 @@ internal object CompanionWire {
           .toString()
 
   /** Encodes a [LoadRequest] as its plain JSON object plus the `load` type tag. */
-  fun encodeLoad(request: LoadRequest): String =
-      gson.toJsonTree(request).asJsonObject.apply { addProperty("type", TYPE_LOAD) }.toString()
+  fun encodeLoad(request: LoadRequest): String = tagged(request, TYPE_LOAD)
 
   /** Encodes an [InstantSwapRequest] as its plain JSON object plus the `instantSwap` type tag. */
-  fun encodeInstantSwap(request: InstantSwapRequest): String =
-      gson
-          .toJsonTree(request)
-          .asJsonObject
-          .apply { addProperty("type", TYPE_INSTANT_SWAP) }
-          .toString()
+  fun encodeInstantSwap(request: InstantSwapRequest): String = tagged(request, TYPE_INSTANT_SWAP)
+
+  /** A request object serialized as its plain JSON shape plus the wire's `type` discriminator. */
+  private fun tagged(payload: Any, type: String): String =
+      gson.toJsonTree(payload).asJsonObject.apply { addProperty("type", type) }.toString()
 
   /**
    * Decodes one companion→CLI line. Returns null for unparseable lines and unknown types — the

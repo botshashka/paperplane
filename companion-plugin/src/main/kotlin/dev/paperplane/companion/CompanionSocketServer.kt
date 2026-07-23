@@ -148,20 +148,14 @@ class CompanionSocketServer(
     }
   }
 
-  override fun sendReport(report: HostLoadReport) {
-    sendLine(
-        gson.toJsonTree(report).asJsonObject.apply { addProperty("type", TYPE_REPORT) }.toString()
-    )
-  }
+  override fun sendReport(report: HostLoadReport) = sendTagged(report, TYPE_REPORT)
 
-  override fun sendInstantReport(report: HostInstantSwapReport) {
-    sendLine(
-        gson
-            .toJsonTree(report)
-            .asJsonObject
-            .apply { addProperty("type", TYPE_INSTANT_REPORT) }
-            .toString()
-    )
+  override fun sendInstantReport(report: HostInstantSwapReport) =
+      sendTagged(report, TYPE_INSTANT_REPORT)
+
+  /** Sends a report object as its plain JSON shape plus the wire's `type` discriminator. */
+  private fun sendTagged(payload: Any, type: String) {
+    sendLine(gson.toJsonTree(payload).asJsonObject.apply { addProperty("type", type) }.toString())
   }
 
   override fun sendSaveComplete() {
