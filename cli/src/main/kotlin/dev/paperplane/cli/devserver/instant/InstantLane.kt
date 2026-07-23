@@ -78,7 +78,7 @@ internal class InstantLane(private val session: DevSession) {
     preconditionFailure(serverManager, confirmed, fastMeta)?.let {
       return InstantOutcome.Escalate(it)
     }
-    return if (serverManager.redefineCapability() == RedefineCapability.NONE) {
+    return if (serverManager.ipc.redefineCapability() == RedefineCapability.NONE) {
       InstantOutcome.Escalate("server JVM reports no redefine capability")
     } else {
       classifyAndSend(serverManager, metadata, baseline, confirmed!!, fastMeta!!)
@@ -91,13 +91,13 @@ internal class InstantLane(private val session: DevSession) {
    * swap, awaiting-fix cold start) so a lane-less rebuild can't report differently than a lane one.
    */
   fun compile(serverManager: PaperServerManager): Boolean {
-    serverManager.sendCompanionStatus(CompanionWire.STATE_BUILDING)
+    serverManager.ipc.sendStatus(CompanionWire.STATE_BUILDING)
     val buildStart = System.currentTimeMillis()
     val buildSuccess = session.gradle.compileOnly()
     val buildDuration = session.formatDuration(System.currentTimeMillis() - buildStart)
     if (!buildSuccess) {
       session.ui.error("Build failed", buildDuration)
-      serverManager.sendCompanionStatus(CompanionWire.STATE_ERROR, message = "Build failed")
+      serverManager.ipc.sendStatus(CompanionWire.STATE_ERROR, message = "Build failed")
       return false
     }
     session.ui.success("Build succeeded", buildDuration)
@@ -181,12 +181,12 @@ internal class InstantLane(private val session: DevSession) {
             classes = classification.patches.map { InstantSwapRequest.entry(it) },
         )
     val patchStart = System.currentTimeMillis()
-    if (!serverManager.sendInstantSwap(request)) {
+    if (!serverManager.ipc.sendInstantSwap(request)) {
       return InstantOutcome.Escalate("companion connection unavailable")
     }
     val result =
         session.ui.spin("Patching ${metadata.pluginName}...") {
-          serverManager.awaitInstantReport(request.requestId, REPORT_TIMEOUT_MS)
+          serverManager.ipc.awaitInstantReport(request.requestId, REPORT_TIMEOUT_MS)
         }
     return when (result) {
       is InstantWaitResult.Answered ->
@@ -221,13 +221,13 @@ internal class InstantLane(private val session: DevSession) {
         session.formatDuration(outcome.durationMs),
     )
     session.ui.totalTime(totalDuration)
-    serverManager.sendCompanionStatus(CompanionWire.STATE_READY, duration = totalDuration)
+    serverManager.ipc.sendStatus(CompanionWire.STATE_READY, duration = totalDuration)
   }
 
   /** Emits the honest nothing-to-do line — the rebuild changed no observable bytecode. */
   fun reportNoChange(serverManager: PaperServerManager) {
     session.ui.success("No code changes")
-    serverManager.sendCompanionStatus(CompanionWire.STATE_READY)
+    serverManager.ipc.sendStatus(CompanionWire.STATE_READY)
   }
 
   /**
@@ -251,7 +251,7 @@ internal class InstantLane(private val session: DevSession) {
   fun capabilityLabel(serverManager: PaperServerManager): String =
       when {
         !session.config.dev.instant -> "off (dev.instant: false)"
-        serverManager.redefineCapability() == RedefineCapability.NONE ->
+        serverManager.ipc.redefineCapability() == RedefineCapability.NONE ->
             "off (no agent in the server JVM)"
         else -> "body-only"
       }

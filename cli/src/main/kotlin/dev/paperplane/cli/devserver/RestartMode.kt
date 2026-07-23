@@ -183,7 +183,7 @@ internal open class RestartMode(
       session.ui.success("Server ready", serverDuration)
       val totalDuration = session.formatDuration(System.currentTimeMillis() - totalStart)
       session.ui.totalTime(totalDuration)
-      serverManager.sendCompanionStatus(CompanionWire.STATE_READY, duration = totalDuration)
+      serverManager.ipc.sendStatus(CompanionWire.STATE_READY, duration = totalDuration)
       lane.confirmFullSwap(baseline)
       PhaseEnd.Watching
     } else {

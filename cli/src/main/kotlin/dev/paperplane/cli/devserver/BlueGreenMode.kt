@@ -340,7 +340,7 @@ internal open class BlueGreenMode(
 
     if (standby.isRunning()) standby.stop()
 
-    active.sendCompanionStatus(CompanionWire.STATE_BUILDING)
+    active.ipc.sendStatus(CompanionWire.STATE_BUILDING)
     val buildStart = System.currentTimeMillis()
 
     val syncThread =
@@ -356,7 +356,7 @@ internal open class BlueGreenMode(
 
     if (!buildSuccess) {
       session.ui.error("Build failed", buildDuration)
-      active.sendCompanionStatus(CompanionWire.STATE_ERROR, message = "Build failed")
+      active.ipc.sendStatus(CompanionWire.STATE_ERROR, message = "Build failed")
       return false
     }
     session.ui.success("Build succeeded", buildDuration)
@@ -391,7 +391,7 @@ internal open class BlueGreenMode(
     if (!ready) {
       session.ui.error("Standby server failed to start", serverDuration)
       standby.stop()
-      active.sendCompanionStatus(CompanionWire.STATE_ERROR, message = "Standby failed to start")
+      active.ipc.sendStatus(CompanionWire.STATE_ERROR, message = "Standby failed to start")
       return false
     }
 
@@ -401,7 +401,7 @@ internal open class BlueGreenMode(
     Thread.sleep(TRANSFER_SETTLE_DELAY_MS)
 
     val totalDuration = session.formatDuration(System.currentTimeMillis() - totalStart)
-    standby.sendCompanionStatus(CompanionWire.STATE_READY, duration = totalDuration)
+    standby.ipc.sendStatus(CompanionWire.STATE_READY, duration = totalDuration)
 
     session.ui.success("Server ready (${standbySlot.serverName})", serverDuration)
     session.ui.totalTime(totalDuration)
@@ -463,7 +463,7 @@ internal open class BlueGreenMode(
     val serverDuration = session.formatDuration(System.currentTimeMillis() - serverStart)
     return if (ready) {
       session.ui.success("Server ready", serverDuration)
-      blue.sendCompanionStatus(CompanionWire.STATE_READY, duration = serverDuration)
+      blue.ipc.sendStatus(CompanionWire.STATE_READY, duration = serverDuration)
       velocityManager.writeActiveServer("server")
       lane.confirmFullSwap(baselines[Slot.SERVER]!!)
       RunningState(metadata, paperJar)

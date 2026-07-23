@@ -294,7 +294,7 @@ internal open class HotReloadMode(
         )
     if (request.classesDirs.isEmpty()) session.ui.info("Strategy:", "jar (fallback)")
     else session.ui.info("Strategy:", "directory reload")
-    serverManager.sendLoadRequest(request)
+    serverManager.ipc.sendLoadRequest(request)
     return request.requestId
   }
 
@@ -318,13 +318,13 @@ internal open class HotReloadMode(
             val totalDuration = session.formatDuration(System.currentTimeMillis() - totalStart)
             session.ui.success("Plugin reloaded", reloadDuration)
             session.ui.totalTime(totalDuration)
-            serverManager.sendCompanionStatus(CompanionWire.STATE_READY, duration = totalDuration)
+            serverManager.ipc.sendStatus(CompanionWire.STATE_READY, duration = totalDuration)
             lane.confirmFullSwap(baseline)
             PhaseEnd.Watching
           }
           is LoadWaitResult.Failed -> {
             session.ui.error("Reload failed: ${result.message}", reloadDuration)
-            serverManager.sendCompanionStatus(
+            serverManager.ipc.sendStatus(
                 CompanionWire.STATE_ERROR,
                 message = "Hot-reload failed",
             )
@@ -335,7 +335,7 @@ internal open class HotReloadMode(
                 "Hot-reload failed (server still running with old plugin)",
                 reloadDuration,
             )
-            serverManager.sendCompanionStatus(
+            serverManager.ipc.sendStatus(
                 CompanionWire.STATE_ERROR,
                 message = "Hot-reload failed",
             )

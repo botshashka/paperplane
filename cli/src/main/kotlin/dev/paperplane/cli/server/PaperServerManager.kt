@@ -2,11 +2,6 @@ package dev.paperplane.cli.server
 
 import com.charleskorn.kaml.YamlMap
 import dev.paperplane.cli.config.ServerConfig
-import dev.paperplane.cli.devserver.InstantSwapRequest
-import dev.paperplane.cli.devserver.InstantWaitResult
-import dev.paperplane.cli.devserver.LoadRequest
-import dev.paperplane.cli.devserver.LoadWaitResult
-import dev.paperplane.cli.devserver.instant.RedefineCapability
 import dev.paperplane.cli.ipc.CompanionClient
 import dev.paperplane.cli.ipc.CompanionSocketFile
 import dev.paperplane.cli.ipc.CompanionWire
@@ -450,47 +445,9 @@ open class PaperServerManager(
   }
 
   /**
-   * Pushes a build-state update to the companion (chat broadcast + save-protection window on the
-   * server side). Best-effort: with no live connection — server down, or the state is an error
-   * being reported while nothing is running — the update is dropped, which matches its advisory
-   * role.
+   * The companion conversation for this server — see [CompanionIpc]. One overridable seam: the
+   * delegate reads the live connection through a provider, so it follows every reconnect without
+   * being rebuilt.
    */
-  open fun sendCompanionStatus(state: String, duration: String? = null, message: String? = null) {
-    companion?.sendStatus(state, duration, message)
-  }
-
-  /**
-   * Sends a [LoadRequest] to the companion host. Best-effort like [sendCompanionStatus] — the
-   * caller's [awaitLoadReport] resolves the outcome either way.
-   */
-  open fun sendLoadRequest(request: LoadRequest): Boolean =
-      companion?.sendLoadRequest(request) ?: false
-
-  /**
-   * Waits for the companion's report answering [expectedRequestId]. Resolves
-   * [LoadWaitResult.ServerExited] when the process dies or the connection drops (no client at all —
-   * the server was never started — counts as exited too).
-   */
-  internal open fun awaitLoadReport(expectedRequestId: String, timeoutMs: Long): LoadWaitResult =
-      companion?.awaitReport(expectedRequestId, timeoutMs, isAlive = ::isRunning)
-          ?: LoadWaitResult.ServerExited
-
-  /**
-   * The live server JVM's redefine capability from the companion's welcome handshake.
-   * [RedefineCapability.NONE] when no connection is up — an unreachable server can't be patched.
-   */
-  internal open fun redefineCapability(): RedefineCapability =
-      companion?.takeIf { it.isConnected }?.capability ?: RedefineCapability.NONE
-
-  /** Sends an [InstantSwapRequest], best-effort like [sendLoadRequest]. */
-  internal open fun sendInstantSwap(request: InstantSwapRequest): Boolean =
-      companion?.sendInstantSwap(request) ?: false
-
-  /** Waits for the instant report answering [expectedRequestId]; see [awaitLoadReport]. */
-  internal open fun awaitInstantReport(
-      expectedRequestId: String,
-      timeoutMs: Long,
-  ): InstantWaitResult =
-      companion?.awaitInstantReport(expectedRequestId, timeoutMs, isAlive = ::isRunning)
-          ?: InstantWaitResult.ServerExited
+  internal open val ipc: CompanionIpc = CompanionIpc({ companion }, ::isRunning)
 }

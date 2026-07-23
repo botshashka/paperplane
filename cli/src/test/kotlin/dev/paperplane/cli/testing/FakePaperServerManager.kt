@@ -2,6 +2,7 @@ package dev.paperplane.cli.testing
 
 import dev.paperplane.cli.config.ServerConfig
 import dev.paperplane.cli.devserver.LoadRequest
+import dev.paperplane.cli.server.CompanionIpc
 import dev.paperplane.cli.server.LaunchSpec
 import dev.paperplane.cli.server.PaperDownloader
 import dev.paperplane.cli.server.PaperServerManager
@@ -104,23 +105,14 @@ class FakePaperServerManager(
     calls += "sendCommand($command)"
   }
 
-  override fun sendCompanionStatus(state: String, duration: String?, message: String?) {
-    calls += "sendCompanionStatus($state)"
-  }
-
-  override fun sendLoadRequest(request: LoadRequest): Boolean {
-    calls += "sendLoadRequest(${request.pluginName})"
-    sentLoadRequests += request
-    return true
-  }
-
   /** Scripted redefine capability the fake's "server" advertises. */
   internal var capability: dev.paperplane.cli.devserver.instant.RedefineCapability =
       dev.paperplane.cli.devserver.instant.RedefineCapability.BODY_ONLY
 
   /**
-   * Scripted answer for [awaitInstantReport]; echoes the awaited requestId when OK, and reports
-   * every requested class as applied — what a real companion does when nothing is skipped.
+   * Scripted answer for [CompanionIpc.awaitInstantReport]; echoes the awaited requestId when OK,
+   * and reports every requested class as applied — what a real companion does when nothing is
+   * skipped.
    */
   internal var instantWaitResult: (String) -> dev.paperplane.cli.devserver.InstantWaitResult =
       { id ->
@@ -135,29 +127,45 @@ class FakePaperServerManager(
         )
       }
 
-  /** Whether [sendInstantSwap] reports the request as delivered. */
+  /** Whether [CompanionIpc.sendInstantSwap] reports the request as delivered. */
   internal var sendInstantSwapResult: Boolean = true
 
-  /** Every [dev.paperplane.cli.devserver.InstantSwapRequest] handed to [sendInstantSwap]. */
+  /** Every instant-swap request handed to [CompanionIpc.sendInstantSwap], in order. */
   internal val sentInstantSwaps: MutableList<dev.paperplane.cli.devserver.InstantSwapRequest> =
       mutableListOf()
 
-  override fun redefineCapability(): dev.paperplane.cli.devserver.instant.RedefineCapability {
-    calls += "redefineCapability"
-    return capability
-  }
+  /** The fake conversation: records into [calls] and answers from the scripted fields above. */
+  override val ipc: CompanionIpc =
+      object : CompanionIpc({ null }, { false }) {
+        override fun sendStatus(state: String, duration: String?, message: String?) {
+          calls += "sendCompanionStatus($state)"
+        }
 
-  override fun sendInstantSwap(request: dev.paperplane.cli.devserver.InstantSwapRequest): Boolean {
-    calls += "sendInstantSwap(${request.pluginName})"
-    sentInstantSwaps += request
-    return sendInstantSwapResult
-  }
+        override fun sendLoadRequest(request: LoadRequest): Boolean {
+          calls += "sendLoadRequest(${request.pluginName})"
+          sentLoadRequests += request
+          return true
+        }
 
-  override fun awaitInstantReport(
-      expectedRequestId: String,
-      timeoutMs: Long,
-  ): dev.paperplane.cli.devserver.InstantWaitResult {
-    calls += "awaitInstantReport"
-    return instantWaitResult(expectedRequestId)
-  }
+        override fun redefineCapability(): dev.paperplane.cli.devserver.instant.RedefineCapability {
+          calls += "redefineCapability"
+          return capability
+        }
+
+        override fun sendInstantSwap(
+            request: dev.paperplane.cli.devserver.InstantSwapRequest
+        ): Boolean {
+          calls += "sendInstantSwap(${request.pluginName})"
+          sentInstantSwaps += request
+          return sendInstantSwapResult
+        }
+
+        override fun awaitInstantReport(
+            expectedRequestId: String,
+            timeoutMs: Long,
+        ): dev.paperplane.cli.devserver.InstantWaitResult {
+          calls += "awaitInstantReport"
+          return instantWaitResult(expectedRequestId)
+        }
+      }
 }

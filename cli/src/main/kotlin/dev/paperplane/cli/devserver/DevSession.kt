@@ -263,13 +263,13 @@ internal class DevSession(
       serverManager: PaperServerManager,
   ): BuildOutcome {
     val buildStart = System.currentTimeMillis()
-    serverManager.sendCompanionStatus(CompanionWire.STATE_BUILDING)
+    serverManager.ipc.sendStatus(CompanionWire.STATE_BUILDING)
     val buildSuccess = ui.spin("Building...") { gradle.build() }
     val buildDuration = formatDuration(System.currentTimeMillis() - buildStart)
 
     if (!buildSuccess) {
       ui.error("Build failed", buildDuration)
-      serverManager.sendCompanionStatus(CompanionWire.STATE_ERROR, message = "Build failed")
+      serverManager.ipc.sendStatus(CompanionWire.STATE_ERROR, message = "Build failed")
       return BuildOutcome.BuildFailed
     }
     ui.success("Build succeeded", buildDuration)
@@ -403,7 +403,7 @@ internal class DevSession(
    */
   fun handleFixAttempt(serverManager: PaperServerManager?): FixAttempt {
     val buildStart = System.currentTimeMillis()
-    serverManager?.sendCompanionStatus(CompanionWire.STATE_BUILDING)
+    serverManager?.ipc?.sendStatus(CompanionWire.STATE_BUILDING)
     val buildSuccess = gradle.build()
     val buildDuration = formatDuration(System.currentTimeMillis() - buildStart)
 
@@ -581,7 +581,7 @@ internal class DevSession(
     val serverDuration = formatDuration(System.currentTimeMillis() - serverStart)
     if (!ready) {
       ui.error("Server failed to start", serverDuration)
-      serverManager.sendCompanionStatus(
+      serverManager.ipc.sendStatus(
           CompanionWire.STATE_ERROR,
           message = "Server failed to start",
       )
@@ -593,7 +593,7 @@ internal class DevSession(
     // whole story.
     if (stagedJarPath == null) {
       ui.success(readyMessage, serverDuration)
-      serverManager.sendCompanionStatus(CompanionWire.STATE_READY, duration = serverDuration)
+      serverManager.ipc.sendStatus(CompanionWire.STATE_READY, duration = serverDuration)
       return ServerStartResult.Running(RunningState(metadata, paperJar))
     }
 
@@ -633,13 +633,13 @@ internal class DevSession(
         ui.renderLeakWarnings(loadResult.report)
         ui.success("Plugin loaded")
         ui.success(readyMessage, serverDuration)
-        serverManager.sendCompanionStatus(CompanionWire.STATE_READY, duration = serverDuration)
+        serverManager.ipc.sendStatus(CompanionWire.STATE_READY, duration = serverDuration)
         ServerStartResult.Running(RunningState(metadata, paperJar))
       }
       is LoadWaitResult.Failed -> {
         ui.error("Plugin failed to load: ${loadResult.message}")
         loadFailureHint(loadResult)?.let { ui.status(it) }
-        serverManager.sendCompanionStatus(CompanionWire.STATE_ERROR, message = "Plugin load failed")
+        serverManager.ipc.sendStatus(CompanionWire.STATE_ERROR, message = "Plugin load failed")
         // A rejected load is recoverable via a source/config edit — stop the just-started server so
         // no stale instance lingers while the user fixes it, and let fix recovery keep the session
         // alive (a fresh server is started on the next successful rebuild).
@@ -649,7 +649,7 @@ internal class DevSession(
       LoadWaitResult.TimedOut -> {
         ui.error("Timed out waiting for the plugin to load")
         loadFailureHint(loadResult)?.let { ui.status(it) }
-        serverManager.sendCompanionStatus(
+        serverManager.ipc.sendStatus(
             CompanionWire.STATE_ERROR,
             message = "Plugin load timed out",
         )
@@ -672,7 +672,7 @@ internal class DevSession(
       stagedJarPath: String,
   ): String {
     val requestId = newRequestId()
-    serverManager.sendLoadRequest(
+    serverManager.ipc.sendLoadRequest(
         LoadRequest(
             requestId = requestId,
             jarPath = stagedJarPath,
