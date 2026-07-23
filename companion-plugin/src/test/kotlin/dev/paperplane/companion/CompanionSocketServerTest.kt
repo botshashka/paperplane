@@ -51,7 +51,7 @@ class CompanionSocketServerTest {
             onStatus = { statuses += it },
             onLoadRequest = { loadRequests += it },
             onInstantSwap = { instantSwaps += it },
-            capabilities = RedefineCapabilities.Capability(agent = true, enhanced = false),
+            capability = HostRedefineCapability.BODY_ONLY,
         )
   }
 
@@ -156,9 +156,7 @@ class CompanionSocketServerTest {
     assertEquals("welcome", welcome.get("type").asString)
     assertEquals(CompanionSocketServer.PROTOCOL_VERSION, welcome.get("protocolVersion").asInt)
     assertFalse(welcome.get("serverReady").asBoolean, "server not marked ready yet")
-    val capabilities = welcome.getAsJsonObject("capabilities")
-    assertEquals(true, capabilities.get("agent").asBoolean)
-    assertEquals(false, capabilities.get("enhanced").asBoolean)
+    assertEquals("body-only", welcome.get("capability").asString)
   }
 
   @Test

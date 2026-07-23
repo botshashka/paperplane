@@ -87,7 +87,7 @@ class ProtocolLogReplayTest {
         writer.flush()
         val welcome = gson.fromJson(reader.readLine(), JsonObject::class.java)
         assertEquals("welcome", welcome.get("type").asString)
-        assertTrue(welcome.has("capabilities"), "v4 welcomes advertise redefine capabilities")
+        assertTrue(welcome.has("capability"), "v4 welcomes advertise the redefine capability")
 
         // Everything after the hello, byte-for-byte as the real CLI sent it.
         for (line in sends.drop(1)) {

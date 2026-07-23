@@ -1,24 +1,28 @@
 package dev.paperplane.cli.devserver.instant
 
+import com.google.gson.annotations.SerializedName
+
 /**
  * What the live server's JVM can redefine in place. Reported by the companion in the socket
  * `welcome` message (it knows at enable time whether the agent premain ran and whether enhanced
  * redefinition is actually armed) and cached per connection — capability is a property of the
  * running JVM, so a leak-restart or engine change re-negotiates it naturally.
+ *
+ * Mirror of the companion's `HostRedefineCapability`; travels as the lowercase wire values below.
  */
 enum class RedefineCapability {
   /** No instrumentation agent — nothing can be redefined. */
-  NONE,
+  @SerializedName("none") NONE,
 
   /** Stock JVM + agent: method-body-only redefinition. The floor, available everywhere. */
-  BODY_ONLY,
+  @SerializedName("body-only") BODY_ONLY,
 
   /**
    * JBR with `-XX:+AllowEnhancedClassRedefinition` + agent: additionally admits added/removed
    * methods and new classes. Opt-in by construction — reaching this tier requires explicitly
    * configuring JBR (`dev.jbr: on` or a JBR path).
    */
-  ADDITIVE,
+  @SerializedName("additive") ADDITIVE,
 }
 
 /**

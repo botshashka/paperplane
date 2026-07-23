@@ -62,10 +62,10 @@ class CompanionSocketServer(
     private val onLoadRequest: (HostLoadRequest) -> Unit,
     private val onInstantSwap: (HostInstantSwapRequest) -> Unit = {},
     /**
-     * The JVM's redefine capabilities, stamped into every welcome so the CLI knows the instant
-     * tier's ceiling for this server. Detected once — capability is a process property.
+     * The JVM's redefine capability, stamped into every welcome so the CLI knows the instant tier's
+     * ceiling for this server. Detected once — capability is a process property.
      */
-    private val capabilities: RedefineCapabilities.Capability = RedefineCapabilities.detect(),
+    private val capability: HostRedefineCapability = RedefineCapabilities.detect(),
 ) : CompanionIpc, AutoCloseable {
   companion object {
     /** Mirror of the CLI's `CompanionSocketFile.PROTOCOL_VERSION`. */
@@ -231,13 +231,7 @@ class CompanionSocketServer(
             addProperty("type", TYPE_WELCOME)
             addProperty("protocolVersion", PROTOCOL_VERSION)
             addProperty("serverReady", serverReady)
-            add(
-                "capabilities",
-                JsonObject().apply {
-                  addProperty("agent", capabilities.agent)
-                  addProperty("enhanced", capabilities.enhanced)
-                },
-            )
+            add("capability", gson.toJsonTree(capability))
           }
       writer.write(welcome.toString())
       writer.write("\n")

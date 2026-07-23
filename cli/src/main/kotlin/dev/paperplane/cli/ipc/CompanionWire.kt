@@ -7,6 +7,7 @@ import dev.paperplane.cli.devserver.InstantSwapReport
 import dev.paperplane.cli.devserver.InstantSwapRequest
 import dev.paperplane.cli.devserver.LoadReport
 import dev.paperplane.cli.devserver.LoadRequest
+import dev.paperplane.cli.devserver.instant.RedefineCapability
 
 /**
  * Wire codec for the CLI↔companion socket: NDJSON — one JSON object per line, UTF-8, discriminated
@@ -17,10 +18,10 @@ import dev.paperplane.cli.devserver.LoadRequest
  * `load` ([LoadRequest] + type tag), `instantSwap` ([InstantSwapRequest] — in-place patch).
  *
  * Companion → CLI ([CompanionEvent]): `welcome` (handshake reply + server-state snapshot + the
- * JVM's redefine capabilities), `ready` (explicit server-readiness event — an established
- * connection proves the COMPANION is alive, not that the server is player-ready, so readiness is
- * always a streamed event and never inferred from the connection), `saveComplete`, `loadProgress`
- * (streamed load stages), `report` ([LoadReport]), `instantReport` ([InstantSwapReport]).
+ * JVM's redefine capability), `ready` (explicit server-readiness event — an established connection
+ * proves the COMPANION is alive, not that the server is player-ready, so readiness is always a
+ * streamed event and never inferred from the connection), `saveComplete`, `loadProgress` (streamed
+ * load stages), `report` ([LoadReport]), `instantReport` ([InstantSwapReport]).
  */
 internal object CompanionWire {
   const val STATE_SAVING = "saving"
@@ -87,15 +88,12 @@ internal object CompanionWire {
           return null
         }
     return when (obj.str("type")) {
-      TYPE_WELCOME -> {
-        val capabilities = obj.get("capabilities")?.takeIf { it.isJsonObject }?.asJsonObject
-        CompanionEvent.Welcome(
-            protocolVersion = obj.int("protocolVersion"),
-            serverReady = obj.bool("serverReady"),
-            agent = capabilities.bool("agent"),
-            enhanced = capabilities.bool("enhanced"),
-        )
-      }
+      TYPE_WELCOME ->
+          CompanionEvent.Welcome(
+              protocolVersion = obj.int("protocolVersion"),
+              serverReady = obj.bool("serverReady"),
+              capability = obj.capability("capability"),
+          )
       TYPE_READY -> CompanionEvent.Ready
       TYPE_SAVE_COMPLETE -> CompanionEvent.SaveComplete
       TYPE_LOAD_PROGRESS ->
@@ -122,29 +120,38 @@ internal object CompanionWire {
   // Typed accessors over a possibly-absent, possibly-wrong-typed field. A companion one version
   // ahead or behind must degrade to the default rather than throw — the reader logs and skips, so
   // an exception here would take down a session over a field it doesn't even use.
-  private fun JsonObject?.str(name: String): String? =
-      this?.get(name)?.takeIf { it.isJsonPrimitive }?.asString
+  private fun JsonObject.str(name: String): String? =
+      get(name)?.takeIf { it.isJsonPrimitive }?.asString
 
-  private fun JsonObject?.int(name: String, default: Int = 0): Int =
-      this?.get(name)?.takeIf { it.isJsonPrimitive }?.asInt ?: default
+  private fun JsonObject.int(name: String, default: Int = 0): Int =
+      get(name)?.takeIf { it.isJsonPrimitive }?.asInt ?: default
 
-  private fun JsonObject?.bool(name: String, default: Boolean = false): Boolean =
-      this?.get(name)?.takeIf { it.isJsonPrimitive }?.asBoolean ?: default
+  private fun JsonObject.bool(name: String, default: Boolean = false): Boolean =
+      get(name)?.takeIf { it.isJsonPrimitive }?.asBoolean ?: default
+
+  /**
+   * The redefine capability enum, or [RedefineCapability.NONE] for an absent/unknown value — a
+   * companion advertising a tier this CLI doesn't know degrades to "can't patch", never to a tier
+   * it can't honour.
+   */
+  private fun JsonObject.capability(name: String): RedefineCapability =
+      get(name)
+          ?.takeIf { it.isJsonPrimitive }
+          ?.let { runCatching { gson.fromJson(it, RedefineCapability::class.java) }.getOrNull() }
+          ?: RedefineCapability.NONE
 }
 
 /** One decoded companion→CLI message. See [CompanionWire] for the full wire contract. */
 internal sealed interface CompanionEvent {
   /**
    * Handshake reply. [serverReady] snapshots whether `ServerLoadEvent` already fired — the CLI may
-   * be reconnecting to a long-running server. [agent]/[enhanced] are the live JVM's redefine
-   * capabilities (instrumentation agent present; JBR enhanced redefinition actually armed) — a
+   * be reconnecting to a long-running server. [capability] is the live JVM's redefine tier — a
    * property of the running server process, so per-connection is exactly per-JVM.
    */
   data class Welcome(
       val protocolVersion: Int,
       val serverReady: Boolean,
-      val agent: Boolean = false,
-      val enhanced: Boolean = false,
+      val capability: RedefineCapability = RedefineCapability.NONE,
   ) : CompanionEvent
 
   /** The server finished full startup (`ServerLoadEvent`). */

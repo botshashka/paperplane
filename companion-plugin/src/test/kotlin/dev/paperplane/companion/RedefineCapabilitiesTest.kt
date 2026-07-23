@@ -4,9 +4,9 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
 /**
- * The capability matrix: enhanced redefinition must require agent AND JBR AND the actual launch
- * flag. Vendor alone over-reporting was the shipped behavior this replaces — a JBR without the flag
- * behaves like a stock JVM.
+ * The capability matrix: ADDITIVE must require agent AND JBR AND the actual launch flag. Vendor
+ * alone over-reporting was the shipped behavior this replaces — a JBR without the flag behaves like
+ * a stock JVM.
  */
 class RedefineCapabilitiesTest {
 
@@ -28,7 +28,7 @@ class RedefineCapabilitiesTest {
   @Test
   fun `no agent means no capability at all`() {
     assertEquals(
-        RedefineCapabilities.Capability(agent = false, enhanced = false),
+        HostRedefineCapability.NONE,
         detect(
             agent = false,
             vendor = "JetBrains s.r.o.",
@@ -39,24 +39,21 @@ class RedefineCapabilitiesTest {
 
   @Test
   fun `agent on a stock JVM is body-only`() {
-    assertEquals(
-        RedefineCapabilities.Capability(agent = true, enhanced = false),
-        detect(agent = true),
-    )
+    assertEquals(HostRedefineCapability.BODY_ONLY, detect(agent = true))
   }
 
   @Test
   fun `JBR vendor without the launch flag is still body-only`() {
     assertEquals(
-        RedefineCapabilities.Capability(agent = true, enhanced = false),
+        HostRedefineCapability.BODY_ONLY,
         detect(agent = true, vendor = "JetBrains s.r.o."),
     )
   }
 
   @Test
-  fun `JBR vendor with the launch flag is enhanced`() {
+  fun `JBR vendor with the launch flag is additive`() {
     assertEquals(
-        RedefineCapabilities.Capability(agent = true, enhanced = true),
+        HostRedefineCapability.ADDITIVE,
         detect(
             agent = true,
             vendor = "JetBrains s.r.o.",
@@ -68,7 +65,7 @@ class RedefineCapabilitiesTest {
   @Test
   fun `a JBR vm name qualifies like the vendor does`() {
     assertEquals(
-        RedefineCapabilities.Capability(agent = true, enhanced = true),
+        HostRedefineCapability.ADDITIVE,
         detect(
             agent = true,
             vmName = "OpenJDK 64-Bit Server VM (JBR)",
@@ -80,7 +77,7 @@ class RedefineCapabilitiesTest {
   @Test
   fun `the flag on a stock JVM does not enhance anything`() {
     assertEquals(
-        RedefineCapabilities.Capability(agent = true, enhanced = false),
+        HostRedefineCapability.BODY_ONLY,
         detect(agent = true, args = listOf(RedefineCapabilities.ENHANCED_FLAG)),
     )
   }

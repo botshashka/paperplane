@@ -9,6 +9,7 @@ import dev.paperplane.cli.devserver.LoadRequest
 import dev.paperplane.cli.devserver.LoadStatus
 import dev.paperplane.cli.devserver.LoadWaitResult
 import dev.paperplane.cli.devserver.ReloadStrategy
+import dev.paperplane.cli.devserver.instant.RedefineCapability
 import dev.paperplane.cli.testing.FakeCompanionSocket
 import java.io.File
 import java.util.Base64
@@ -65,7 +66,11 @@ class ProtocolLogReplayTest {
     val welcome = assertInstanceOf(CompanionEvent.Welcome::class.java, events.first())
     assertEquals(CompanionSocketFile.PROTOCOL_VERSION, welcome.protocolVersion)
     assertEquals(false, welcome.serverReady, "the CLI connected before ServerLoadEvent")
-    assertTrue(welcome.agent, "the LaunchSpec always attaches the agent — welcome must say so")
+    assertEquals(
+        RedefineCapability.BODY_ONLY,
+        welcome.capability,
+        "the LaunchSpec always attaches the agent — welcome must say so",
+    )
     assertEquals(CompanionEvent.Ready, events[1], "readiness arrived as an explicit event")
 
     val reports = events.filterIsInstance<CompanionEvent.Report>().map { it.report }

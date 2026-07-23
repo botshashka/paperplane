@@ -5,6 +5,7 @@ import com.google.gson.JsonObject
 import dev.paperplane.cli.devserver.LoadRequest
 import dev.paperplane.cli.devserver.LoadStatus
 import dev.paperplane.cli.devserver.ReloadStrategy
+import dev.paperplane.cli.devserver.instant.RedefineCapability
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
@@ -141,20 +142,34 @@ class CompanionWireTest {
   }
 
   @Test
-  fun `decodes welcome capabilities and defaults them to false when absent`() {
-    val with =
+  fun `decodes the welcome capability and degrades absent or unknown values to NONE`() {
+    val bodyOnly =
         CompanionWire.decode(
             """{"type":"welcome","protocolVersion":4,"serverReady":true,""" +
-                """"capabilities":{"agent":true,"enhanced":true}}"""
+                """"capability":"body-only"}"""
         ) as CompanionEvent.Welcome
-    assertEquals(true, with.agent)
-    assertEquals(true, with.enhanced)
+    assertEquals(RedefineCapability.BODY_ONLY, bodyOnly.capability)
 
-    val without =
+    val additive =
+        CompanionWire.decode(
+            """{"type":"welcome","protocolVersion":4,"serverReady":true,""" +
+                """"capability":"additive"}"""
+        ) as CompanionEvent.Welcome
+    assertEquals(RedefineCapability.ADDITIVE, additive.capability)
+
+    val absent =
         CompanionWire.decode("""{"type":"welcome","protocolVersion":4,"serverReady":false}""")
             as CompanionEvent.Welcome
-    assertEquals(false, without.agent)
-    assertEquals(false, without.enhanced)
+    assertEquals(RedefineCapability.NONE, absent.capability)
+
+    // A companion advertising a tier this CLI doesn't know must degrade to "can't patch",
+    // never to a tier it can't honour.
+    val unknown =
+        CompanionWire.decode(
+            """{"type":"welcome","protocolVersion":4,"serverReady":true,""" +
+                """"capability":"quantum"}"""
+        ) as CompanionEvent.Welcome
+    assertEquals(RedefineCapability.NONE, unknown.capability)
   }
 
   @Test

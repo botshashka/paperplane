@@ -159,18 +159,16 @@ internal class CompanionClient(
       val reader = BufferedReader(InputStreamReader(candidate.getInputStream(), Charsets.UTF_8))
       val welcome = performHandshake(info, out, reader)
       candidate.soTimeout = 0
+      if (welcome.serverReady) serverReady = true
       synchronized(lock) {
         socket = candidate
         writer = out
+        // Publish the capability BEFORE flipping `connected`: every reader gates on isConnected,
+        // so setting it afterwards leaves a window where another thread sees a live connection
+        // whose capability still reads NONE.
+        capability = welcome.capability
         connected = true
       }
-      if (welcome.serverReady) serverReady = true
-      capability =
-          when {
-            !welcome.agent -> RedefineCapability.NONE
-            welcome.enhanced -> RedefineCapability.ADDITIVE
-            else -> RedefineCapability.BODY_ONLY
-          }
       readerThread =
           Thread({ readLoop(reader) }, "companion-ipc-reader").apply {
             isDaemon = true

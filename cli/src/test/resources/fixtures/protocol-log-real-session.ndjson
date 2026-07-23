@@ -1,5 +1,5 @@
 {"at":1784673885287,"dir":"send","line":"{\"type\":\"hello\",\"token\":\"a003ecbf384193d21ac4685f2154efcc\",\"protocolVersion\":4}"}
-{"at":1784673885288,"dir":"recv","line":"{\"type\":\"welcome\",\"protocolVersion\":4,\"serverReady\":false,\"capabilities\":{\"agent\":true,\"enhanced\":false}}"}
+{"at":1784673885288,"dir":"recv","line":"{\"type\":\"welcome\",\"protocolVersion\":4,\"serverReady\":false,\"capability\":\"body-only\"}"}
 {"at":1784673887170,"dir":"recv","line":"{\"type\":\"ready\"}"}
 {"at":1784673887320,"dir":"send","line":"{\"requestId\":\"92476c29-2dd9-48d7-a954-45194fd77083\",\"jarPath\":\"/Users/david/.claude/jobs/e50d003f/tmp/smoketest/.paperplane/server/.paperplane/staged/smoketest-1.0.0.jar\",\"pluginName\":\"smoketest\",\"classesDirs\":[\"/Users/david/.claude/jobs/e50d003f/tmp/smoketest/build/classes/java/main\"],\"resourcesDir\":\"/Users/david/.claude/jobs/e50d003f/tmp/smoketest/build/resources/main\",\"runtimeClasspath\":[],\"leakDiagnostics\":\"summary\",\"type\":\"load\"}"}
 {"at":1784673887371,"dir":"recv","line":"{\"type\":\"loadProgress\",\"requestId\":\"92476c29-2dd9-48d7-a954-45194fd77083\",\"stage\":\"loading\"}"}
