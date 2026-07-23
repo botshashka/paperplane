@@ -13,8 +13,8 @@ import java.io.File
 
 /**
  * What one fast-lane attempt produced. The mode acts on it: [Patched]/[NoChange] end the rebuild
- * (report + keep watching), [Escalate] falls through to the mode's full swap path (printing
- * [Escalate.reason] when present), [CompileFailed] ends the rebuild as a build failure.
+ * (report + keep watching), [Escalate] and [Disabled] fall through to the mode's full swap path,
+ * [CompileFailed] ends the rebuild as a build failure.
  */
 internal sealed class InstantOutcome {
   data class Patched(val patchedCount: Int, val definedCount: Int, val durationMs: Long) :
@@ -23,8 +23,15 @@ internal sealed class InstantOutcome {
   /** The rebuild produced no observable bytecode/resource change — nothing to do, say so. */
   object NoChange : InstantOutcome()
 
-  /** Take the full swap path. [reason] is user-facing; null means escalate silently (lane off). */
-  data class Escalate(val reason: String?) : InstantOutcome()
+  /** Take the full swap path and print [reason] — the lane tried and declined to vouch. */
+  data class Escalate(val reason: String) : InstantOutcome()
+
+  /**
+   * The lane is switched off (`dev.instant: false`), so there is nothing to report — take the full
+   * swap path silently. Distinct from [Escalate] because "no reason to print" is a state of the
+   * lane, not a nameless escalation.
+   */
+  object Disabled : InstantOutcome()
 
   object CompileFailed : InstantOutcome()
 }
@@ -43,8 +50,13 @@ internal sealed class InstantOutcome {
 internal class InstantLane(private val session: DevSession) {
 
   companion object {
-    /** In-place redefinition is near-instant; a longer wait means something is wrong anyway. */
-    private const val REPORT_TIMEOUT_MS = 5_000L
+    /**
+     * The patch itself is near-instant, but [handleInstantSwap][CompanionMessageHandler] is
+     * dispatched on the server's next tick — so the budget has to cover a main-thread stall (chunk
+     * generation, a long GC), not just the redefinition. Matched to the reload timeout: a tighter
+     * one just turns a slow tick into a spurious full swap.
+     */
+    private const val REPORT_TIMEOUT_MS = 10_000L
   }
 
   private val classifier = ChangeClassifier()
@@ -59,6 +71,36 @@ internal class InstantLane(private val session: DevSession) {
       metadata: ProjectMetadata,
       baseline: BaselineTracker,
   ): InstantOutcome {
+    if (!compile(serverManager)) return InstantOutcome.CompileFailed
+
+    if (!session.config.dev.instant) return InstantOutcome.Disabled
+    val fastMeta = fastMeta()
+    val confirmed = baseline.confirmed()
+    preconditionFailure(serverManager, confirmed, fastMeta)?.let {
+      return InstantOutcome.Escalate(it)
+    }
+    val (capability, capNote) = effectiveCapability(serverManager, metadata)
+    return if (capability == RedefineCapability.NONE) {
+      InstantOutcome.Escalate("server JVM reports no redefine capability")
+    } else {
+      classifyAndSend(
+          serverManager,
+          metadata,
+          baseline,
+          confirmed!!,
+          fastMeta!!,
+          capability,
+          capNote,
+      )
+    }
+  }
+
+  /**
+   * The rebuild's compile step (`classes` only) with the build-state broadcast and the standard
+   * success/failure lines. Shared with the mode paths that skip the lane entirely (manual full
+   * swap, awaiting-fix cold start) so a lane-less rebuild can't report differently than a lane one.
+   */
+  fun compile(serverManager: PaperServerManager): Boolean {
     serverManager.sendCompanionStatus(CompanionWire.STATE_BUILDING)
     val buildStart = System.currentTimeMillis()
     val buildSuccess = session.gradle.compileOnly()
@@ -66,33 +108,25 @@ internal class InstantLane(private val session: DevSession) {
     if (!buildSuccess) {
       session.ui.error("Build failed", buildDuration)
       serverManager.sendCompanionStatus(CompanionWire.STATE_ERROR, message = "Build failed")
-      return InstantOutcome.CompileFailed
+      return false
     }
     session.ui.success("Build succeeded", buildDuration)
-
-    if (!session.config.dev.instant) return InstantOutcome.Escalate(null)
-    val fastMeta = fastMeta()
-    preconditionFailure(serverManager, baseline, fastMeta)?.let {
-      return InstantOutcome.Escalate(it)
-    }
-    val (capability, capNote) = effectiveCapability(serverManager, metadata)
-    return if (capability == RedefineCapability.NONE) {
-      InstantOutcome.Escalate("server JVM reports no redefine capability")
-    } else {
-      classifyAndSend(serverManager, metadata, baseline, fastMeta!!, capability, capNote)
-    }
+    return true
   }
 
+  @Suppress("LongParameterList") // Every argument is one resolved precondition; bundling them into
+  // a holder would only move the same list one call up.
   private fun classifyAndSend(
       serverManager: PaperServerManager,
       metadata: ProjectMetadata,
       baseline: BaselineTracker,
+      confirmed: BuildCandidate,
       fastMeta: ProjectMetadata,
       capability: RedefineCapability,
       capNote: String?,
   ): InstantOutcome {
     val candidate = capture(fastMeta)
-    val classification = classifier.classify(baseline.baseline!!, candidate, metadata.mainClass)
+    val classification = classifier.classify(confirmed, candidate, metadata.mainClass)
     return when {
       classification.requirement == RedefineRequirement.NONE -> InstantOutcome.NoChange
       classification.requirement == RedefineRequirement.UNSAFE ->
@@ -101,7 +135,7 @@ internal class InstantLane(private val session: DevSession) {
           )
       !fitsWithin(classification.requirement, capability) ->
           InstantOutcome.Escalate(
-              (classification.additiveNotes.firstOrNull() ?: "structural change") +
+              (classification.additiveNotes.firstOrNull()?.description ?: "structural change") +
                   " — " +
                   (capNote ?: "needs JBR enhanced redefinition (dev.jbr: on)")
           )
@@ -112,12 +146,12 @@ internal class InstantLane(private val session: DevSession) {
   /** The user-facing reason the lane can't run at all, or null when every precondition holds. */
   private fun preconditionFailure(
       serverManager: PaperServerManager,
-      baseline: BaselineTracker,
+      confirmed: BuildCandidate?,
       fastMeta: ProjectMetadata?,
   ): String? =
       when {
         !serverManager.isRunning() -> "server not running"
-        !baseline.seeded -> "no confirmed baseline yet"
+        confirmed == null -> "no confirmed baseline yet"
         fastMeta == null -> "build metadata unavailable"
         fastMeta.effectiveClassesDirs.isEmpty() -> "no class output dirs in build metadata"
         else -> null
@@ -146,9 +180,10 @@ internal class InstantLane(private val session: DevSession) {
         }
         InstantOutcome.CompileFailed -> PhaseEnd.Waiting
         is InstantOutcome.Escalate -> {
-          outcome.reason?.let { session.ui.info("Instant:", "$it — $fallbackLabel") }
+          session.ui.info("Instant:", "${outcome.reason} — $fallbackLabel")
           null
         }
+        InstantOutcome.Disabled -> null
       }
 
   /** Requirement-vs-capability lattice: patch iff the live JVM admits everything in the set. */

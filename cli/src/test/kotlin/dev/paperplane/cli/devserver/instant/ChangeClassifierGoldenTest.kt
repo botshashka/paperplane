@@ -99,7 +99,7 @@ class ChangeClassifierGoldenTest {
 
     assertEquals(RedefineRequirement.ADDITIVE, result.requirement, escalationsOf(result))
     assertTrue(
-        result.additiveNotes.any { it.contains("format") },
+        result.additiveNotes.any { it.description.contains("format") },
         "expected an additive note naming the added method, got ${result.additiveNotes}",
     )
   }

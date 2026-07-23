@@ -115,7 +115,7 @@ class FakePaperServerManager(
   }
 
   /** Scripted redefine capability the fake's "server" advertises. */
-  var capability: dev.paperplane.cli.devserver.instant.RedefineCapability =
+  internal var capability: dev.paperplane.cli.devserver.instant.RedefineCapability =
       dev.paperplane.cli.devserver.instant.RedefineCapability.BODY_ONLY
 
   /**

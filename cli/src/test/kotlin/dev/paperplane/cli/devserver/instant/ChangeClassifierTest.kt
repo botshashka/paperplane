@@ -28,6 +28,37 @@ class ChangeClassifierTest {
 
   private fun kinds(result: InstantClassification) = result.escalations.map { it.kind }.toSet()
 
+  // ── Output layout ───────────────────────────────────────────────────
+
+  @Test
+  fun `moved output directories escalate even when every class byte matches`() {
+    // A build-config edit relocates the output dirs; the next capture reads a different tree.
+    // Without the layout gate, unchanged classes would all read as absent from the baseline and
+    // ship as phantom "new classes" the companion no-ops on while the CLI reports them patched.
+    val bytes =
+        BytecodeFixtures.generateClass(
+            methods = listOf(MethodSpec("tick", body = BytecodeFixtures.bodyReturning(1)))
+        )
+    val baseline =
+        BuildCandidate(
+            mapOf("com.example.Test" to bytes),
+            emptyMap(),
+            sourceDirs = listOf("classes:/proj/build/classes/java/main"),
+        )
+    val moved =
+        BuildCandidate(
+            mapOf("com.example.Test" to bytes),
+            emptyMap(),
+            sourceDirs = listOf("classes:/proj/build/classes/kotlin/main"),
+        )
+
+    val result = classifier.classify(baseline, moved, mainClass)
+
+    assertEquals(RedefineRequirement.UNSAFE, result.requirement)
+    assertEquals(setOf(EscalationKind.OUTPUT_LAYOUT_CHANGED), kinds(result))
+    assertTrue(result.patches.isEmpty(), "an UNSAFE change-set must never carry a payload")
+  }
+
   // ── BODY_ONLY ───────────────────────────────────────────────────────
 
   @Test

@@ -26,7 +26,7 @@ import org.objectweb.asm.tree.MethodNode
  * `<clinit>` (already ran, never rerun), field changes (existing instances keep default-initialized
  * state) — are UNSAFE with a user-facing description of exactly why.
  */
-class ChangeClassifier {
+internal class ChangeClassifier {
 
   fun classify(
       baseline: BuildCandidate,
@@ -37,9 +37,16 @@ class ChangeClassifier {
     val patches = mutableListOf<ClassPatch>()
     val newClasses = mutableListOf<ClassPatch>()
 
-    compareResources(baseline, candidate, verdict)
-    compareRemovedClasses(baseline, candidate, verdict)
-    compareClasses(baseline, candidate, mainClass, verdict, patches, newClasses)
+    // Each step is skipped once the verdict has settled on UNSAFE. Nothing a later step could find
+    // would change the outcome (UNSAFE is the top of the lattice) or the printed reason (the first
+    // escalation is what the user sees), and the skipped work is the expensive part: a full ASM
+    // tree parse per side per changed class plus a Textifier dump per method.
+    compareLayout(baseline, candidate, verdict)
+    if (!verdict.settled) compareResources(baseline, candidate, verdict)
+    if (!verdict.settled) compareRemovedClasses(baseline, candidate, verdict)
+    if (!verdict.settled) {
+      compareClasses(baseline, candidate, mainClass, verdict, patches, newClasses)
+    }
 
     // An UNSAFE change-set is never partially applied — drop the payload so no caller can.
     val unsafe = verdict.level == RedefineRequirement.UNSAFE
@@ -53,6 +60,25 @@ class ChangeClassifier {
   }
 
   // ── Change-set traversal ────────────────────────────────────────────
+
+  /**
+   * The two snapshots must describe the same output tree before any per-class diff means anything.
+   * When a build-config edit moves the classes dirs, the new capture reads unchanged classes from a
+   * new path: they'd all read as absent from the baseline, be sent as "new classes", and the
+   * companion would no-op every one of them while the CLI reported them patched.
+   */
+  private fun compareLayout(
+      baseline: BuildCandidate,
+      candidate: BuildCandidate,
+      verdict: Verdict,
+  ) {
+    if (baseline.sourceDirs != candidate.sourceDirs) {
+      verdict.escalate(
+          EscalationKind.OUTPUT_LAYOUT_CHANGED,
+          "build output directories changed since the last confirmed load",
+      )
+    }
+  }
 
   private fun compareResources(
       baseline: BuildCandidate,
@@ -90,11 +116,12 @@ class ChangeClassifier {
       newClasses: MutableList<ClassPatch>,
   ) {
     for (fqcn in candidate.classes.keys.sorted()) {
+      if (verdict.settled) return
       val newBytes = candidate.classes.getValue(fqcn)
       val oldBytes = baseline.classes[fqcn]
       if (oldBytes == null) {
         newClasses += ClassPatch(fqcn, 0L, newBytes)
-        verdict.additive("new class ${simple(fqcn)}")
+        verdict.additive(AdditiveNoteKind.NEW_CLASS, "new class ${simple(fqcn)}")
         continue
       }
       if (oldBytes.contentEquals(newBytes)) continue
@@ -130,6 +157,9 @@ class ChangeClassifier {
     compareHierarchy(oldNode, newNode, name, verdict)
     compareDeclaration(oldNode, newNode, name, verdict)
     compareFields(oldNode, newNode, name, verdict)
+    // Method comparison is the expensive step (a Textifier dump per method per side); an already
+    // UNSAFE class is escalating regardless of what it would find.
+    if (verdict.settled) return verdict
     compareMethods(oldNode, newNode, fqcn, name, mainClass, verdict)
     compareNest(oldNode, newNode, name, verdict)
 
@@ -210,7 +240,7 @@ class ChangeClassifier {
     // attributes; the stock JVM rejects redefinition on a nest-attribute change, so this needs
     // the ADDITIVE tier even when every retained body is untouched.
     if (Fingerprints.nest(oldNode) != Fingerprints.nest(newNode)) {
-      verdict.additive("nested-class change on $name")
+      verdict.additive(AdditiveNoteKind.NESTED_CLASS_CHANGE, "nested-class change on $name")
     }
   }
 
@@ -291,7 +321,11 @@ class ChangeClassifier {
               "new ${Fingerprints.annotationLabel(method)} method ${method.name} on $name — " +
                   "a redefine can't activate it",
           )
-      else -> verdict.additive("method ${method.name} added on $name")
+      else ->
+          verdict.additive(
+              AdditiveNoteKind.METHOD_ADDED,
+              "method ${method.name} added on $name",
+          )
     }
   }
 
@@ -302,7 +336,7 @@ class ChangeClassifier {
           "removed ${Fingerprints.annotationLabel(method)} method ${method.name} on $name",
       )
     } else {
-      verdict.additive("method ${method.name} removed on $name")
+      verdict.additive(AdditiveNoteKind.METHOD_REMOVED, "method ${method.name} removed on $name")
     }
   }
 
@@ -394,7 +428,11 @@ class ChangeClassifier {
       private set
 
     val escalations = mutableListOf<Escalation>()
-    val additiveNotes = mutableListOf<String>()
+    val additiveNotes = mutableListOf<AdditiveNote>()
+
+    /** True once the verdict can no longer improve — traversal may stop. */
+    val settled: Boolean
+      get() = level == RedefineRequirement.UNSAFE
 
     fun raise(l: RedefineRequirement) {
       if (l > level) level = l
@@ -405,8 +443,8 @@ class ChangeClassifier {
       raise(RedefineRequirement.UNSAFE)
     }
 
-    fun additive(note: String) {
-      additiveNotes += note
+    fun additive(kind: AdditiveNoteKind, description: String) {
+      additiveNotes += AdditiveNote(kind, description)
       raise(RedefineRequirement.ADDITIVE)
     }
 

@@ -10,7 +10,7 @@ import com.google.gson.annotations.SerializedName
  *
  * Mirror of the companion's `HostRedefineCapability`; travels as the lowercase wire values below.
  */
-enum class RedefineCapability {
+internal enum class RedefineCapability {
   /** No instrumentation agent — nothing can be redefined. */
   @SerializedName("none") NONE,
 
@@ -31,7 +31,7 @@ enum class RedefineCapability {
  * patches iff `requirement <= capability` (ordinal order below is the lattice) — anything else
  * falls through to the active mode's full swap path with a named reason.
  */
-enum class RedefineRequirement {
+internal enum class RedefineRequirement {
   /** Output changed on disk but nothing observable changed (debug info only). Do nothing. */
   NONE,
 

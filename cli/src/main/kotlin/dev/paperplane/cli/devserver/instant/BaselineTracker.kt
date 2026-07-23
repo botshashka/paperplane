@@ -15,33 +15,33 @@ package dev.paperplane.cli.devserver.instant
  * One tracker per server JVM — blue-green holds one per slot; a server death ([reset]) discards the
  * baseline until the replacement's first confirmed load reseeds it.
  */
-class BaselineTracker {
-  var baseline: BuildCandidate? = null
-    private set
+internal class BaselineTracker {
+  private var current: BuildCandidate? = null
 
-  val seeded: Boolean
-    get() = baseline != null
+  /** The confirmed-running snapshot, or null when nothing is confirmed — the only read path. */
+  fun confirmed(): BuildCandidate? = current
 
   /** The mode's full swap path deployed [candidate] and the server confirmed it loaded. */
   fun confirmFullSwap(candidate: BuildCandidate) {
-    baseline = candidate
+    current = candidate
   }
 
   /**
    * The companion confirmed redefining exactly [fqcns] from [candidate]. Only those classes
-   * advance; everything else (including resources) stays at the loaded baseline.
+   * advance; everything else (including resources) stays at the loaded baseline. The output layout
+   * stays the baseline's too — a patch is only ever admitted when the two captures agree on it.
    */
   fun confirmPatched(candidate: BuildCandidate, fqcns: Collection<String>) {
-    val current = baseline ?: return
-    val patched = current.classes.toMutableMap()
+    val base = current ?: return
+    val patched = base.classes.toMutableMap()
     for (fqcn in fqcns) {
       candidate.classes[fqcn]?.let { patched[fqcn] = it }
     }
-    baseline = BuildCandidate(patched, current.resourceCrcs)
+    current = BuildCandidate(patched, base.resourceCrcs, base.sourceDirs)
   }
 
   /** The server is gone (crash, restart pending) — nothing is confirmed running anymore. */
   fun reset() {
-    baseline = null
+    current = null
   }
 }

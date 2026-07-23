@@ -8,7 +8,7 @@ package dev.paperplane.cli.devserver.instant
  * CLI-state drift is a refusal, never a silent mispatch. Zero for new classes (nothing is loaded
  * yet).
  */
-class ClassPatch(
+internal class ClassPatch(
     val fqcn: String,
     val expectedLoadedCrc32: Long,
     val bytes: ByteArray,
@@ -19,7 +19,7 @@ class ClassPatch(
  * the first is surfaced to the user verbatim ("Instant: <description> — full swap"), which is the
  * honest-reporting half of the lifecycle gate: the tool always says *why* it escalated.
  */
-enum class EscalationKind {
+internal enum class EscalationKind {
   /** New method carrying any annotation — registration-driven frameworks would never see it. */
   ANNOTATED_METHOD_ADDED,
 
@@ -52,6 +52,13 @@ enum class EscalationKind {
   /** A resource (config.yml, generated plugin.yml, …) changed — redefinition can't re-copy it. */
   RESOURCE_CHANGED,
 
+  /**
+   * The build's output directories moved between the baseline capture and this one — a build-config
+   * edit (adding `kotlin("jvm")`, moving `sourceSets`) relocated them. The two snapshots describe
+   * different trees, so every apparent "new class" is really an unchanged one read from a new path.
+   */
+  OUTPUT_LAYOUT_CHANGED,
+
   /** Bytes on one side failed to parse — refuse to vouch for anything. */
   UNPARSEABLE_CLASS,
 
@@ -63,21 +70,44 @@ enum class EscalationKind {
 }
 
 /** A single named escalation reason; [description] is user-facing and self-contained. */
-data class Escalation(val kind: EscalationKind, val description: String)
+internal data class Escalation(val kind: EscalationKind, val description: String)
+
+/** Why a change-set needs the ADDITIVE tier — the sibling of [EscalationKind] one level down. */
+internal enum class AdditiveNoteKind {
+  /** A class absent from the baseline — it has to be defined, not redefined. */
+  NEW_CLASS,
+
+  /** A method the baseline didn't declare, carrying nothing that needs external discovery. */
+  METHOD_ADDED,
+
+  /** A method the candidate no longer declares, carrying nothing externally registered. */
+  METHOD_REMOVED,
+
+  /** InnerClasses/NestMembers moved — the stock JVM rejects a nest-attribute change. */
+  NESTED_CLASS_CHANGE,
+}
+
+/**
+ * A single named reason the change-set needs ADDITIVE; [description] is user-facing, like
+ * [Escalation.description]. Typed rather than a bare string so a capability shortfall always has a
+ * reason to print — the same guarantee the UNSAFE path gets from [Escalation].
+ */
+internal data class AdditiveNote(val kind: AdditiveNoteKind, val description: String)
 
 /**
  * The classifier's verdict for one rebuild: the requirement level (max over classes + resources),
  * the patches to apply if the lane runs, and the named reasons if it must not.
  *
- * Invariants: [escalations] is non-empty iff [requirement] is UNSAFE; [patches]/[newClasses] are
- * only meaningful below UNSAFE (an UNSAFE change-set is never partially applied). [additiveNotes]
- * names what pushed the requirement to ADDITIVE ("new class Foo", "method added on Bar") so a
- * capability shortfall on a stock JVM can escalate with a reason as specific as an UNSAFE one.
+ * Invariants: [escalations] is non-empty iff [requirement] is UNSAFE; [additiveNotes] is non-empty
+ * iff [requirement] is ADDITIVE; [patches]/[newClasses] are only meaningful below UNSAFE (an UNSAFE
+ * change-set is never partially applied). [additiveNotes] names what pushed the requirement to
+ * ADDITIVE ("new class Foo", "method added on Bar") so a capability shortfall on a stock JVM can
+ * escalate with a reason as specific as an UNSAFE one.
  */
-class InstantClassification(
+internal class InstantClassification(
     val requirement: RedefineRequirement,
     val patches: List<ClassPatch>,
     val newClasses: List<ClassPatch>,
     val escalations: List<Escalation>,
-    val additiveNotes: List<String> = emptyList(),
+    val additiveNotes: List<AdditiveNote> = emptyList(),
 )

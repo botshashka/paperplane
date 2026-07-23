@@ -512,7 +512,7 @@ class HotReloadModeRenderTest {
     // The instant baseline must be reseeded by the confirmed cold-start — otherwise the first
     // lane attempt after recovery would diff against the pre-failure build.
     assertTrue(
-        mode.baseline.seeded,
+        mode.baseline.confirmed() != null,
         "the awaiting-fix cold-start must reseed the instant baseline",
     )
   }

@@ -27,7 +27,6 @@ internal open class HotReloadMode(
     /**
      * Pure helper: build a [LoadRequest] from a rebuild's inputs. Extracted so the strategy
      * selection (DIRECTORY vs JAR) can be tested without standing up a full HotReloadMode.
-     * (In-place redefinition left this path entirely — the instant lane runs before any reload.)
      *
      * Strategy selection rules:
      * - No fastMeta or no classesDir → JAR fallback (empty classesDirs).
@@ -262,27 +261,9 @@ internal open class HotReloadMode(
       forceFullSwap: Boolean,
   ): PhaseEnd? {
     if (!serverDownAwaitingFix && !forceFullSwap) return null
-    if (!compileAndReport()) return PhaseEnd.Waiting
+    if (!lane.compile(serverManager)) return PhaseEnd.Waiting
     return if (serverDownAwaitingFix) restartAfterAwaitingFix(metadata)
     else fullReload(metadata, totalStart)
-  }
-
-  /**
-   * The lane-skipping paths' compile step (awaiting-fix cold start, manual full swap) — same output
-   * shape the lane emits on its own compile.
-   */
-  private fun compileAndReport(): Boolean {
-    serverManager.sendCompanionStatus(CompanionWire.STATE_BUILDING)
-    val buildStart = System.currentTimeMillis()
-    val buildSuccess = session.gradle.compileOnly()
-    val buildDuration = session.formatDuration(System.currentTimeMillis() - buildStart)
-    if (!buildSuccess) {
-      session.ui.error("Build failed", buildDuration)
-      serverManager.sendCompanionStatus(CompanionWire.STATE_ERROR, message = "Build failed")
-      return false
-    }
-    session.ui.success("Build succeeded", buildDuration)
-    return true
   }
 
   private fun fullReload(metadata: ProjectMetadata, totalStart: Long): PhaseEnd {

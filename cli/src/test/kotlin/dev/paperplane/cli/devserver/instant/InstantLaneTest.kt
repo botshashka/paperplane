@@ -90,7 +90,7 @@ class InstantLaneTest {
   /** Seeds the baseline from what's currently on disk (the mode's confirm-full-swap moment). */
   private fun seed(setup: Setup) {
     setup.lane.confirmFullSwap(setup.baseline)
-    check(setup.baseline.seeded)
+    check(setup.baseline.confirmed() != null)
   }
 
   private fun attempt(setup: Setup): InstantOutcome {
@@ -123,7 +123,7 @@ class InstantLaneTest {
         "the patch must carry the baseline's CRC for companion verification",
     )
     assertTrue(
-        setup.baseline.baseline!!.classes.getValue("com.example.Logic").contentEquals(bodyV(2)),
+        setup.baseline.confirmed()!!.classes.getValue("com.example.Logic").contentEquals(bodyV(2)),
         "a confirmed patch must advance the baseline",
     )
     assertTrue(setup.fixture.gradle.calls.contains("compileOnly"))
@@ -156,7 +156,7 @@ class InstantLaneTest {
     attempt(setup)
 
     assertTrue(
-        setup.baseline.baseline!!.classes.getValue("com.example.Logic").contentEquals(bodyV(1)),
+        setup.baseline.confirmed()!!.classes.getValue("com.example.Logic").contentEquals(bodyV(1)),
         "a class the companion did not report applied must stay at its old baseline bytes",
     )
   }
@@ -189,8 +189,8 @@ class InstantLaneTest {
     setup.fixture.session.seedFastMetadata(null)
     setup.lane.confirmFullSwap(setup.baseline)
 
-    assertFalse(
-        setup.baseline.seeded,
+    assertNull(
+        setup.baseline.confirmed(),
         "an unconfirmable swap must drop to unseeded — the safe direction is refusing to patch",
     )
   }
@@ -277,15 +277,15 @@ class InstantLaneTest {
   }
 
   @Test
-  fun `instant disabled escalates silently after the compile`() {
+  fun `instant disabled falls through silently after the compile`() {
     val setup = setup(instantEnabled = false)
     writeClass("com.example.Logic", bodyV(1))
     seed(setup)
 
     val outcome = attempt(setup)
 
-    val escalate = assertInstanceOf(InstantOutcome.Escalate::class.java, outcome)
-    assertNull(escalate.reason, "a disabled lane must not nag every rebuild")
+    // Disabled, not a nameless Escalate: a switched-off lane must not nag every rebuild.
+    assertInstanceOf(InstantOutcome.Disabled::class.java, outcome)
     assertTrue(setup.fixture.gradle.calls.contains("compileOnly"))
   }
 
@@ -339,7 +339,7 @@ class InstantLaneTest {
     val escalate = assertInstanceOf(InstantOutcome.Escalate::class.java, outcome)
     assertTrue(escalate.reason!!.contains("baseline drift"), escalate.reason)
     assertTrue(
-        setup.baseline.baseline!!.classes.getValue("com.example.Logic").contentEquals(bodyV(1)),
+        setup.baseline.confirmed()!!.classes.getValue("com.example.Logic").contentEquals(bodyV(1)),
         "an unconfirmed patch must not advance the baseline",
     )
   }
