@@ -146,11 +146,24 @@ class PaperPlanePlugin : Plugin<Project> {
     }
   }
 
+  /**
+   * The Paper API minor version (`1.21.4-R0.1-SNAPSHOT` → `1.21`) this project compiles against, or
+   * null when it declares none.
+   *
+   * `allDependencies` rather than `dependencies`: the latter holds only what was declared
+   * *directly* on a configuration and does not traverse `extendsFrom`, so a `java-library` project
+   * declaring paper-api via `api`/`compileOnlyApi` would read as no-Paper-at-all. That silently
+   * costs the mappings stamp — Paper then remaps the jar at load and the instant lane refuses every
+   * patch as baseline drift — as well as the [PaperPlaneExtension.apiVersion] default. The named
+   * `api`/`compileOnlyApi` entries are belt and braces for the configurations that carry the
+   * declaration before resolution.
+   */
   private fun detectPaperApiVersion(project: Project): String? {
-    val configs = listOf("compileOnly", "implementation", "compileClasspath")
+    val configs =
+        listOf("compileOnly", "compileOnlyApi", "api", "implementation", "compileClasspath")
     for (configName in configs) {
       val config = project.configurations.findByName(configName) ?: continue
-      for (dep in config.dependencies) {
+      for (dep in config.allDependencies) {
         if (dep.group == "io.papermc.paper" && dep.name == "paper-api") {
           val version = dep.version ?: continue
           // Parse "1.21.4-R0.1-SNAPSHOT" → "1.21"

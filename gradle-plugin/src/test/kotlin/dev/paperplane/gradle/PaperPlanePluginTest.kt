@@ -120,6 +120,40 @@ class PaperPlanePluginTest {
   }
 
   @Test
+  fun `detects paper-api declared via the api configuration`() {
+    // `api` is a java-library idiom and nothing declares paper-api on compileOnly there. Reading
+    // only directly-declared dependencies misses it (compileClasspath extends from api rather
+    // than holding it), and the missing stamp costs the project a load-time remap — which the
+    // instant lane then reports as baseline drift on every patch.
+    setupProject(
+        """
+        plugins {
+            `java-library`
+            id("dev.paperplane")
+        }
+        group = "com.example"
+        version = "1.0.0"
+        repositories {
+            mavenCentral()
+            maven("https://repo.papermc.io/repository/maven-public/")
+        }
+        dependencies {
+            api("io.papermc.paper:paper-api:1.21.4-R0.1-SNAPSHOT")
+        }
+        paperplane {
+            mainClass.set("com.example.TestPlugin")
+            pluginName.set("TestPlugin")
+        }
+        """
+            .trimIndent()
+    )
+    assertTrue(
+        builtManifest().contains("paperweight-mappings-namespace: mojang"),
+        "paper-api on `api` is still paper-api — the jar is Mojang-mapped and must say so",
+    )
+  }
+
+  @Test
   fun `does not stamp mappings namespace without a paper-api dependency`() {
     setupProject(
         """
