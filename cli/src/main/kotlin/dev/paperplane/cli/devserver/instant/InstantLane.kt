@@ -60,6 +60,11 @@ internal class InstantLane(private val session: DevSession) {
 
   private val classifier = ChangeClassifier()
 
+  // Byte reuse across captures: an escalated rebuild captures twice (attempt, then the mode's
+  // confirm over near-identical output), and even the patched path re-reads a mostly-unchanged
+  // tree every rebuild. See CaptureCache for the staleness-proofing.
+  private val captureCache = CaptureCache()
+
   /**
    * Runs one fast-lane attempt: compile (`classes` only — the jar is skipped entirely on the
    * patched path), classify, and patch or escalate. Emits the standard build success/failure lines;
@@ -262,5 +267,6 @@ internal class InstantLane(private val session: DevSession) {
       BuildCandidate.capture(
           fastMeta.effectiveClassesDirs.map(::File),
           fastMeta.resourcesDir.takeIf { it.isNotEmpty() }?.let(::File),
+          captureCache,
       )
 }

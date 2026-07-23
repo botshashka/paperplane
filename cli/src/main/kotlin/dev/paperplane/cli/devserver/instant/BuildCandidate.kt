@@ -29,9 +29,16 @@ internal class BuildCandidate(
   companion object {
     /**
      * Reads the build output from disk. [classesDirs] are walked for `.class` files (FQCN from the
-     * relative path); [resourcesDir] (may not exist) is walked for everything else.
+     * relative path); [resourcesDir] (may not exist) is walked for everything else. With a [cache],
+     * files provably unchanged since the previous capture are reused instead of re-read — see
+     * [CaptureCache] for why that can't go stale.
      */
-    fun capture(classesDirs: List<File>, resourcesDir: File?): BuildCandidate {
+    fun capture(
+        classesDirs: List<File>,
+        resourcesDir: File?,
+        cache: CaptureCache? = null,
+    ): BuildCandidate {
+      val seen = mutableSetOf<String>()
       val classes = mutableMapOf<String, ByteArray>()
       for (dir in classesDirs) {
         if (!dir.exists()) continue
@@ -40,7 +47,8 @@ internal class BuildCandidate(
             .forEach { file ->
               val fqcn =
                   file.relativeTo(dir).path.removeSuffix(".class").replace(File.separatorChar, '.')
-              classes[fqcn] = file.readBytes()
+              seen += file.absolutePath
+              classes[fqcn] = cache?.read(file) ?: file.readBytes()
             }
       }
       val resources = mutableMapOf<String, Long>()
@@ -49,10 +57,12 @@ internal class BuildCandidate(
             .walkTopDown()
             .filter { it.isFile }
             .forEach { file ->
+              seen += file.absolutePath
               resources[file.relativeTo(resourcesDir).path.replace(File.separatorChar, '/')] =
-                  crc32(file.readBytes())
+                  cache?.crc32(file) ?: crc32(file.readBytes())
             }
       }
+      cache?.retainOnly(seen)
       return BuildCandidate(classes, resources, sourceDirs(classesDirs, resourcesDir))
     }
 
