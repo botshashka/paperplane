@@ -147,6 +147,52 @@ class PaperPlaneAgentTest {
         assertFalse(PaperPlaneAgent.wasPatched(null, "com.example.Foo"));
     }
 
+    // ── Package filter ──────────────────────────────────────────────────
+
+    @Test
+    void parsePrefixesConvertsPackagesToInternalFormPrefixes() {
+        assertArrayEquals(new String[]{"com/acme/", "dev/paperplane/"},
+                PaperPlaneAgent.parsePrefixes("com.acme, dev.paperplane"));
+        assertArrayEquals(new String[]{"com/acme/"},
+                PaperPlaneAgent.parsePrefixes("com.acme,, ,"));
+    }
+
+    @Test
+    void parsePrefixesOnNullOrBlankArgsRecordsEverything() {
+        assertArrayEquals(new String[0], PaperPlaneAgent.parsePrefixes(null));
+        assertArrayEquals(new String[0], PaperPlaneAgent.parsePrefixes("  "));
+        assertTrue(PaperPlaneAgent.records(new String[0], "any/thing/At/All"),
+                "no prefixes means record everything — the bare -javaagent contract");
+    }
+
+    @Test
+    void recordsMatchesOnlyClassesUnderAPrefix() {
+        String[] prefixes = PaperPlaneAgent.parsePrefixes("com.acme");
+        assertTrue(PaperPlaneAgent.records(prefixes, "com/acme/Foo"));
+        assertTrue(PaperPlaneAgent.records(prefixes, "com/acme/util/Helper"));
+        assertFalse(PaperPlaneAgent.records(prefixes, "com/acmeplugin/Foo"),
+                "the trailing slash must prevent sibling-package prefix bleed");
+        assertFalse(PaperPlaneAgent.records(prefixes, "net/minecraft/server/Level"));
+    }
+
+    @Test
+    void loadHookSkipsClassesOutsideTheConfiguredPackages() throws Exception {
+        PaperPlaneAgent.premain("com.example", mockInstrumentation());
+        ClassFileTransformer recorder = registered.get(0);
+        ClassLoader loader = new URLClassLoader(new URL[0], null);
+        byte[] bytes = {1, 2, 3, 4};
+
+        recorder.transform((Module) null, loader, "net/minecraft/server/Level", null, null, bytes);
+        recorder.transform((Module) null, loader, "com/example/Foo", null, null, bytes);
+
+        assertEquals(PaperPlaneAgent.UNKNOWN_CRC,
+                PaperPlaneAgent.getLoadedCrc(loader, "net.minecraft.server.Level"),
+                "an out-of-package class must never be hashed or retained");
+        CRC32 crc = new CRC32();
+        crc.update(bytes);
+        assertEquals(crc.getValue(), PaperPlaneAgent.getLoadedCrc(loader, "com.example.Foo"));
+    }
+
     @Test
     void registryIsScopedPerLoader() {
         ClassLoader a = new URLClassLoader(new URL[0], null);

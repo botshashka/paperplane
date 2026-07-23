@@ -324,8 +324,7 @@ class PaperServerManagerTest {
     // The JVM starts and exits immediately (no such jar) — a death the manager did not request.
     manager.start(
         missingJar,
-        LaunchSpec(javaBin, isJbr = false, jvmArgs = emptyList()),
-        attachAgent = false,
+        LaunchSpec(javaBin, isJbr = false, jvmArgs = emptyList(), attachAgent = false),
     )
     waitUntil("process self-terminates") { !manager.isRunning() }
     assertTrue(
@@ -343,8 +342,7 @@ class PaperServerManagerTest {
     // A fresh start must reset the requested-stop flag so the next crash is caught again.
     manager.start(
         missingJar,
-        LaunchSpec(javaBin, isJbr = false, jvmArgs = emptyList()),
-        attachAgent = false,
+        LaunchSpec(javaBin, isJbr = false, jvmArgs = emptyList(), attachAgent = false),
     )
     waitUntil("restarted process self-terminates") { !manager.isRunning() }
     assertTrue(

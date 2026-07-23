@@ -206,7 +206,10 @@ internal class DevSession(
     val started = System.currentTimeMillis()
     val result = ui.spin("Reading project metadata...") { gradle.metadata() }
     when (result) {
-      is MetadataResult.Success -> ppDir.mkdirs()
+      is MetadataResult.Success -> {
+        ppDir.mkdirs()
+        pluginMainClass = result.metadata.mainClass
+      }
       MetadataResult.PluginNotApplied -> {
         metadataResolutionError()
         gradle.close()
@@ -718,14 +721,30 @@ internal class DevSession(
   fun formatDuration(ms: Long): String = formatDurationMs(ms)
 
   /**
+   * The plugin main class from the last successful [resolveMetadata], for [launchSpec]'s agent
+   * package filter. Null only if no metadata ever resolved, in which case no server ever starts.
+   */
+  private var pluginMainClass: String? = null
+
+  /**
    * The launch identity for every server this session starts, in every mode and every recovery
    * path. Built lazily exactly once ([resolveJava] may download JBR under `jbr: on`, so it must not
    * run before the first server actually starts) and never rebuilt — the structural form of the
-   * "mirror the args" invariant that previously lived in three HotReloadMode call sites.
+   * "mirror the args" invariant.
+   *
+   * The laziness is also what makes [pluginMainClass] available: every start path runs
+   * [resolveMetadata] first, so the agent's package filter is resolved by the time the first server
+   * launches. A main class that moved package mid-session keeps the original filter, and its
+   * classes then simply have no load record — a refusal and a normal swap, never a wrong patch.
    */
   val launchSpec: LaunchSpec by lazy {
     val runtime = resolveJava()
-    LaunchSpec.build(runtime.bin, runtime.isJbr, config.server.jvmArgs)
+    LaunchSpec.build(
+        runtime.bin,
+        runtime.isJbr,
+        config.server.jvmArgs,
+        recordedPackages = pluginMainClass?.let(LaunchSpec::recordedPackagesFor).orEmpty(),
+    )
   }
 
   data class JavaRuntime(val bin: String, val isJbr: Boolean)

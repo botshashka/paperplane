@@ -322,8 +322,7 @@ class PaperServerManagerSocketTest {
     val javaBin = File(File(System.getProperty("java.home"), "bin"), "java").absolutePath
     manager.start(
         File(tempDir, "missing.jar"),
-        LaunchSpec(javaBin, isJbr = false, jvmArgs = emptyList()),
-        attachAgent = false,
+        LaunchSpec(javaBin, isJbr = false, jvmArgs = emptyList(), attachAgent = false),
     )
     val deadline = System.currentTimeMillis() + 30_000
     while (manager.isRunning()) {
@@ -355,8 +354,7 @@ class PaperServerManagerSocketTest {
     val javaBin = File(File(System.getProperty("java.home"), "bin"), "java").absolutePath
     manager.start(
         File(tempDir, "missing.jar"),
-        LaunchSpec(javaBin, isJbr = false, jvmArgs = emptyList()),
-        attachAgent = false,
+        LaunchSpec(javaBin, isJbr = false, jvmArgs = emptyList(), attachAgent = false),
     )
     manager.stop()
 

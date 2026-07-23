@@ -3,7 +3,9 @@ package dev.paperplane.agent;
 import java.lang.instrument.ClassFileTransformer;
 import java.lang.instrument.Instrumentation;
 import java.security.ProtectionDomain;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
@@ -49,9 +51,52 @@ public class PaperPlaneAgent {
     /** Sentinel for {@link #getLoadedCrc} when the class was never recorded. */
     public static final long UNKNOWN_CRC = -1L;
 
+    /**
+     * Internal-form ({@code me/dev/}) name prefixes the load hook records, from the agent's
+     * {@code -javaagent:...=<comma-separated packages>} argument. Empty means record everything,
+     * which is what a bare {@code -javaagent} (tests, manual runs) gets.
+     *
+     * <p><b>The contract when a plugin class falls outside these prefixes:</b> nothing records it,
+     * {@link #getLoadedCrc} answers {@link #UNKNOWN_CRC}, and the companion refuses the patch with
+     * "no load record" — the CLI then escalates to a normal swap. Unfiltered classes cost a
+     * <em>slower</em> rebuild, never a wrong one. That direction is deliberate, because the filter
+     * is a guess: it is derived from the plugin main class's package, and a project whose sources
+     * span unrelated roots can legitimately produce classes outside it.
+     */
+    private static volatile String[] recordedPrefixes = new String[0];
+
     public static void premain(String args, Instrumentation inst) {
         instrumentation = inst;
+        recordedPrefixes = parsePrefixes(args);
         inst.addTransformer(new CrcRecorder());
+    }
+
+    /**
+     * Parses the agent argument into internal-form prefixes. Only the plugin's own classes are ever
+     * read back, but the hook sees every class the JVM defines — tens of thousands on Paper's
+     * parallel boot path — so hashing them all costs hundreds of milliseconds and megabytes of
+     * retained map on every server start, of which over 99% is never read.
+     */
+    static String[] parsePrefixes(String args) {
+        if (args == null || args.isBlank()) return new String[0];
+        String[] parts = args.split(",");
+        List<String> prefixes = new ArrayList<>(parts.length);
+        for (String part : parts) {
+            String trimmed = part.trim();
+            if (trimmed.isEmpty()) continue;
+            String internal = trimmed.replace('.', '/');
+            prefixes.add(internal.endsWith("/") ? internal : internal + "/");
+        }
+        return prefixes.toArray(new String[0]);
+    }
+
+    /** Whether the load hook records {@code internalName} (internal form, slash-separated). */
+    static boolean records(String[] prefixes, String internalName) {
+        if (prefixes.length == 0) return true;
+        for (String prefix : prefixes) {
+            if (internalName.startsWith(prefix)) return true;
+        }
+        return false;
     }
 
     public static Instrumentation getInstrumentation() {
@@ -101,7 +146,13 @@ public class PaperPlaneAgent {
                 Class<?> classBeingRedefined,
                 ProtectionDomain protectionDomain,
                 byte[] classfileBuffer) {
-            if (loader != null && className != null && classBeingRedefined == null) {
+            // The prefix test comes first so an unrecorded class never hashes its bytes and never
+            // touches the registry — which is also why the synchronized map below is no longer on
+            // the boot path: only the plugin's own definitions ever take that monitor.
+            if (loader != null
+                    && className != null
+                    && classBeingRedefined == null
+                    && records(recordedPrefixes, className)) {
                 CRC32 crc = new CRC32();
                 crc.update(classfileBuffer);
                 definedCrcs

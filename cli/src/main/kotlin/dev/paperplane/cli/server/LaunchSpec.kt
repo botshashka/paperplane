@@ -14,6 +14,21 @@ data class LaunchSpec(
     val javaBin: String,
     val isJbr: Boolean,
     val jvmArgs: List<String>,
+    /**
+     * Whether to attach the redefinition agent. Always true in production — it lives here, on the
+     * launch identity, rather than as a parallel [PaperServerManager.start] argument, because that
+     * is precisely what this type exists to prevent: an aspect of how a server is launched that a
+     * recovery path could pass differently from startup. Only tests that launch throwaway real JVMs
+     * without the CLI resources on the classpath turn it off.
+     */
+    val attachAgent: Boolean = true,
+    /**
+     * Package prefixes the agent records load-time CRCs for, passed as its `-javaagent` argument.
+     * Empty records every class the JVM defines — correct, but it hashes all of Paper's boot on
+     * every start to keep a few dozen entries anyone reads. A class outside these prefixes simply
+     * has no load record, which the companion turns into a refusal and the CLI into a normal swap.
+     */
+    val recordedPackages: List<String> = emptyList(),
 ) {
   companion object {
     /**
@@ -28,7 +43,12 @@ data class LaunchSpec(
      */
     const val ENHANCED_REDEFINITION = "-XX:+AllowEnhancedClassRedefinition"
 
-    fun build(javaBin: String, isJbr: Boolean, baseJvmArgs: List<String>): LaunchSpec =
+    fun build(
+        javaBin: String,
+        isJbr: Boolean,
+        baseJvmArgs: List<String>,
+        recordedPackages: List<String> = emptyList(),
+    ): LaunchSpec =
         LaunchSpec(
             javaBin = javaBin,
             isJbr = isJbr,
@@ -38,6 +58,21 @@ data class LaunchSpec(
                   add(ADD_OPENS_JAVA_NET)
                   if (isJbr) add(ENHANCED_REDEFINITION)
                 },
+            recordedPackages = recordedPackages,
         )
+
+    /**
+     * The packages the agent should record for a plugin whose main class is [mainClass]: its own
+     * package plus the parent package, so helper classes in sibling packages
+     * (`com.acme.plugin.Main` alongside `com.acme.util.Helper`) still get load records. Two
+     * segments minimum — a one-segment prefix would re-admit half the runtime and give back the
+     * saving. Empty for a main class in the default package, which records everything.
+     */
+    fun recordedPackagesFor(mainClass: String): List<String> {
+      val pkg = mainClass.substringBeforeLast('.', "")
+      if (pkg.isEmpty()) return emptyList()
+      val parent = pkg.substringBeforeLast('.', "")
+      return if (parent.contains('.')) listOf(parent) else listOf(pkg)
+    }
   }
 }

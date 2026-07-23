@@ -277,15 +277,9 @@ open class PaperServerManager(
 
   /**
    * Launches the server with the session-wide [LaunchSpec] — the single source of truth for
-   * javaBin/JVM args in every mode and recovery path. [attachAgent] exists for tests that launch
-   * throwaway real JVMs without the CLI resources on the classpath; production callers always
-   * attach.
+   * javaBin, JVM args and agent attachment in every mode and recovery path.
    */
-  open fun start(
-      paperJar: File,
-      launch: LaunchSpec,
-      attachAgent: Boolean = true,
-  ) {
+  open fun start(paperJar: File, launch: LaunchSpec) {
     val cmd = mutableListOf(launch.javaBin)
     // Fast startup flags
     cmd.addAll(
@@ -299,9 +293,12 @@ open class PaperServerManager(
         )
     )
 
-    if (attachAgent) {
+    if (launch.attachAgent) {
       val agentJar = extractAgent()
-      cmd.add("-javaagent:${agentJar.absolutePath}")
+      val agentArgs =
+          launch.recordedPackages.takeIf { it.isNotEmpty() }?.joinToString(",")?.let { "=$it" }
+              ?: ""
+      cmd.add("-javaagent:${agentJar.absolutePath}$agentArgs")
     }
 
     cmd.addAll(launch.jvmArgs)

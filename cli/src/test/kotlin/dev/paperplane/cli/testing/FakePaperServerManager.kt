@@ -68,7 +68,7 @@ class FakePaperServerManager(
     calls += "copyCompanion(depend=${depend.size},softdepend=${softdepend.size})"
   }
 
-  override fun start(paperJar: File, launch: LaunchSpec, attachAgent: Boolean) {
+  override fun start(paperJar: File, launch: LaunchSpec) {
     calls += "start(${paperJar.name})"
     launchSpecs += launch
     // Stream the simulated server output through ui.serverLog so tests can verify the log lines
