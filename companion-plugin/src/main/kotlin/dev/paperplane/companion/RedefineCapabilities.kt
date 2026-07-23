@@ -21,8 +21,16 @@ enum class HostRedefineCapability {
  * lane knows whether patching is possible on this live server at all.
  */
 object RedefineCapabilities {
+  /**
+   * An agent alone is not enough: [InstantSwapper.apply] also requires
+   * [Instrumentation.isRedefineClassesSupported], so a JVM that refuses redefinition must report
+   * [HostRedefineCapability.NONE] here too — otherwise the banner advertises a tier every rebuild
+   * then pays a send-refuse round trip to discover it was never there.
+   */
   fun detect(
       instrumentation: Instrumentation? = AgentAccess.instrumentation()
   ): HostRedefineCapability =
-      if (instrumentation == null) HostRedefineCapability.NONE else HostRedefineCapability.BODY_ONLY
+      if (instrumentation == null || !instrumentation.isRedefineClassesSupported)
+          HostRedefineCapability.NONE
+      else HostRedefineCapability.BODY_ONLY
 }

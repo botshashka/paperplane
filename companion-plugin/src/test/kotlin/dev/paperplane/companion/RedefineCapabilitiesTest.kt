@@ -21,4 +21,16 @@ class RedefineCapabilitiesTest {
         RedefineCapabilities.detect(instrumentation = FakeInstrumentation()),
     )
   }
+
+  @Test
+  fun `an agent whose JVM cannot redefine reports NONE`() {
+    // The swapper checks isRedefineClassesSupported before every patch; advertising a tier the
+    // JVM will veto only buys a wasted send-refuse round trip per rebuild.
+    assertEquals(
+        HostRedefineCapability.NONE,
+        RedefineCapabilities.detect(
+            instrumentation = FakeInstrumentation().apply { redefineSupported = false }
+        ),
+    )
+  }
 }
