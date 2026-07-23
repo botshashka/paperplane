@@ -24,8 +24,8 @@ import org.junit.jupiter.api.io.TempDir
 /**
  * Replays a REAL captured protocol log — `fixtures/protocol-log-real-session.ndjson`, the
  * `dev.protocol-log` tee of an actual `ppl dev` session against Paper 1.21.4 (boot → initial fresh
- * load → structural-edit full reload → body-edit instant patch → comment-edit no-change) — through
- * the CLI's codec and client.
+ * load, then two structural-edit full reloads each followed by a body-edit instant patch, then a
+ * comment-only edit's no-change rebuild) — through the CLI's codec and client.
  *
  * This is the golden source of truth for the wire shape (per the repo's captured-real-fixtures
  * standard): hand-rolled fixtures elsewhere test edge cases, but THIS file pins what the companion
