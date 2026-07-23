@@ -7,7 +7,6 @@ import java.util.logging.Logger
 import java.util.zip.CRC32
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertInstanceOf
-import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -17,10 +16,8 @@ import org.objectweb.asm.Opcodes
 /**
  * Drives [InstantSwapper.apply] end to end with a [FakeInstrumentation], a scripted CRC registry
  * (standing in for the agent's load-hook registry), and real classloaders over ASM-generated
- * classes: the verification ladder (loaded-CRC vs expected), the already-current skip, the JVM
- * veto, and both new-class paths (overlay splice into a URLClassLoader — the test JVM runs with the
- * same `--add-opens` the LaunchSpec guarantees — and refusal on loaders that can't receive
- * classes).
+ * classes: the verification ladder (loaded-CRC vs expected), the already-current skip, and the JVM
+ * veto.
  */
 class InstantSwapperTest {
 
@@ -60,7 +57,6 @@ class InstantSwapperTest {
   private fun swapper(inst: FakeInstrumentation?) =
       InstantSwapper(
           Logger.getLogger("test"),
-          File(tempDir, "overlay"),
           instrumentationProvider = { inst },
           loadedCrcProvider = { loader, name ->
             crcRegistry[loader to name] ?: AgentAccess.UNKNOWN_CRC
@@ -94,7 +90,6 @@ class InstantSwapperTest {
 
     val applied = assertInstanceOf(InstantSwapper.Outcome.Applied::class.java, outcome)
     assertEquals(1, applied.patched)
-    assertEquals(0, applied.defined)
     assertTrue(inst.redefined.single().definitionClassFile.contentEquals(v2))
     assertEquals(
         crc(v2),
@@ -294,54 +289,6 @@ class InstantSwapperTest {
     assertInstanceOf(InstantSwapper.Outcome.Failed::class.java, outcome)
   }
 
-  // ── New classes ─────────────────────────────────────────────────────
-
-  @Test
-  fun `a new class is spliced into a URLClassLoader and becomes loadable from it`() {
-    val fqcn = "com.example.Added"
-    val bytes = generateClass("com/example/Added", 7)
-    val loader = URLClassLoader(emptyArray(), null)
-    val inst = FakeInstrumentation()
-
-    val request =
-        HostInstantSwapRequest(
-            requestId = "i1",
-            pluginName = "Sample",
-            newClasses = listOf(HostInstantClassEntry(fqcn, 0L, b64(bytes))),
-        )
-    val outcome = swapper(inst).apply(request, loader)
-
-    val applied = assertInstanceOf(InstantSwapper.Outcome.Applied::class.java, outcome)
-    assertEquals(1, applied.defined)
-    val loaded = Class.forName(fqcn, false, loader)
-    assertSame(loader, loaded.classLoader, "the new class must load through the plugin loader")
-  }
-
-  @Test
-  fun `a new class on a loader that cannot receive classes fails with the reason`() {
-    val plainLoader = object : ClassLoader(null) {}
-    val request =
-        HostInstantSwapRequest(
-            requestId = "i1",
-            pluginName = "Sample",
-            newClasses =
-                listOf(
-                    HostInstantClassEntry(
-                        "com.example.Added",
-                        0L,
-                        b64(generateClass("com/example/Added", 7)),
-                    )
-                ),
-        )
-
-    // makeLoadable resolves the name through the loader before deciding, so a definition may
-    // have landed somewhere by the time it declines — Failed is the only honest answer.
-    val outcome = swapper(FakeInstrumentation()).apply(request, plainLoader)
-
-    val failed = assertInstanceOf(InstantSwapper.Outcome.Failed::class.java, outcome)
-    assertTrue(failed.reason.contains("cannot receive new classes"), failed.reason)
-  }
-
   @Test
   fun `a verifier rejection reports failed rather than escaping`() {
     // VerifyError and friends are Errors, so a catch on Exception never sees them. Letting one
@@ -372,42 +319,5 @@ class InstantSwapperTest {
 
     val refused = assertInstanceOf(InstantSwapper.Outcome.Refused::class.java, outcome)
     assertTrue(refused.reason.contains("does not support class redefinition"), refused.reason)
-  }
-
-  @Test
-  fun `a new class already visible from another loader is still defined locally`() {
-    // Paper's PluginClassLoader searches the whole plugin group, so a name another plugin exposes
-    // resolves through delegation. Treating that as "already loadable" would leave the plugin's
-    // own class undefined while its code binds to the foreign type.
-    val fqcn = "com.example.Added"
-    val foreign = generateClass("com/example/Added", 1)
-    val mine = generateClass("com/example/Added", 2)
-    val parent = loaderWith(fqcn, foreign)
-    val overlayTarget = File(tempDir, "overlay-child")
-    val child = URLClassLoader(emptyArray(), parent)
-
-    val request =
-        HostInstantSwapRequest(
-            requestId = "i1",
-            pluginName = "Sample",
-            newClasses = listOf(HostInstantClassEntry(fqcn, 0L, b64(mine))),
-        )
-
-    val outcome =
-        InstantSwapper(
-                Logger.getLogger("test"),
-                overlayTarget,
-                instrumentationProvider = { FakeInstrumentation() },
-                loadedCrcProvider = { l, n -> crcRegistry[l to n] ?: AgentAccess.UNKNOWN_CRC },
-                wasPatchedProvider = { l, n -> (l to n) in patchedClasses },
-                crcUpdater = { l, n, c -> crcRegistry[l to n] = c },
-            )
-            .apply(request, child)
-
-    assertInstanceOf(InstantSwapper.Outcome.Applied::class.java, outcome)
-    assertTrue(
-        File(overlayTarget, "com/example/Added.class").exists(),
-        "the plugin's own bytes must be staged, not skipped because a parent exposed the name",
-    )
   }
 }

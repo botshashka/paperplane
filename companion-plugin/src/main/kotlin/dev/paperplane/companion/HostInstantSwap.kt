@@ -4,18 +4,17 @@ import com.google.gson.annotations.SerializedName
 
 /**
  * Mirror of the CLI's `InstantSwapRequest` — same JSON shape, no cross-module dependency. The CLI
- * asks for [classes] to be redefined in place (each verified against
- * [HostInstantClassEntry .expectedCrc32] before anything is touched) and [newClasses] to be made
- * loadable. Applied atomically by [InstantSwapper]; any check that fails refuses the whole request.
+ * asks for [classes] to be redefined in place, each verified against
+ * [HostInstantClassEntry.expectedCrc32] before anything is touched. Applied atomically by
+ * [InstantSwapper]; any check that fails refuses the whole request.
  */
 data class HostInstantSwapRequest(
     val requestId: String = "",
     val pluginName: String = "",
     val classes: List<HostInstantClassEntry> = emptyList(),
-    val newClasses: List<HostInstantClassEntry> = emptyList(),
 )
 
-/** One class payload; [expectedCrc32] is 0 for new classes, which have nothing loaded yet. */
+/** One class payload. */
 data class HostInstantClassEntry(
     val fqcn: String = "",
     val expectedCrc32: Long = 0,
@@ -46,7 +45,6 @@ data class HostInstantSwapReport(
     val requestId: String,
     val status: HostInstantSwapStatus,
     val patched: Int = 0,
-    val defined: Int = 0,
     val appliedClasses: List<String> = emptyList(),
     val reason: String? = null,
 )

@@ -130,10 +130,7 @@ class FakePaperServerManager(
                 requestId = id,
                 status = dev.paperplane.cli.devserver.InstantSwapStatus.OK,
                 patched = 1,
-                appliedClasses =
-                    (requested?.classes.orEmpty() + requested?.newClasses.orEmpty()).map {
-                      it.fqcn
-                    },
+                appliedClasses = requested?.classes.orEmpty().map { it.fqcn },
             )
         )
       }

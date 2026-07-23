@@ -293,8 +293,7 @@ class CompanionSocketServerTest {
 
     client.send(
         """{"type":"instantSwap","requestId":"i1","pluginName":"Sample",""" +
-            """"classes":[{"fqcn":"com.example.Foo","expectedCrc32":42,"data":"QUJD"}],""" +
-            """"newClasses":[{"fqcn":"com.example.New","data":"REVG"}]}"""
+            """"classes":[{"fqcn":"com.example.Foo","expectedCrc32":42,"data":"QUJD"}]}"""
     )
 
     awaitTrue("instantSwap dispatched") { instantSwaps.isNotEmpty() }
@@ -304,8 +303,6 @@ class CompanionSocketServerTest {
     assertEquals("com.example.Foo", request.classes.single().fqcn)
     assertEquals(42L, request.classes.single().expectedCrc32)
     assertEquals("QUJD", request.classes.single().data)
-    assertEquals("com.example.New", request.newClasses.single().fqcn)
-    assertEquals(0L, request.newClasses.single().expectedCrc32)
   }
 
   @Test

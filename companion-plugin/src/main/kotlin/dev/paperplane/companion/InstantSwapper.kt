@@ -1,22 +1,17 @@
 package dev.paperplane.companion
 
-import java.io.File
 import java.lang.instrument.ClassDefinition
 import java.lang.instrument.Instrumentation
 import java.lang.instrument.UnmodifiableClassException
-import java.lang.reflect.InaccessibleObjectException
 import java.net.JarURLConnection
 import java.net.URL
 import java.net.URLClassLoader
 import java.util.Base64
-import java.util.Collections
-import java.util.WeakHashMap
 import java.util.logging.Logger
 import java.util.zip.CRC32
 
 /**
- * Applies an instant patch: verifies, then redefines the request's classes in the live server and
- * makes its new classes loadable.
+ * Applies an instant patch: verifies, then redefines the request's classes in the live server.
  *
  * The safety split with the CLI: the CLI's classifier decides *whether* a change-set is safe to
  * patch; this class verifies the CLI's premise — that the server is actually running the bytes the
@@ -29,30 +24,15 @@ import java.util.zip.CRC32
  * loader's raw source bytes against the baseline; patched classes must match their patch record
  * exactly. Any mismatch refuses the whole request. The JVM's own
  * [UnmodifiableClassException]/[UnsupportedOperationException] veto stays as the final backstop,
- * and `redefineClasses` is all-or-nothing, so a failure never leaves half a patch applied. (New
- * classes made loadable before a vetoed redefine remain defined but unreferenced — old code never
- * names them — so that residue is inert.)
+ * and `redefineClasses` is all-or-nothing, so a failure never leaves half a patch applied.
  */
 class InstantSwapper(
     private val logger: Logger,
-    private val overlayDir: File,
     private val instrumentationProvider: () -> Instrumentation? = { AgentAccess.instrumentation() },
     private val loadedCrcProvider: (ClassLoader, String) -> Long = AgentAccess::loadedCrc,
     private val wasPatchedProvider: (ClassLoader, String) -> Boolean = AgentAccess::wasPatched,
     private val crcUpdater: (ClassLoader, String, Long) -> Unit = AgentAccess::updateCrc,
 ) {
-  companion object {
-    /**
-     * Where [spliceOverlay] stages new classes, relative to the server root. One constant because
-     * two places must agree on it: this splice, and the enable-time wipe in [CompanionPlugin] — a
-     * wipe that missed the directory would leave a previous run's bytecode on the loader's URLs.
-     */
-    const val OVERLAY_PATH = ".paperplane/instant-overlay"
-
-    /** The overlay directory under [serverRoot]. */
-    fun overlayDir(serverRoot: File): File = File(serverRoot, OVERLAY_PATH)
-  }
-
   sealed class Outcome {
     /**
      * Everything applied. [patched] counts redefined + already-current classes; [appliedClasses]
@@ -61,7 +41,6 @@ class InstantSwapper(
      */
     data class Applied(
         val patched: Int,
-        val defined: Int,
         val appliedClasses: List<String>,
     ) : Outcome()
 
@@ -72,10 +51,6 @@ class InstantSwapper(
     data class Failed(val reason: String) : Outcome()
   }
 
-  // Loaders whose URL list already contains the overlay dir. Weak so a torn-down plugin
-  // incarnation's loader doesn't pin.
-  private val splicedLoaders: MutableSet<ClassLoader> = Collections.newSetFromMap(WeakHashMap())
-
   fun apply(request: HostInstantSwapRequest, pluginClassLoader: ClassLoader): Outcome {
     val inst =
         instrumentationProvider() ?: return Outcome.Refused("instrumentation agent not loaded")
@@ -84,14 +59,12 @@ class InstantSwapper(
     }
 
     val patches = decode(request.classes) ?: return Outcome.Failed("undecodable class payload")
-    val additions = decode(request.newClasses) ?: return Outcome.Failed("undecodable class payload")
 
     // Refused promises "nothing was touched", and that promise expires the moment a force-load
-    // defines a class that wasn't loaded before (or a new class is made loadable). Verification is
-    // necessarily interleaved with those side effects — the CRC registry holds nothing for a class
-    // until it loads, which is exactly why the force-load exists — so once one has landed, a later
-    // no is reported as Failed. Both send the CLI down the full swap path; only the promise
-    // differs.
+    // defines a class that wasn't loaded before. Verification is necessarily interleaved with that
+    // side effect — the CRC registry holds nothing for a class until it loads, which is exactly
+    // why the force-load exists — so once one has landed, a later no is reported as Failed. Both
+    // send the CLI down the full swap path; only the promise differs.
     var landed = false
     fun stop(reason: String): Outcome =
         if (landed) Outcome.Failed(reason) else Outcome.Refused(reason)
@@ -153,19 +126,6 @@ class InstantSwapper(
       }
     }
 
-    var defined = 0
-    for ((entry, bytes) in additions) {
-      // makeLoadable resolves the name through the loader before deciding, so it can define a
-      // class (here or in another loader) even on the path that ends in a refusal.
-      val refusal = makeLoadable(pluginClassLoader, entry.fqcn, bytes)
-      landed = true
-      refusal?.let {
-        return stop(it)
-      }
-      defined++
-      applied += entry.fqcn
-    }
-
     if (definitions.isNotEmpty()) {
       try {
         inst.redefineClasses(*definitions.toTypedArray())
@@ -199,7 +159,6 @@ class InstantSwapper(
     }
     return Outcome.Applied(
         patched = definitions.size + alreadyCurrent,
-        defined = defined,
         appliedClasses = applied,
     )
   }
@@ -252,79 +211,6 @@ class InstantSwapper(
         logger.warning("Instant swap payload not decodable: ${e.message}")
         null
       }
-
-  /**
-   * Makes a new class loadable through [loader]. Returns null on success, or a user-facing refusal
-   * reason. Prefers doing nothing (the loader already sees the class — directory-backed loaders
-   * read the CLI's build output), then [DevPluginClassLoader.defineNew] (works with no shared
-   * filesystem), then the overlay-dir `addURL` splice for Paper's jar-backed `PluginClassLoader`.
-   */
-  private fun makeLoadable(loader: ClassLoader, fqcn: String, bytes: ByteArray): String? {
-    try {
-      // Resolving the name is not enough — it must resolve to a class THIS loader defined.
-      // Paper's PluginClassLoader searches the whole plugin-classloader group and
-      // DevPluginClassLoader falls back to other plugins' loaders, so a name another plugin
-      // exposes (an unrelocated shaded package is the realistic case) would otherwise be read as
-      // "already loadable". The plugin's own class would never be defined and its code would bind
-      // to the foreign type. Falling through wins either way: defineNew is child-first, and the
-      // overlay URL is only consulted for names the jar doesn't carry.
-      val existing = Class.forName(fqcn, false, loader)
-      if (existing.classLoader === loader) {
-        // Already defined here. Only "nothing to do" if it is already running these exact bytes —
-        // a directory-backed loader that read the CLI's build output. Otherwise the CLI's premise
-        // (that this class is new) is wrong and it is running a generation we can't redefine into
-        // place, so refuse rather than report it applied.
-        val loadedCrc = loadedCrcProvider(loader, fqcn)
-        if (loadedCrc == crc32(bytes)) return null
-        return "new class $fqcn is already loaded with different bytes — full swap required"
-      }
-    } catch (_: ClassNotFoundException) {} catch (e: LinkageError) {
-      return "new class $fqcn failed to link: ${e.message}"
-    }
-    return when (loader) {
-      is DevPluginClassLoader ->
-          try {
-            loader.defineNew(fqcn, bytes)
-            null
-          } catch (e: LinkageError) {
-            "new class $fqcn could not be defined: ${e.message}"
-          }
-      is URLClassLoader -> spliceOverlay(loader, fqcn, bytes)
-      else ->
-          "plugin classloader ${loader.javaClass.name} cannot receive new classes — " +
-              "full swap required"
-    }
-  }
-
-  /**
-   * Writes [bytes] under [overlayDir] and reflectively `addURL`s the overlay onto [loader] (once
-   * per loader). Requires the server JVM to be launched with `--add-opens
-   * java.base/java.net=ALL-UNNAMED` — which the CLI's LaunchSpec always adds.
-   */
-  private fun spliceOverlay(loader: URLClassLoader, fqcn: String, bytes: ByteArray): String? {
-    val target = File(overlayDir, classPath(fqcn))
-    try {
-      target.parentFile.mkdirs()
-      target.writeBytes(bytes)
-    } catch (e: java.io.IOException) {
-      // Unwritable overlay dir, full disk, or a package path past Windows MAX_PATH. Refusing sends
-      // the CLI down the full swap path; letting it escape would strand the CLI's await instead.
-      return "cannot stage new class $fqcn: ${e.message} — full swap required"
-    }
-    if (loader in splicedLoaders) return null
-    return try {
-      val addUrl = URLClassLoader::class.java.getDeclaredMethod("addURL", URL::class.java)
-      addUrl.isAccessible = true
-      addUrl.invoke(loader, overlayDir.toURI().toURL())
-      splicedLoaders.add(loader)
-      null
-    } catch (e: InaccessibleObjectException) {
-      "cannot splice new classes into ${loader.javaClass.simpleName} " +
-          "(server JVM launched without --add-opens java.base/java.net) — full swap required"
-    } catch (e: ReflectiveOperationException) {
-      "cannot splice new classes: ${e.javaClass.simpleName}: ${e.message} — full swap required"
-    }
-  }
 
   private fun classPath(fqcn: String): String = fqcn.replace('.', '/') + ".class"
 

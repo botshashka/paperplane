@@ -9,10 +9,11 @@ import org.objectweb.asm.tree.MethodNode
  * patch payload or the named escalation reasons. [Fingerprints] decides what counts as a
  * difference; this decides what a difference means.
  *
- * The rule set is a **whitelist**: only change shapes positively argued safe are admitted
- * (retained-method body edits; unannotated added/removed methods; new classes). Everything not
- * recognized escalates — a false "safe" verdict produces silently stale behavior, the exact sin
- * this tool positions against, while a false escalation merely costs one normal swap.
+ * The rule set is a **whitelist**: the only change shape positively argued safe is a retained
+ * method's body edit. Everything else — added/removed methods, new classes, nest changes, and
+ * everything not recognized — escalates with a named reason: a false "safe" verdict produces
+ * silently stale behavior, the exact sin this tool positions against, while a false escalation
+ * merely costs one normal swap.
  *
  * That posture is enforced structurally rather than by enumeration: when every fingerprint compares
  * equal, [Fingerprints.canonicalBytes] re-serializes both sides and escalates if they still differ,
@@ -35,7 +36,6 @@ internal class ChangeClassifier {
   ): InstantClassification {
     val verdict = Verdict()
     val patches = mutableListOf<ClassPatch>()
-    val newClasses = mutableListOf<ClassPatch>()
 
     // Each step is skipped once the verdict has settled on UNSAFE. Nothing a later step could find
     // would change the outcome (UNSAFE is the top of the lattice) or the printed reason (the first
@@ -44,18 +44,14 @@ internal class ChangeClassifier {
     compareLayout(baseline, candidate, verdict)
     if (!verdict.settled) compareResources(baseline, candidate, verdict)
     if (!verdict.settled) compareRemovedClasses(baseline, candidate, verdict)
-    if (!verdict.settled) {
-      compareClasses(baseline, candidate, mainClass, verdict, patches, newClasses)
-    }
+    if (!verdict.settled) compareClasses(baseline, candidate, mainClass, verdict, patches)
 
     // An UNSAFE change-set is never partially applied — drop the payload so no caller can.
     val unsafe = verdict.level == RedefineRequirement.UNSAFE
     return InstantClassification(
         requirement = verdict.level,
         patches = if (unsafe) emptyList() else patches,
-        newClasses = if (unsafe) emptyList() else newClasses,
         escalations = verdict.escalations,
-        additiveNotes = verdict.additiveNotes,
     )
   }
 
@@ -113,25 +109,23 @@ internal class ChangeClassifier {
       mainClass: String,
       verdict: Verdict,
       patches: MutableList<ClassPatch>,
-      newClasses: MutableList<ClassPatch>,
   ) {
     for (fqcn in candidate.classes.keys.sorted()) {
       if (verdict.settled) return
       val newBytes = candidate.classes.getValue(fqcn)
       val oldBytes = baseline.classes[fqcn]
       if (oldBytes == null) {
-        newClasses += ClassPatch(fqcn, 0L, newBytes)
-        verdict.additive(AdditiveNoteKind.NEW_CLASS, "new class ${simple(fqcn)}")
+        verdict.escalate(
+            EscalationKind.CLASS_ADDED,
+            "new class ${simple(fqcn)} — a redefine can't introduce it",
+        )
         continue
       }
       if (oldBytes.contentEquals(newBytes)) continue
 
       val classVerdict = analyzeClass(fqcn, oldBytes, newBytes, mainClass)
       verdict.merge(classVerdict)
-      if (
-          classVerdict.level == RedefineRequirement.BODY_ONLY ||
-              classVerdict.level == RedefineRequirement.ADDITIVE
-      ) {
+      if (classVerdict.level == RedefineRequirement.BODY_ONLY) {
         patches += ClassPatch(fqcn, baseline.classCrc(fqcn), newBytes)
       }
     }
@@ -237,10 +231,10 @@ internal class ChangeClassifier {
       verdict: Verdict,
   ) {
     // Adding a nested/anonymous class rewrites the outer class's InnerClasses/NestMembers
-    // attributes; the stock JVM rejects redefinition on a nest-attribute change, so this needs
-    // the ADDITIVE tier even when every retained body is untouched.
+    // attributes; the JVM rejects redefinition on a nest-attribute change even when every
+    // retained body is untouched.
     if (Fingerprints.nest(oldNode) != Fingerprints.nest(newNode)) {
-      verdict.additive(AdditiveNoteKind.NESTED_CLASS_CHANGE, "nested-class change on $name")
+      verdict.escalate(EscalationKind.NEST_CHANGE, "nested-class change on $name")
     }
   }
 
@@ -292,9 +286,11 @@ internal class ChangeClassifier {
   }
 
   /**
-   * An added method is admissible only when nothing external needs to discover it. The run-once
-   * gates apply here exactly as they do to retained bodies: a newly added `<clinit>` or `onLoad`
-   * would be defined by the JVM and then never invoked.
+   * Every added method escalates — a body-only redefine can't change the member set. The arms
+   * differ only in how specifically the reason can be named: the run-once gates (a newly added
+   * `<clinit>` or `onLoad` would be defined and then never invoked) and the annotation gate (a
+   * framework that scans once would never see it) say *why the change could never take effect*,
+   * which outranks the generic can't-add-members reason.
    */
   private fun addedMethodVerdict(
       method: MethodNode,
@@ -322,9 +318,9 @@ internal class ChangeClassifier {
                   "a redefine can't activate it",
           )
       else ->
-          verdict.additive(
-              AdditiveNoteKind.METHOD_ADDED,
-              "method ${method.name} added on $name",
+          verdict.escalate(
+              EscalationKind.METHOD_ADDED,
+              "method ${method.name} added on $name — a redefine can't add members",
           )
     }
   }
@@ -336,7 +332,10 @@ internal class ChangeClassifier {
           "removed ${Fingerprints.annotationLabel(method)} method ${method.name} on $name",
       )
     } else {
-      verdict.additive(AdditiveNoteKind.METHOD_REMOVED, "method ${method.name} removed on $name")
+      verdict.escalate(
+          EscalationKind.METHOD_REMOVED,
+          "method ${method.name} removed on $name — a redefine can't remove members",
+      )
     }
   }
 
@@ -428,7 +427,6 @@ internal class ChangeClassifier {
       private set
 
     val escalations = mutableListOf<Escalation>()
-    val additiveNotes = mutableListOf<AdditiveNote>()
 
     /** True once the verdict can no longer improve — traversal may stop. */
     val settled: Boolean
@@ -443,14 +441,8 @@ internal class ChangeClassifier {
       raise(RedefineRequirement.UNSAFE)
     }
 
-    fun additive(kind: AdditiveNoteKind, description: String) {
-      additiveNotes += AdditiveNote(kind, description)
-      raise(RedefineRequirement.ADDITIVE)
-    }
-
     fun merge(other: Verdict) {
       escalations += other.escalations
-      additiveNotes += other.additiveNotes
       raise(other.level)
     }
   }

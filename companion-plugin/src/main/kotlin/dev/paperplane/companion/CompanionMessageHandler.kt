@@ -39,9 +39,7 @@ class CompanionMessageHandler(
      * other collaborator so the applied/failed answer paths are reachable in tests — the real one
      * needs a live agent and a live plugin classloader, which no test can stand up.
      */
-    private val instantSwapperProvider: () -> InstantSwapper = {
-      InstantSwapper(plugin.logger, InstantSwapper.overlayDir(serverRoot))
-    },
+    private val instantSwapperProvider: () -> InstantSwapper = { InstantSwapper(plugin.logger) },
 ) {
   companion object {
     /** Streamed stage sent when a load request is accepted for dispatch. */
@@ -221,7 +219,6 @@ class CompanionMessageHandler(
     fun answer(
         status: HostInstantSwapStatus,
         patched: Int = 0,
-        defined: Int = 0,
         appliedClasses: List<String> = emptyList(),
         reason: String? = null,
     ) {
@@ -230,7 +227,6 @@ class CompanionMessageHandler(
               requestId = request.requestId,
               status = status,
               patched = patched,
-              defined = defined,
               appliedClasses = appliedClasses,
               reason = reason,
           )
@@ -267,7 +263,6 @@ class CompanionMessageHandler(
         answer(
             HostInstantSwapStatus.OK,
             patched = outcome.patched,
-            defined = outcome.defined,
             appliedClasses = outcome.appliedClasses,
         )
         broadcast(Component.text("${request.pluginName} patched!", NamedTextColor.GREEN))

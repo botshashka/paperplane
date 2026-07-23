@@ -63,7 +63,6 @@ class CompanionPlugin : JavaPlugin() {
               ipc = socket,
           )
       socketServer = socket
-      wipeInstantOverlay()
       socket.start(serverRoot())
 
       server.pluginManager.registerEvents(errorCatcher, this)
@@ -101,27 +100,6 @@ class CompanionPlugin : JavaPlugin() {
    * `<serverRoot>/plugins/<plugin-name>`, so the root is two levels up.
    */
   private fun serverRoot(): File = dataFolder.absoluteFile.parentFile.parentFile
-
-  /**
-   * Clears the spliced new-class overlay. Run on enable AND on disable, and the enable wipe is the
-   * load-bearing one: the overlay is only ever appended to a loader's URL list, so its bytes can
-   * shadow nothing this incarnation defines — but a *previous* run's classes sitting there when
-   * this server boots would resolve as if they were current. The disable wipe is hygiene, and it
-   * cannot be relied on (a killed process never runs it), which is why enable wipes too.
-   *
-   * A failed delete is logged, never ignored: the overlay is stale bytecode, so silently leaving it
-   * behind is the one outcome that could serve a class nobody built.
-   */
-  private fun wipeInstantOverlay() {
-    val overlay = InstantSwapper.overlayDir(serverRoot())
-    if (!overlay.exists()) return
-    if (!overlay.deleteRecursively()) {
-      logger.warning(
-          "Could not fully clear ${overlay.path} — a previous run's instant-patch classes may " +
-              "still be on the plugin classloader's search path."
-      )
-    }
-  }
 
   /**
    * Writes a companion startup failure to `.paperplane/companion-error` so the CLI's dial loop can
@@ -167,7 +145,6 @@ class CompanionPlugin : JavaPlugin() {
         @Suppress("TooGenericExceptionCaught") // Defensive — plugin may be partially initialized
         _: Exception) {}
     socketServer = null
-    wipeInstantOverlay()
     logger.info("PaperPlane companion disabled")
   }
 }

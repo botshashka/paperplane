@@ -89,13 +89,6 @@ class CompanionWireTest {
                         data = "QUJD",
                     )
                 ),
-            newClasses =
-                listOf(
-                    dev.paperplane.cli.devserver.InstantClassEntry(
-                        fqcn = "com.example.New",
-                        data = "REVG",
-                    )
-                ),
         )
 
     val obj = parse(CompanionWire.encodeInstantSwap(request))
@@ -107,24 +100,19 @@ class CompanionWireTest {
     assertEquals("com.example.Foo", entry.get("fqcn").asString)
     assertEquals(42L, entry.get("expectedCrc32").asLong)
     assertEquals("QUJD", entry.get("data").asString)
-    val newEntry = obj.getAsJsonArray("newClasses").single().asJsonObject
-    assertEquals("com.example.New", newEntry.get("fqcn").asString)
-    assertEquals(0L, newEntry.get("expectedCrc32").asLong)
   }
 
   @Test
   fun `decodes an instantReport into the typed event`() {
     val event =
         CompanionWire.decode(
-            """{"type":"instantReport","requestId":"i1","status":"ok","patched":2,""" +
-                """"defined":1}"""
+            """{"type":"instantReport","requestId":"i1","status":"ok","patched":2}"""
         )
 
     val report = (event as CompanionEvent.InstantReport).report
     assertEquals("i1", report.requestId)
     assertEquals(dev.paperplane.cli.devserver.InstantSwapStatus.OK, report.status)
     assertEquals(2, report.patched)
-    assertEquals(1, report.defined)
   }
 
   @Test
@@ -148,13 +136,6 @@ class CompanionWireTest {
                 """"capability":"body-only"}"""
         ) as CompanionEvent.Welcome
     assertEquals(RedefineCapability.BODY_ONLY, bodyOnly.capability)
-
-    val additive =
-        CompanionWire.decode(
-            """{"type":"welcome","protocolVersion":4,"serverReady":true,""" +
-                """"capability":"additive"}"""
-        ) as CompanionEvent.Welcome
-    assertEquals(RedefineCapability.ADDITIVE, additive.capability)
 
     val absent =
         CompanionWire.decode("""{"type":"welcome","protocolVersion":4,"serverReady":false}""")

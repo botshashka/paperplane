@@ -183,7 +183,7 @@ internal open class BlueGreenMode(
           metadata,
           "localhost:${PaperServerManager.DEFAULT_PORT} (via proxy)",
           "blue-green (zero-downtime)",
-          instantLabel = lane.capabilityLabel(servers[activeSlot]!!, metadata),
+          instantLabel = lane.capabilityLabel(servers[activeSlot]!!),
       )
       outcome = StartupOutcome.Running(state)
       PhaseEnd.Watching

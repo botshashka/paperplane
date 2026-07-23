@@ -231,8 +231,8 @@ class InstantLaneTest {
   }
 
   @Test
-  fun `an additive change on a body-only JVM escalates naming the shortfall`() {
-    val setup = setup(capability = RedefineCapability.BODY_ONLY)
+  fun `an added method escalates naming the method`() {
+    val setup = setup()
     writeClass("com.example.Logic", bodyV(1))
     seed(setup)
     writeClass(
@@ -250,30 +250,8 @@ class InstantLaneTest {
     val outcome = attempt(setup)
 
     val escalate = assertInstanceOf(InstantOutcome.Escalate::class.java, outcome)
-    assertTrue(
-        escalate.reason!!.contains("method helper added") && escalate.reason!!.contains("JBR"),
-        escalate.reason,
-    )
-  }
-
-  @Test
-  fun `the same additive change patches on an additive JVM`() {
-    val setup = setup(capability = RedefineCapability.ADDITIVE)
-    writeClass("com.example.Logic", bodyV(1))
-    seed(setup)
-    writeClass(
-        "com.example.Logic",
-        BytecodeFixtures.generateClass(
-            name = "com/example/Logic",
-            methods =
-                listOf(
-                    MethodSpec("tick", body = BytecodeFixtures.bodyReturning(1)),
-                    MethodSpec("helper"),
-                ),
-        ),
-    )
-
-    assertInstanceOf(InstantOutcome.Patched::class.java, attempt(setup))
+    assertTrue(escalate.reason.contains("method helper added"), escalate.reason)
+    assertTrue(setup.server.sentInstantSwaps.isEmpty())
   }
 
   @Test
@@ -355,63 +333,18 @@ class InstantLaneTest {
     assertTrue(setup.fixture.terminal.writes.any { it.contains("Build failed") })
   }
 
-  // ── Reflection-framework cap ────────────────────────────────────────
-
-  @Test
-  fun `an additive JVM is capped to body-only when a reflection framework is on the classpath`() {
-    val setup =
-        setup(
-            capability = RedefineCapability.ADDITIVE,
-            metadata = metadata(depend = listOf("Skript")),
-        )
-    writeClass("com.example.Logic", bodyV(1))
-    seed(setup)
-    writeClass(
-        "com.example.Logic",
-        BytecodeFixtures.generateClass(
-            name = "com/example/Logic",
-            methods =
-                listOf(
-                    MethodSpec("tick", body = BytecodeFixtures.bodyReturning(1)),
-                    MethodSpec("helper"),
-                ),
-        ),
-    )
-
-    val outcome = attempt(setup)
-
-    val escalate = assertInstanceOf(InstantOutcome.Escalate::class.java, outcome)
-    assertTrue(escalate.reason!!.contains("Skript"), escalate.reason)
-    assertEquals(
-        "body-only (capped: Skript discovers methods reflectively)",
-        setup.lane.capabilityLabel(setup.server, setup.metadata),
-    )
-  }
-
   // ── Capability banner ───────────────────────────────────────────────
 
   @Test
   fun `the capability label always reports the tier ceiling and why`() {
-    val additive = setup(capability = RedefineCapability.ADDITIVE)
-    assertEquals(
-        "additive (JBR enhanced redefinition)",
-        additive.lane.capabilityLabel(additive.server, additive.metadata),
-    )
-
     val bodyOnly = setup()
-    assertEquals("body-only", bodyOnly.lane.capabilityLabel(bodyOnly.server, bodyOnly.metadata))
+    assertEquals("body-only", bodyOnly.lane.capabilityLabel(bodyOnly.server))
 
     val none = setup(capability = RedefineCapability.NONE)
-    assertEquals(
-        "off (no agent in the server JVM)",
-        none.lane.capabilityLabel(none.server, none.metadata),
-    )
+    assertEquals("off (no agent in the server JVM)", none.lane.capabilityLabel(none.server))
 
     val disabled = setup(instantEnabled = false)
-    assertEquals(
-        "off (dev.instant: false)",
-        disabled.lane.capabilityLabel(disabled.server, disabled.metadata),
-    )
+    assertEquals("off (dev.instant: false)", disabled.lane.capabilityLabel(disabled.server))
   }
 
   // ── Metadata invalidation ───────────────────────────────────────────

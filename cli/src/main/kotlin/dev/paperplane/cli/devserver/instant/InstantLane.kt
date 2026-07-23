@@ -17,8 +17,7 @@ import java.io.File
  * [CompileFailed] ends the rebuild as a build failure.
  */
 internal sealed class InstantOutcome {
-  data class Patched(val patchedCount: Int, val definedCount: Int, val durationMs: Long) :
-      InstantOutcome()
+  data class Patched(val patchedCount: Int, val durationMs: Long) : InstantOutcome()
 
   /** The rebuild produced no observable bytecode/resource change — nothing to do, say so. */
   object NoChange : InstantOutcome()
@@ -79,19 +78,10 @@ internal class InstantLane(private val session: DevSession) {
     preconditionFailure(serverManager, confirmed, fastMeta)?.let {
       return InstantOutcome.Escalate(it)
     }
-    val (capability, capNote) = effectiveCapability(serverManager, metadata)
-    return if (capability == RedefineCapability.NONE) {
+    return if (serverManager.redefineCapability() == RedefineCapability.NONE) {
       InstantOutcome.Escalate("server JVM reports no redefine capability")
     } else {
-      classifyAndSend(
-          serverManager,
-          metadata,
-          baseline,
-          confirmed!!,
-          fastMeta!!,
-          capability,
-          capNote,
-      )
+      classifyAndSend(serverManager, metadata, baseline, confirmed!!, fastMeta!!)
     }
   }
 
@@ -114,32 +104,23 @@ internal class InstantLane(private val session: DevSession) {
     return true
   }
 
-  @Suppress("LongParameterList") // Every argument is one resolved precondition; bundling them into
-  // a holder would only move the same list one call up.
   private fun classifyAndSend(
       serverManager: PaperServerManager,
       metadata: ProjectMetadata,
       baseline: BaselineTracker,
       confirmed: BuildCandidate,
       fastMeta: ProjectMetadata,
-      capability: RedefineCapability,
-      capNote: String?,
   ): InstantOutcome {
     val candidate = capture(fastMeta)
     val classification = classifier.classify(confirmed, candidate, metadata.mainClass)
-    return when {
-      classification.requirement == RedefineRequirement.NONE -> InstantOutcome.NoChange
-      classification.requirement == RedefineRequirement.UNSAFE ->
+    return when (classification.requirement) {
+      RedefineRequirement.NONE -> InstantOutcome.NoChange
+      RedefineRequirement.UNSAFE ->
           InstantOutcome.Escalate(
               classification.escalations.firstOrNull()?.description ?: "unsafe change"
           )
-      !fitsWithin(classification.requirement, capability) ->
-          InstantOutcome.Escalate(
-              (classification.additiveNotes.firstOrNull()?.description ?: "structural change") +
-                  " — " +
-                  (capNote ?: "needs JBR enhanced redefinition (dev.jbr: on)")
-          )
-      else -> sendAndAwait(serverManager, metadata, baseline, candidate, classification)
+      RedefineRequirement.BODY_ONLY ->
+          sendAndAwait(serverManager, metadata, baseline, candidate, classification)
     }
   }
 
@@ -186,18 +167,6 @@ internal class InstantLane(private val session: DevSession) {
         InstantOutcome.Disabled -> null
       }
 
-  /** Requirement-vs-capability lattice: patch iff the live JVM admits everything in the set. */
-  private fun fitsWithin(
-      requirement: RedefineRequirement,
-      capability: RedefineCapability,
-  ): Boolean =
-      when (requirement) {
-        RedefineRequirement.NONE -> true
-        RedefineRequirement.BODY_ONLY -> capability >= RedefineCapability.BODY_ONLY
-        RedefineRequirement.ADDITIVE -> capability >= RedefineCapability.ADDITIVE
-        RedefineRequirement.UNSAFE -> false
-      }
-
   private fun sendAndAwait(
       serverManager: PaperServerManager,
       metadata: ProjectMetadata,
@@ -210,7 +179,6 @@ internal class InstantLane(private val session: DevSession) {
             requestId = newRequestId(),
             pluginName = metadata.pluginName,
             classes = classification.patches.map { InstantSwapRequest.entry(it) },
-            newClasses = classification.newClasses.map { InstantSwapRequest.entry(it) },
         )
     val patchStart = System.currentTimeMillis()
     if (!serverManager.sendInstantSwap(request)) {
@@ -227,7 +195,6 @@ internal class InstantLane(private val session: DevSession) {
               baseline.confirmPatched(candidate, result.report.appliedClasses)
               InstantOutcome.Patched(
                   patchedCount = result.report.patched,
-                  definedCount = result.report.defined,
                   durationMs = System.currentTimeMillis() - patchStart,
               )
             }
@@ -248,8 +215,8 @@ internal class InstantLane(private val session: DevSession) {
   ) {
     val totalDuration = session.formatDuration(System.currentTimeMillis() - totalStart)
     session.ui.success(
-        "Patched ${outcome.patchedCount + outcome.definedCount} " +
-            (if (outcome.patchedCount + outcome.definedCount == 1) "class" else "classes") +
+        "Patched ${outcome.patchedCount} " +
+            (if (outcome.patchedCount == 1) "class" else "classes") +
             " (instant)",
         session.formatDuration(outcome.durationMs),
     )
@@ -281,31 +248,13 @@ internal class InstantLane(private val session: DevSession) {
    * The session-start banner value for "Instant:" — always report the tier ceiling and why.
    * Resolved against the live server, so it must be called after the companion handshake.
    */
-  fun capabilityLabel(serverManager: PaperServerManager, metadata: ProjectMetadata): String {
-    if (!session.config.dev.instant) return "off (dev.instant: false)"
-    val (capability, capNote) = effectiveCapability(serverManager, metadata)
-    return when {
-      capability == RedefineCapability.NONE -> "off (no agent in the server JVM)"
-      capability == RedefineCapability.ADDITIVE -> "additive (JBR enhanced redefinition)"
-      capNote != null -> "body-only ($capNote)"
-      else -> "body-only"
-    }
-  }
-
-  /**
-   * The live JVM's capability, capped to body-only when a curated reflection-discovery framework is
-   * present (see [ReflectionFrameworkList]); the note says why so the cap is never silent.
-   */
-  private fun effectiveCapability(
-      serverManager: PaperServerManager,
-      metadata: ProjectMetadata,
-  ): Pair<RedefineCapability, String?> {
-    val raw = serverManager.redefineCapability()
-    if (raw != RedefineCapability.ADDITIVE) return raw to null
-    val hit = ReflectionFrameworkList.match(metadata)
-    return if (hit == null) raw to null
-    else RedefineCapability.BODY_ONLY to "capped: $hit discovers methods reflectively"
-  }
+  fun capabilityLabel(serverManager: PaperServerManager): String =
+      when {
+        !session.config.dev.instant -> "off (dev.instant: false)"
+        serverManager.redefineCapability() == RedefineCapability.NONE ->
+            "off (no agent in the server JVM)"
+        else -> "body-only"
+      }
 
   private fun fastMeta(): ProjectMetadata? = session.fastMetadata()
 

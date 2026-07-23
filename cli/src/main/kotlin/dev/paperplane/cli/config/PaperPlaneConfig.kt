@@ -116,10 +116,9 @@ data class DevConfig(
     val mode: DevMode = DevMode.HOT_RELOAD,
     val jbr: String = "auto",
     /**
-     * The instant tier: per rebuild, method-body-only (and, on JBR, additive-structural) changes
-     * are redefined in the live server in place instead of going through the mode's swap path.
-     * Disabling only skips the fast lane — the agent stays attached and every mode behaves as
-     * before.
+     * The instant tier: per rebuild, method-body-only changes are redefined in the live server in
+     * place instead of going through the mode's swap path. Disabling only skips the fast lane — the
+     * agent stays attached and every mode behaves as before.
      */
     val instant: Boolean = true,
     /**

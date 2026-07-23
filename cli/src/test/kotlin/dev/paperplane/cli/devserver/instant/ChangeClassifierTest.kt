@@ -125,34 +125,40 @@ class ChangeClassifierTest {
     assertEquals(RedefineRequirement.NONE, result.requirement)
   }
 
-  // ── ADDITIVE ────────────────────────────────────────────────────────
+  // ── UNSAFE: structural changes ──────────────────────────────────────
 
   @Test
-  fun `an added unannotated method is ADDITIVE`() {
+  fun `an added unannotated method is UNSAFE with a reason naming the method`() {
     val old = BytecodeFixtures.generateClass(methods = listOf(MethodSpec("tick")))
     val new =
         BytecodeFixtures.generateClass(methods = listOf(MethodSpec("tick"), MethodSpec("helper")))
 
     val result = classify(mapOf("com.example.Test" to old), mapOf("com.example.Test" to new))
 
-    assertEquals(RedefineRequirement.ADDITIVE, result.requirement)
-    assertEquals(1, result.patches.size)
-    assertTrue(result.escalations.isEmpty())
+    assertEquals(RedefineRequirement.UNSAFE, result.requirement)
+    assertEquals(setOf(EscalationKind.METHOD_ADDED), kinds(result))
+    assertTrue(
+        result.escalations[0].description.contains("helper"),
+        "escalation must name the added method; got: ${result.escalations[0].description}",
+    )
+    assertTrue(result.patches.isEmpty())
   }
 
   @Test
-  fun `a removed unannotated method is ADDITIVE`() {
+  fun `a removed unannotated method is UNSAFE with a reason naming the method`() {
     val old =
         BytecodeFixtures.generateClass(methods = listOf(MethodSpec("tick"), MethodSpec("helper")))
     val new = BytecodeFixtures.generateClass(methods = listOf(MethodSpec("tick")))
 
     val result = classify(mapOf("com.example.Test" to old), mapOf("com.example.Test" to new))
 
-    assertEquals(RedefineRequirement.ADDITIVE, result.requirement)
+    assertEquals(RedefineRequirement.UNSAFE, result.requirement)
+    assertEquals(setOf(EscalationKind.METHOD_REMOVED), kinds(result))
+    assertTrue(result.escalations[0].description.contains("helper"))
   }
 
   @Test
-  fun `a new class is ADDITIVE and lands in newClasses with crc zero`() {
+  fun `a new class is UNSAFE with a reason naming it and carries no payload`() {
     val existing = BytecodeFixtures.generateClass(methods = listOf(MethodSpec("tick")))
     val added = BytecodeFixtures.generateClass(name = "com/example/Added")
 
@@ -162,14 +168,14 @@ class ChangeClassifierTest {
             mapOf("com.example.Test" to existing, "com.example.Added" to added),
         )
 
-    assertEquals(RedefineRequirement.ADDITIVE, result.requirement)
-    assertEquals(listOf("com.example.Added"), result.newClasses.map { it.fqcn })
-    assertEquals(0L, result.newClasses[0].expectedLoadedCrc32)
-    assertTrue(result.patches.isEmpty(), "the untouched class must not be patched")
+    assertEquals(RedefineRequirement.UNSAFE, result.requirement)
+    assertEquals(setOf(EscalationKind.CLASS_ADDED), kinds(result))
+    assertTrue(result.escalations[0].description.contains("Added"))
+    assertTrue(result.patches.isEmpty(), "an UNSAFE change-set must never carry a payload")
   }
 
   @Test
-  fun `an inner-class attribute change alone is ADDITIVE`() {
+  fun `an inner-class attribute change alone is UNSAFE`() {
     val old = BytecodeFixtures.generateClass(methods = listOf(MethodSpec("tick")))
     val new =
         BytecodeFixtures.generateClass(
@@ -179,8 +185,8 @@ class ChangeClassifierTest {
 
     val result = classify(mapOf("com.example.Test" to old), mapOf("com.example.Test" to new))
 
-    assertEquals(RedefineRequirement.ADDITIVE, result.requirement)
-    assertTrue(result.escalations.isEmpty())
+    assertEquals(RedefineRequirement.UNSAFE, result.requirement)
+    assertEquals(setOf(EscalationKind.NEST_CHANGE), kinds(result))
   }
 
   // ── UNSAFE: lifecycle gate ──────────────────────────────────────────
@@ -213,7 +219,7 @@ class ChangeClassifierTest {
             description.contains("Arena"),
         "escalation must name annotation, method and class; got: $description",
     )
-    assertTrue(result.patches.isEmpty() && result.newClasses.isEmpty())
+    assertTrue(result.patches.isEmpty())
   }
 
   @Test
@@ -450,14 +456,14 @@ class ChangeClassifierTest {
 
     assertEquals(RedefineRequirement.UNSAFE, result.requirement)
     assertTrue(
-        result.patches.isEmpty() && result.newClasses.isEmpty(),
+        result.patches.isEmpty(),
         "an UNSAFE change-set must never carry a partial payload",
     )
     assertEquals(setOf(EscalationKind.FIELD_CHANGE), kinds(result))
   }
 
   @Test
-  fun `body change plus new class is ADDITIVE with both payloads`() {
+  fun `body change plus new class is UNSAFE and drops the body patch too`() {
     val bodyOld =
         BytecodeFixtures.generateClass(
             name = "com/example/A",
@@ -476,16 +482,19 @@ class ChangeClassifierTest {
             mapOf("com.example.A" to bodyNew, "com.example.New" to added),
         )
 
-    assertEquals(RedefineRequirement.ADDITIVE, result.requirement)
-    assertEquals(listOf("com.example.A"), result.patches.map { it.fqcn })
-    assertEquals(listOf("com.example.New"), result.newClasses.map { it.fqcn })
+    assertEquals(RedefineRequirement.UNSAFE, result.requirement)
+    assertEquals(setOf(EscalationKind.CLASS_ADDED), kinds(result))
+    assertTrue(
+        result.patches.isEmpty(),
+        "the safe body edit must not ship while the change-set as a whole escalates",
+    )
   }
 
   // ── Run-once gates on ADDED members ─────────────────────────────────
   //
-  // The JVM will happily define these; it will simply never call them. Only the retained-method
-  // branch used to gate them, so an addition slipped through as ADDITIVE and the CLI reported a
-  // patch that could not have taken effect.
+  // The JVM will happily define these; it will simply never call them. Every added method
+  // escalates; these pin that the run-once shapes keep their sharper why-it-could-never-take-
+  // effect reasons instead of the generic can't-add-members one.
 
   @Test
   fun `an added static initializer is UNSAFE`() {

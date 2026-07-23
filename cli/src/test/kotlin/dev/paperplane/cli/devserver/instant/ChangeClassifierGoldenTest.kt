@@ -65,10 +65,16 @@ class ChangeClassifierGoldenTest {
   }
 
   @Test
-  fun `classifies a real javac added method as ADDITIVE`() {
+  fun `a real javac added method escalates with a reason naming the method`() {
     val result = classify("probe.Greeter", "java-Greeter-v1.class", "java-Greeter-v3-added.class")
 
-    assertEquals(RedefineRequirement.ADDITIVE, result.requirement, escalationsOf(result))
+    assertEquals(RedefineRequirement.UNSAFE, result.requirement, escalationsOf(result))
+    assertTrue(
+        result.escalations.any {
+          it.kind == EscalationKind.METHOD_ADDED && it.description.contains("format")
+        },
+        "expected a METHOD_ADDED escalation naming the added method; got ${escalationsOf(result)}",
+    )
   }
 
   // ── kotlinc ─────────────────────────────────────────────────────────
@@ -88,19 +94,25 @@ class ChangeClassifierGoldenTest {
 
   /**
    * Adding a Kotlin declaration moves `@kotlin.Metadata`'s `d1`/`d2` **and** attaches
-   * `org.jetbrains.annotations.@NotNull` to the new method — two independent mechanisms that both
-   * escalate to UNSAFE unless compiler-emitted annotations are excluded. Without that exclusion the
-   * ADDITIVE tier can never fire for a Kotlin plugin, and the printed reason names `@NotNull`,
-   * which is not why.
+   * `org.jetbrains.annotations.@NotNull` to the new method. Every added method escalates, but the
+   * compiler-annotation denylist decides *which reason prints*: without it the escalation would
+   * name `@NotNull` or a class-declaration change — compiler noise, not the user's edit. The honest
+   * reason names the method.
    */
   @Test
-  fun `classifies a real kotlinc added method as ADDITIVE, not UNSAFE`() {
+  fun `a real kotlinc added method escalates naming the method, not compiler noise`() {
     val result = classify("probe.Probe", "kotlin-Probe-v1.class", "kotlin-Probe-v3-added.class")
 
-    assertEquals(RedefineRequirement.ADDITIVE, result.requirement, escalationsOf(result))
+    assertEquals(RedefineRequirement.UNSAFE, result.requirement, escalationsOf(result))
     assertTrue(
-        result.additiveNotes.any { it.description.contains("format") },
-        "expected an additive note naming the added method, got ${result.additiveNotes}",
+        result.escalations.any {
+          it.kind == EscalationKind.METHOD_ADDED && it.description.contains("format")
+        },
+        "expected a METHOD_ADDED escalation naming the added method; got ${escalationsOf(result)}",
+    )
+    assertTrue(
+        result.escalations.none { it.description.contains("NotNull") },
+        "the printed reason must name the user's edit, not kotlinc's @NotNull noise",
     )
   }
 

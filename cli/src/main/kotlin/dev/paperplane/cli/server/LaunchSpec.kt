@@ -32,14 +32,10 @@ data class LaunchSpec(
 ) {
   companion object {
     /**
-     * Opens `java.net` to reflective access. The instant tier's new-class splice calls
-     * `URLClassLoader.addURL` reflectively on Paper's jar-backed plugin classloader, which JDK 17+
-     * rejects with `InaccessibleObjectException` unless this open is present at launch.
-     */
-    const val ADD_OPENS_JAVA_NET = "--add-opens=java.base/java.net=ALL-UNNAMED"
-
-    /**
      * JBR-only flag lifting class redefinition from body-only to structural (add/remove members).
+     * The instant tier never uses that headroom (it is body-only by design, ADR 0005); the flag is
+     * armed for the user's own tooling — an IDE debugger attached to a `dev.jbr` server gets
+     * structural hotswap over JDWP.
      */
     const val ENHANCED_REDEFINITION = "-XX:+AllowEnhancedClassRedefinition"
 
@@ -55,7 +51,6 @@ data class LaunchSpec(
             jvmArgs =
                 buildList {
                   addAll(baseJvmArgs)
-                  add(ADD_OPENS_JAVA_NET)
                   if (isJbr) add(ENHANCED_REDEFINITION)
                 },
             recordedPackages = recordedPackages,
