@@ -52,7 +52,6 @@ open class GradleBridge(private val projectDir: File, private val ui: TerminalUI
   companion object {
     private const val MAX_DISPLAYED_ERRORS = 5
     private const val MAX_FALLBACK_LINES = 10
-    private const val MAX_DISPLAYED_ERROR_LINES = 30
     internal val BUILD_ERROR_PATTERN = Regex("""(.+\.(?:java|kt)):(\d+): error: (.+)""")
 
     /**
@@ -116,42 +115,6 @@ open class GradleBridge(private val projectDir: File, private val ui: TerminalUI
     var root: Throwable = e
     while (root.cause != null && root.cause !== root) root = root.cause!!
     return root.message?.lines()?.firstOrNull { it.isNotBlank() } ?: e.message ?: "unknown error"
-  }
-
-  data class FormatResult(
-      val success: Boolean,
-      val taskMissing: Boolean = false,
-      val rootMessage: String? = null,
-      val outputLines: List<String> = emptyList(),
-  )
-
-  open fun format(check: Boolean = false): FormatResult {
-    val task = if (check) "spotlessCheck" else "spotlessApply"
-    val stdout = ByteArrayOutputStream()
-    val stderr = ByteArrayOutputStream()
-    return try {
-      connect().newBuild().forTasks(task).setStandardOutput(stdout).setStandardError(stderr).run()
-      FormatResult(success = true)
-    } catch (e: GradleConnectionException) {
-      val rootMsg = rootCauseMessage(e)
-      // Detecting "task not found" from the exception (rather than pre-loading the GradleProject
-      // model via Tooling API) skips a full configuration phase on the happy path.
-      if (isTaskNotFoundMessage(rootMsg, task) || isTaskNotFoundMessage(e.message, task)) {
-        return FormatResult(success = false, taskMissing = true)
-      }
-
-      val combined = stderr.toString() + stdout.toString()
-      val errorLines =
-          combined
-              .lines()
-              .map { it.trimEnd() }
-              .dropWhile {
-                !it.startsWith("FAILURE") && !it.contains("error:") && !it.contains("Exception")
-              }
-              .filter { it.isNotBlank() }
-              .take(MAX_DISPLAYED_ERROR_LINES)
-      FormatResult(success = false, rootMessage = rootMsg, outputLines = errorLines)
-    }
   }
 
   open fun test(quiet: Boolean = false, filter: String? = null): Boolean {

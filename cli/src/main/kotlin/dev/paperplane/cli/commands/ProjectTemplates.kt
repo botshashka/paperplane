@@ -364,12 +364,6 @@ internal object ProjectTemplates {
         ppl test
         ```
 
-        ## Format
-
-        ```bash
-        ppl format
-        ```
-
         ## Build
 
         ```bash

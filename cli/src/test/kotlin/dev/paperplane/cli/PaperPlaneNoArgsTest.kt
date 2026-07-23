@@ -31,9 +31,10 @@ class PaperPlaneNoArgsTest {
       info("dev", "Start dev server with file watching")
       info("create", "Scaffold a new Paper plugin project")
       info("init", "Add PaperPlane to an existing project")
+      info("build", "Build the deployable plugin jar")
       info("test", "Run tests via Gradle")
-      info("format", "Format source code with Spotless")
       info("clean", "Clean .paperplane directory")
+      info("plugin", "Manage dev-server plugin dependencies")
       info("upgrade", "Update ppl to the latest version")
       info("implode", "Uninstall ppl completely")
       blank()
@@ -41,8 +42,9 @@ class PaperPlaneNoArgsTest {
     }
     ui.endView()
 
-    // Verify all 8 command names appear
-    val commands = listOf("dev", "create", "init", "test", "format", "clean", "upgrade", "implode")
+    // Verify all listed command names appear
+    val commands =
+        listOf("dev", "create", "init", "build", "test", "clean", "plugin", "upgrade", "implode")
     for (cmd in commands) {
       assertTrue(
           terminal.writes.any { it.contains("  ➜  $cmd  ") },
