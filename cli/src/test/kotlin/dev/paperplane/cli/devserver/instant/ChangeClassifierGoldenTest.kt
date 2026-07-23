@@ -25,6 +25,15 @@ import org.junit.jupiter.api.Test
  *   public String format(String name) { return name.toUpperCase(); } // v3-added only
  * }
  *
+ * // java-Marked-v{1,2-typeanno-body}.class — javac 21
+ * package probe;
+ * import java.lang.annotation.*;
+ * @Target(ElementType.TYPE_USE) @Retention(RetentionPolicy.RUNTIME) public @interface Tag {}
+ *
+ * package probe;
+ * public class Marked { public String greet(String n) { return "hello " + n; } }
+ * // v2-typeanno-body: public @Tag String greet(String n) { return "goodbye " + n; }
+ *
  * // kotlin-Probe-v{1,2-body,3-added}.class — kotlinc 2.3.20, jvmToolchain(21)
  * package probe
  * class Probe {
@@ -75,6 +84,26 @@ class ChangeClassifierGoldenTest {
         },
         "expected a METHOD_ADDED escalation naming the added method; got ${escalationsOf(result)}",
     )
+  }
+
+  /**
+   * The BODY_ONLY backstop against real compiler output. A type annotation is the credible
+   * unmodeled declaration change: javac attaches it as `RuntimeVisibleTypeAnnotations`, the JVM
+   * accepts the redefinition without complaint, and a framework that scans type annotations once
+   * never sees it — so nothing but this check stands between a body edit carrying one and a
+   * silently stale server.
+   */
+  @Test
+  fun `a real javac body edit with a type-annotation change escalates as unmodeled`() {
+    val result =
+        classify("probe.Marked", "java-Marked-v1.class", "java-Marked-v2-typeanno-body.class")
+
+    assertEquals(RedefineRequirement.UNSAFE, result.requirement, escalationsOf(result))
+    assertTrue(
+        result.escalations.any { it.kind == EscalationKind.UNMODELED_CHANGE },
+        "expected an UNMODELED_CHANGE escalation; got ${escalationsOf(result)}",
+    )
+    assertTrue(result.patches.isEmpty(), "an UNSAFE change-set must never carry a payload")
   }
 
   // ── kotlinc ─────────────────────────────────────────────────────────

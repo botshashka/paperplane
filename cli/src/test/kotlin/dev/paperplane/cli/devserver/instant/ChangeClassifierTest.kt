@@ -673,6 +673,36 @@ class ChangeClassifierTest {
   }
 
   @Test
+  fun `a body edit with an unmodeled declaration change escalates rather than shipping`() {
+    // BODY_ONLY is the one verdict that ships bytes, so it needs its own backstop: canonicalBytes
+    // can't serve, bodies differ there by definition. A return-type annotation is the credible
+    // case — the JVM accepts the redefinition, so nothing else vetoes it, and a framework that
+    // scans type annotations once never sees the change. Patching it in would be exactly the
+    // silent staleness this lane exists to prevent.
+    val old =
+        BytecodeFixtures.generateClass(
+            methods = listOf(MethodSpec("tick", body = BytecodeFixtures.bodyReturning(1)))
+        )
+    val new =
+        BytecodeFixtures.generateClass(
+            methods =
+                listOf(
+                    MethodSpec(
+                        "tick",
+                        body = BytecodeFixtures.bodyReturning(2),
+                        returnTypeAnnotations = listOf("Lcom/example/Tag;"),
+                    )
+                )
+        )
+
+    val result = classify(mapOf("com.example.Test" to old), mapOf("com.example.Test" to new))
+
+    assertEquals(RedefineRequirement.UNSAFE, result.requirement)
+    assertEquals(setOf(EscalationKind.UNMODELED_CHANGE), kinds(result))
+    assertTrue(result.patches.isEmpty(), "an UNSAFE change-set must never carry a payload")
+  }
+
+  @Test
   fun `a debug-only difference is still NONE`() {
     val old =
         BytecodeFixtures.generateClass(

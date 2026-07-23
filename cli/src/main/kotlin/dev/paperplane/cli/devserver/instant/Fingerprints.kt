@@ -42,6 +42,34 @@ internal object Fingerprints {
         null
       }
 
+  /**
+   * The class's structural surface serialized without method bodies (SKIP_CODE): everything the
+   * fingerprints must have modeled for a BODY_ONLY verdict to be trustworthy. Bodies differ by
+   * definition on that path, so [canonicalBytes] cannot serve as its backstop.
+   *
+   * SKIP_CODE is exactly the right filter because the `Code` attribute — instructions, try/catch
+   * ranges, StackMapTable, maxs, local-variable type annotations — is precisely the surface
+   * BODY_ONLY licenses to differ. Everything else survives: method/return/parameter annotations
+   * (type annotations included), `annotationDefault`, `exceptions`, signatures, record components.
+   * `BootstrapMethods` is emitted only for visited invokedynamic instructions, so it drops from
+   * both sides symmetrically.
+   *
+   * Re-parsed from the original bytes rather than reusing a [parse] tree: the caller's nodes are
+   * live inputs to the rest of the comparison and must not be mutated or re-visited.
+   */
+  fun structuralBytes(bytes: ByteArray): ByteArray? =
+      try {
+        val node = ClassNode()
+        ClassReader(bytes)
+            .accept(
+                node,
+                ClassReader.SKIP_CODE or ClassReader.SKIP_DEBUG or ClassReader.SKIP_FRAMES,
+            )
+        ClassWriter(0).also { node.accept(it) }.toByteArray()
+      } catch (_: Exception) {
+        null
+      }
+
   fun body(method: MethodNode): String {
     val printer = Textifier()
     val visitor = TraceMethodVisitor(printer)

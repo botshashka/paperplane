@@ -15,11 +15,14 @@ import org.objectweb.asm.tree.MethodNode
  * silently stale behavior, the exact sin this tool positions against, while a false escalation
  * merely costs one normal swap.
  *
- * That posture is enforced structurally rather than by enumeration: when every fingerprint compares
- * equal, [Fingerprints.canonicalBytes] re-serializes both sides and escalates if they still differ,
- * so a delta the fingerprints don't model can never fall through to NONE. NONE therefore means
- * exactly one thing — a debug-only diff (line numbers, local names), which the server need not be
- * told about.
+ * That posture is enforced structurally rather than by enumeration, and it guards both verdicts a
+ * class can survive with. When every fingerprint compares equal, [Fingerprints.canonicalBytes]
+ * re-serializes both sides and escalates if they still differ, so a delta the fingerprints don't
+ * model can never fall through to NONE — which therefore means exactly one thing, a debug-only diff
+ * (line numbers, local names) the server need not be told about. When the verdict is BODY_ONLY —
+ * the one verdict that ships bytes — [Fingerprints.structuralBytes] re-serializes both sides
+ * without method bodies and escalates the same way, so an unmodeled *declaration* change riding
+ * along with a body edit can't be patched in unvouched.
  *
  * The lifecycle gate lives here too: changes the JVM would happily redefine but that can never take
  * effect — new/changed annotated methods (registration-driven frameworks scan once), bodies of
@@ -157,8 +160,10 @@ internal class ChangeClassifier {
     compareMethods(oldNode, newNode, fqcn, name, mainClass, verdict)
     compareNest(oldNode, newNode, name, verdict)
 
-    if (verdict.level == RedefineRequirement.NONE) {
-      checkUnmodeled(oldNode, newNode, name, verdict)
+    when (verdict.level) {
+      RedefineRequirement.NONE -> checkUnmodeled(oldNode, newNode, name, verdict)
+      RedefineRequirement.BODY_ONLY -> checkUnmodeledStructure(oldBytes, newBytes, name, verdict)
+      RedefineRequirement.UNSAFE -> Unit
     }
     return verdict
   }
@@ -257,6 +262,36 @@ internal class ChangeClassifier {
       verdict.escalate(
           EscalationKind.UNMODELED_CHANGE,
           "unrecognized bytecode change on $name — refusing to vouch for it",
+      )
+    }
+  }
+
+  /**
+   * The BODY_ONLY arm of the same backstop. Bodies differ on this path by definition, so the check
+   * is against the body-free structural serialization: if *that* still differs, the change-set
+   * carries a declaration delta no fingerprint here models, and shipping the bytes would patch it
+   * in unvouched. Type annotations are the credible case — the JVM accepts the redefinition, so
+   * nothing else vetoes it, and a framework that scans them once never sees the change.
+   */
+  private fun checkUnmodeledStructure(
+      oldBytes: ByteArray,
+      newBytes: ByteArray,
+      name: String,
+      verdict: Verdict,
+  ) {
+    val oldStructure = Fingerprints.structuralBytes(oldBytes)
+    val newStructure = Fingerprints.structuralBytes(newBytes)
+    if (oldStructure == null || newStructure == null) {
+      verdict.escalate(
+          EscalationKind.UNPARSEABLE_CLASS,
+          "could not re-serialize bytecode of $name",
+      )
+      return
+    }
+    if (!oldStructure.contentEquals(newStructure)) {
+      verdict.escalate(
+          EscalationKind.UNMODELED_CHANGE,
+          "unrecognized declaration change on $name — refusing to vouch for it",
       )
     }
   }
