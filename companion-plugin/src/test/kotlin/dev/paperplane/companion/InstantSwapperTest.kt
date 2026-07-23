@@ -5,6 +5,7 @@ import java.net.URLClassLoader
 import java.util.Base64
 import java.util.logging.Logger
 import java.util.zip.CRC32
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -23,6 +24,24 @@ class InstantSwapperTest {
 
   private val crcRegistry = mutableMapOf<Pair<ClassLoader, String>, Long>()
   private val patchedClasses = mutableSetOf<Pair<ClassLoader, String>>()
+  private val openLoaders = mutableListOf<URLClassLoader>()
+  private val openJars = mutableListOf<File>()
+
+  // Open jar handles pin their file on Windows, which fails @TempDir cleanup. Loaders hold one
+  // handle; jarEntryCrc's cached JarURLConnection holds a second, independent one in the JDK's
+  // global jar-URL cache, released only by closing the cached JarFile itself.
+  @AfterEach
+  fun releaseJarHandles() {
+    openLoaders.forEach { it.close() }
+    openJars.forEach { jar ->
+      val connection =
+          java.net.URI("jar:${jar.toURI()}!/").toURL().openConnection() as java.net.JarURLConnection
+      connection.useCaches = true
+      runCatching { connection.jarFile.close() }
+    }
+  }
+
+  private fun tracked(loader: URLClassLoader): URLClassLoader = loader.also(openLoaders::add)
 
   private fun crc(bytes: ByteArray): Long = CRC32().apply { update(bytes) }.value
 
@@ -36,7 +55,7 @@ class InstantSwapperTest {
     val target = File(dir, fqcn.replace('.', '/') + ".class")
     target.parentFile.mkdirs()
     target.writeBytes(bytes)
-    return URLClassLoader(arrayOf(dir.toURI().toURL()), null)
+    return tracked(URLClassLoader(arrayOf(dir.toURI().toURL()), null))
   }
 
   private fun swapper(inst: FakeInstrumentation?) =
@@ -159,13 +178,13 @@ class InstantSwapperTest {
     val v1 = BytecodeFixtures.classWithMarker("com/example/Patch", 1)
     val transformed = BytecodeFixtures.classWithMarker("com/example/Patch", 99)
     val v2 = BytecodeFixtures.classWithMarker("com/example/Patch", 2)
-    val jar = File(tempDir, "plugin.jar")
+    val jar = File(tempDir, "plugin.jar").also(openJars::add)
     java.util.jar.JarOutputStream(jar.outputStream()).use { out ->
       out.putNextEntry(java.util.zip.ZipEntry("com/example/Patch.class"))
       out.write(v1)
       out.closeEntry()
     }
-    val loader = URLClassLoader(arrayOf(jar.toURI().toURL()), null)
+    val loader = tracked(URLClassLoader(arrayOf(jar.toURI().toURL()), null))
     crcRegistry[loader to fqcn] = crc(transformed)
     val inst = FakeInstrumentation()
 
@@ -271,7 +290,7 @@ class InstantSwapperTest {
 
   @Test
   fun `a changed class the live loader cannot resolve refuses`() {
-    val loader = URLClassLoader(emptyArray(), null)
+    val loader = tracked(URLClassLoader(emptyArray(), null))
     val inst = FakeInstrumentation()
 
     val outcome = swapper(inst).apply(patchRequest("com.example.Ghost", 1L, byteArrayOf(1)), loader)
@@ -339,7 +358,7 @@ class InstantSwapperTest {
       target.parentFile.mkdirs()
       target.writeBytes(bytes)
     }
-    val loader = URLClassLoader(arrayOf(dir.toURI().toURL()), null)
+    val loader = tracked(URLClassLoader(arrayOf(dir.toURI().toURL()), null))
     crcRegistry[loader to redefined] = crc(aV1)
     crcRegistry[loader to current] = crc(bV2)
     val request =
@@ -374,7 +393,7 @@ class InstantSwapperTest {
     val v1 = BytecodeFixtures.classWithMarker("com/example/Patch", 1)
     val v2 = BytecodeFixtures.classWithMarker("com/example/Patch", 2)
     val parent = loaderWith(fqcn, v0)
-    val child = URLClassLoader(emptyArray(), parent)
+    val child = tracked(URLClassLoader(emptyArray(), parent))
     crcRegistry[parent to fqcn] = crc(v0)
     val inst = FakeInstrumentation()
 
