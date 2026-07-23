@@ -141,6 +141,32 @@ class InstantSwapperTest {
   }
 
   @Test
+  fun `a jar-backed loader admits via the jar's central-directory CRC`() {
+    // The native-mode shape end to end: the loader serves the class from a jar (so sourceCrc's
+    // jar: URL branch runs and reads the central directory instead of inflating the entry), and
+    // the define record disagrees with the jar bytes (Commodore re-encoded at define time).
+    val fqcn = "com.example.Patch"
+    val v1 = generateClass("com/example/Patch", 1)
+    val transformed = generateClass("com/example/Patch", 99)
+    val v2 = generateClass("com/example/Patch", 2)
+    val jar = File(tempDir, "plugin.jar")
+    java.util.jar.JarOutputStream(jar.outputStream()).use { out ->
+      out.putNextEntry(java.util.zip.ZipEntry("com/example/Patch.class"))
+      out.write(v1)
+      out.closeEntry()
+    }
+    val loader = URLClassLoader(arrayOf(jar.toURI().toURL()), null)
+    crcRegistry[loader to fqcn] = crc(transformed)
+    val inst = FakeInstrumentation()
+
+    val outcome = swapper(inst).apply(patchRequest(fqcn, crc(v1), v2), loader)
+
+    val applied = assertInstanceOf(InstantSwapper.Outcome.Applied::class.java, outcome)
+    assertEquals(1, applied.patched)
+    assertTrue(inst.redefined.single().definitionClassFile.contentEquals(v2))
+  }
+
+  @Test
   fun `a patched class never falls back to the source check`() {
     // Once a patch landed, the loader's jar/dir no longer describes what's running — only the
     // patch record may vouch. A stale CLI baseline that happens to match the on-disk source must

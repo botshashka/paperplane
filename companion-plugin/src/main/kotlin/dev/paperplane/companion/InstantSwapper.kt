@@ -5,6 +5,7 @@ import java.lang.instrument.ClassDefinition
 import java.lang.instrument.Instrumentation
 import java.lang.instrument.UnmodifiableClassException
 import java.lang.reflect.InaccessibleObjectException
+import java.net.JarURLConnection
 import java.net.URL
 import java.net.URLClassLoader
 import java.util.Base64
@@ -212,13 +213,33 @@ class InstantSwapper(
    */
   private fun sourceCrc(loader: ClassLoader, fqcn: String): Long {
     val path = classPath(fqcn)
-    val url = if (loader is URLClassLoader) loader.findResource(path) else loader.getResource(path)
+    val url =
+        (if (loader is URLClassLoader) loader.findResource(path) else loader.getResource(path))
+            ?: return AgentAccess.UNKNOWN_CRC
     return try {
-      url?.openStream()?.use { crc32(it.readBytes()) } ?: AgentAccess.UNKNOWN_CRC
+      jarEntryCrc(url) ?: url.openStream().use { crc32(it.readBytes()) }
     } catch (e: java.io.IOException) {
       logger.fine("Instant verify: cannot read source bytes for $fqcn: ${e.message}")
       AgentAccess.UNKNOWN_CRC
     }
+  }
+
+  /**
+   * The CRC32 a jar's central directory already records for [url]'s entry, or null when [url] isn't
+   * a jar entry (a directory-backed loader) or the jar omits it.
+   *
+   * ZIP stores the CRC32 of the *uncompressed* entry, which is exactly the value the stream read
+   * would compute — so on the branch that matters this skips inflating every patched class. That
+   * branch is not the exception: in native modes Commodore re-encodes at define time, so the define
+   * CRC never matches and every class in the request takes it, on the main thread inside the tick
+   * budget. The JDK caches the open `JarFile` behind `jar:` URLs, so the whole request reads one
+   * already-parsed central directory.
+   */
+  private fun jarEntryCrc(url: URL): Long? {
+    if (!url.protocol.equals("jar", ignoreCase = true)) return null
+    val connection = url.openConnection() as? JarURLConnection ?: return null
+    connection.useCaches = true
+    return connection.jarEntry?.crc?.takeIf { it >= 0 }
   }
 
   /** Decodes base64 payloads; null on any malformed entry. */
