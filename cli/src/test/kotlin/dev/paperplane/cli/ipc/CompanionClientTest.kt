@@ -596,6 +596,11 @@ class CompanionClientTest {
     }
   }
 
-  /** Finds a port with nothing listening by binding-and-releasing an ephemeral one. */
-  private fun findDeadPort(): Int = java.net.ServerSocket(0).use { it.localPort }
+  /**
+   * Finds a port with nothing listening on loopback by binding-and-releasing an ephemeral one.
+   * Binds the loopback address explicitly: a wildcard bind can be handed a port another process
+   * already holds on 127.0.0.1 only, and the "dead" port would then answer the dial.
+   */
+  private fun findDeadPort(): Int =
+      java.net.ServerSocket(0, 0, java.net.InetAddress.getLoopbackAddress()).use { it.localPort }
 }

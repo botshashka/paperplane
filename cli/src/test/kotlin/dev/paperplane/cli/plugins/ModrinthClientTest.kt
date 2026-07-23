@@ -1,8 +1,6 @@
 package dev.paperplane.cli.plugins
 
-import com.sun.net.httpserver.HttpExchange
-import com.sun.net.httpserver.HttpServer
-import java.net.InetSocketAddress
+import dev.paperplane.cli.testing.LocalHttpServer
 import java.net.http.HttpClient
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -15,46 +13,34 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
 /**
- * Exercises the real [ModrinthClient] against an in-process [HttpServer] that serves synthetic
+ * Exercises the real [ModrinthClient] against an in-process [LocalHttpServer] that serves synthetic
  * Modrinth-shaped JSON. Verifies the parsing edges that matter most: primary-file selection, hash
  * extraction, version filtering, the Paper-loader query string, and the 404 → [ModrinthNotFound]
  * mapping.
  */
 class ModrinthClientTest {
 
-  private lateinit var server: HttpServer
-  private var lastRequestPath: String = ""
+  private lateinit var server: LocalHttpServer
   private lateinit var client: ModrinthClient
+
+  private val lastRequestPath: String
+    get() = server.lastRequestUri
 
   @BeforeEach
   fun setUp() {
-    server = HttpServer.create(InetSocketAddress(0), 0)
-    server.start()
-    val baseUrl = "http://localhost:${server.address.port}"
-    client = ModrinthClient(HttpClient.newHttpClient(), baseUrl)
+    server = LocalHttpServer()
+    client = ModrinthClient(HttpClient.newHttpClient(), server.baseUrl)
   }
 
   @AfterEach
   fun tearDown() {
-    server.stop(0)
+    server.stop()
   }
 
   /** Convenience: register a handler that records the path and returns the given JSON body. */
-  private fun respondWith(path: String, json: String) {
-    server.createContext(path) { exchange: HttpExchange ->
-      lastRequestPath = exchange.requestURI.toString()
-      val bytes = json.toByteArray()
-      exchange.sendResponseHeaders(200, bytes.size.toLong())
-      exchange.responseBody.use { it.write(bytes) }
-    }
-  }
+  private fun respondWith(path: String, json: String) = server.serveText(path, json)
 
-  private fun respondNotFound(path: String) {
-    server.createContext(path) { exchange ->
-      exchange.sendResponseHeaders(404, -1)
-      exchange.close()
-    }
-  }
+  private fun respondNotFound(path: String) = server.serveStatus(path, 404)
 
   @Test
   fun `resolveLatest picks newest version and primary file`() {
@@ -181,10 +167,7 @@ class ModrinthClientTest {
 
   @Test
   fun `5xx throws IOException`() {
-    server.createContext("/project/broken/version") { exchange ->
-      exchange.sendResponseHeaders(500, -1)
-      exchange.close()
-    }
+    server.serveStatus("/project/broken/version", 500)
     assertThrows(java.io.IOException::class.java) { client.resolveLatest("broken", "1.21.4") }
   }
 
