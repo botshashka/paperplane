@@ -15,7 +15,7 @@ import java.util.zip.CRC32
 
 /**
  * Applies an instant patch: verifies, then redefines the request's classes in the live server and
- * makes its new classes loadable. Replaces the old `HotSwapper`.
+ * makes its new classes loadable.
  *
  * The safety split with the CLI: the CLI's classifier decides *whether* a change-set is safe to
  * patch; this class verifies the CLI's premise — that the server is actually running the bytes the
@@ -85,6 +85,16 @@ class InstantSwapper(
     val patches = decode(request.classes) ?: return Outcome.Failed("undecodable class payload")
     val additions = decode(request.newClasses) ?: return Outcome.Failed("undecodable class payload")
 
+    // Refused promises "nothing was touched", and that promise expires the moment a force-load
+    // defines a class that wasn't loaded before (or a new class is made loadable). Verification is
+    // necessarily interleaved with those side effects — the CRC registry holds nothing for a class
+    // until it loads, which is exactly why the force-load exists — so once one has landed, a later
+    // no is reported as Failed. Both send the CLI down the full swap path; only the promise
+    // differs.
+    var landed = false
+    fun stop(reason: String): Outcome =
+        if (landed) Outcome.Failed(reason) else Outcome.Refused(reason)
+
     val definitions = mutableListOf<ClassDefinition>()
     val applied = mutableListOf<String>()
     var alreadyCurrent = 0
@@ -92,23 +102,23 @@ class InstantSwapper(
       // Force-load a changed-but-unloaded class (no initialization) so a jar-backed loader's
       // stale bytes are in the redefinition batch too — otherwise a later lazy load would
       // resurrect the old bytes from the jar. The load also populates the agent's CRC registry.
+      val wasRecorded = loadedCrcProvider(pluginClassLoader, entry.fqcn) != AgentAccess.UNKNOWN_CRC
       val cls =
           try {
             Class.forName(entry.fqcn, false, pluginClassLoader)
           } catch (e: ClassNotFoundException) {
-            return Outcome.Refused("class ${entry.fqcn} is not loadable in the live server")
+            return stop("class ${entry.fqcn} is not loadable in the live server")
           } catch (e: LinkageError) {
-            return Outcome.Refused("class ${entry.fqcn} failed to link: ${e.message}")
+            return stop("class ${entry.fqcn} failed to link: ${e.message}")
           }
+      if (!wasRecorded) landed = true
       // Verify against the loader that actually DEFINED the class (delegation may have resolved
       // it elsewhere — patching a parent-owned class is never what the CLI vouched for).
       val definingLoader =
-          cls.classLoader
-              ?: return Outcome.Refused("class ${entry.fqcn} resolved from the bootstrap loader")
+          cls.classLoader ?: return stop("class ${entry.fqcn} resolved from the bootstrap loader")
 
       when (val loadedCrc = loadedCrcProvider(definingLoader, entry.fqcn)) {
-        AgentAccess.UNKNOWN_CRC ->
-            return Outcome.Refused("no load record for ${entry.fqcn} — cannot verify")
+        AgentAccess.UNKNOWN_CRC -> return stop("no load record for ${entry.fqcn} — cannot verify")
         // A freshly force-loaded class on a directory-backed loader already read the new bytes.
         crc32(newBytes) -> {
           alreadyCurrent++
@@ -131,7 +141,7 @@ class InstantSwapper(
                 "Instant verify mismatch on ${entry.fqcn}: loaded=$loadedCrc " +
                     "expected=${entry.expectedCrc32} source=$sourceCrc new=${crc32(newBytes)}"
             )
-            return Outcome.Refused(
+            return stop(
                 "baseline drift on ${entry.fqcn} — the server is not running the bytes " +
                     "the CLI diffed against"
             )
@@ -144,8 +154,12 @@ class InstantSwapper(
 
     var defined = 0
     for ((entry, bytes) in additions) {
-      makeLoadable(pluginClassLoader, entry.fqcn, bytes)?.let {
-        return Outcome.Refused(it)
+      // makeLoadable resolves the name through the loader before deciding, so it can define a
+      // class (here or in another loader) even on the path that ends in a refusal.
+      val refusal = makeLoadable(pluginClassLoader, entry.fqcn, bytes)
+      landed = true
+      refusal?.let {
+        return stop(it)
       }
       defined++
       applied += entry.fqcn

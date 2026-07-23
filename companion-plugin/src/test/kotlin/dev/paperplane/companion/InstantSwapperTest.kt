@@ -218,17 +218,19 @@ class InstantSwapperTest {
   }
 
   @Test
-  fun `a loadable class with no load record refuses - unverifiable is unpatchable`() {
+  fun `a loadable class with no load record fails - the force-load already landed`() {
     val fqcn = "com.example.Patch"
     val v1 = generateClass("com/example/Patch", 1)
     val v2 = generateClass("com/example/Patch", 2)
     val loader = loaderWith(fqcn, v1)
-    // Registry deliberately empty: the agent never saw this class load.
+    // Registry deliberately empty: the agent never saw this class load. The force-load then
+    // defines it — a side effect that has landed — so the honest answer is Failed, not a
+    // Refused claiming nothing was touched.
 
     val outcome = swapper(FakeInstrumentation()).apply(patchRequest(fqcn, crc(v1), v2), loader)
 
-    val refused = assertInstanceOf(InstantSwapper.Outcome.Refused::class.java, outcome)
-    assertTrue(refused.reason.contains("no load record"), refused.reason)
+    val failed = assertInstanceOf(InstantSwapper.Outcome.Failed::class.java, outcome)
+    assertTrue(failed.reason.contains("no load record"), failed.reason)
   }
 
   @Test
@@ -290,7 +292,7 @@ class InstantSwapperTest {
   }
 
   @Test
-  fun `a new class on a loader that cannot receive classes refuses with the reason`() {
+  fun `a new class on a loader that cannot receive classes fails with the reason`() {
     val plainLoader = object : ClassLoader(null) {}
     val request =
         HostInstantSwapRequest(
@@ -306,10 +308,12 @@ class InstantSwapperTest {
                 ),
         )
 
+    // makeLoadable resolves the name through the loader before deciding, so a definition may
+    // have landed somewhere by the time it declines — Failed is the only honest answer.
     val outcome = swapper(FakeInstrumentation()).apply(request, plainLoader)
 
-    val refused = assertInstanceOf(InstantSwapper.Outcome.Refused::class.java, outcome)
-    assertTrue(refused.reason.contains("cannot receive new classes"), refused.reason)
+    val failed = assertInstanceOf(InstantSwapper.Outcome.Failed::class.java, outcome)
+    assertTrue(failed.reason.contains("cannot receive new classes"), failed.reason)
   }
 
   @Test
