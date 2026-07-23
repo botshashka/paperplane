@@ -40,6 +40,18 @@ class InstantSwapper(
     private val wasPatchedProvider: (ClassLoader, String) -> Boolean = AgentAccess::wasPatched,
     private val crcUpdater: (ClassLoader, String, Long) -> Unit = AgentAccess::updateCrc,
 ) {
+  companion object {
+    /**
+     * Where [spliceOverlay] stages new classes, relative to the server root. One constant because
+     * two places must agree on it: this splice, and the enable-time wipe in [CompanionPlugin] — a
+     * wipe that missed the directory would leave a previous run's bytecode on the loader's URLs.
+     */
+    const val OVERLAY_PATH = ".paperplane/instant-overlay"
+
+    /** The overlay directory under [serverRoot]. */
+    fun overlayDir(serverRoot: File): File = File(serverRoot, OVERLAY_PATH)
+  }
+
   sealed class Outcome {
     /**
      * Everything applied. [patched] counts redefined + already-current classes; [appliedClasses]

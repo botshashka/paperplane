@@ -34,6 +34,14 @@ class CompanionMessageHandler(
     private val hostProvider: (LeakDiagnosticsMode) -> InnerPluginHost,
     private val ipc: CompanionIpc,
     private val serverRoot: File = plugin.dataFolder.absoluteFile.parentFile.parentFile,
+    /**
+     * Builds the [InstantSwapper] on the first patch request, memoized after. Injected like every
+     * other collaborator so the applied/failed answer paths are reachable in tests — the real one
+     * needs a live agent and a live plugin classloader, which no test can stand up.
+     */
+    private val instantSwapperProvider: () -> InstantSwapper = {
+      InstantSwapper(plugin.logger, InstantSwapper.overlayDir(serverRoot))
+    },
 ) {
   companion object {
     /** Streamed stage sent when a load request is accepted for dispatch. */
@@ -241,11 +249,7 @@ class CompanionMessageHandler(
       answer(HostInstantSwapStatus.REFUSED, reason = "plugin ${request.pluginName} is not loaded")
       return
     }
-    val swapper =
-        instantSwapper
-            ?: InstantSwapper(plugin.logger, File(serverRoot, ".paperplane/instant-overlay")).also {
-              instantSwapper = it
-            }
+    val swapper = instantSwapper ?: instantSwapperProvider().also { instantSwapper = it }
 
     // Last-resort net for the whole patch pipeline, mirroring the load path's. The CLI blocks on a
     // report; anything that escapes here would strand it until timeout and surface as "no patch
