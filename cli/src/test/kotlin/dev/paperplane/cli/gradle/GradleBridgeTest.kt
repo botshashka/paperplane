@@ -91,44 +91,43 @@ class GradleBridgeTest {
   }
 
   // ── isTaskNotFoundMessage ─────────────────────────────────────────
-  // Pins the Gradle error-message wordings that GradleBridge.format relies on to distinguish
-  // "spotless not configured" from "spotless failed." If a future Gradle bump changes these
+  // Pins the Gradle error-message wordings that the metadata path relies on to distinguish
+  // "gradle plugin not applied" from "metadata task failed." If a future Gradle bump changes these
   // strings, these tests break loudly instead of silently routing a missing-task error down the
-  // generic "format failed" path.
+  // generic task-failed path.
 
   @Test
   fun `isTaskNotFoundMessage matches classic not-found wording`() {
-    val msg = "Task 'spotlessApply' not found in root project 'my-plugin'."
-    assertTrue(GradleBridge.isTaskNotFoundMessage(msg, "spotlessApply"))
+    val msg = "Task 'ppMetadata' not found in root project 'my-plugin'."
+    assertTrue(GradleBridge.isTaskNotFoundMessage(msg, "ppMetadata"))
   }
 
   @Test
   fun `isTaskNotFoundMessage matches cannot-locate wording`() {
-    val msg = "Cannot locate tasks that match 'spotlessApply' as task 'spotlessApply' not found"
-    assertTrue(GradleBridge.isTaskNotFoundMessage(msg, "spotlessApply"))
+    val msg = "Cannot locate tasks that match 'ppMetadata' as task 'ppMetadata' not found"
+    assertTrue(GradleBridge.isTaskNotFoundMessage(msg, "ppMetadata"))
   }
 
   @Test
   fun `isTaskNotFoundMessage matches lowercase variant`() {
-    val msg = "task 'spotlessCheck' not found in project"
-    assertTrue(GradleBridge.isTaskNotFoundMessage(msg, "spotlessCheck"))
+    val msg = "task 'ppMetadata' not found in project"
+    assertTrue(GradleBridge.isTaskNotFoundMessage(msg, "ppMetadata"))
   }
 
   @Test
   fun `isTaskNotFoundMessage rejects unrelated errors`() {
-    val msg =
-        "Execution failed for task ':spotlessApply'. Step 'ktfmt' found problem in file Foo.kt"
-    assertEquals(false, GradleBridge.isTaskNotFoundMessage(msg, "spotlessApply"))
+    val msg = "Execution failed for task ':ppMetadata'. Metadata generation failed for file Foo.kt"
+    assertEquals(false, GradleBridge.isTaskNotFoundMessage(msg, "ppMetadata"))
   }
 
   @Test
   fun `isTaskNotFoundMessage rejects null message`() {
-    assertEquals(false, GradleBridge.isTaskNotFoundMessage(null, "spotlessApply"))
+    assertEquals(false, GradleBridge.isTaskNotFoundMessage(null, "ppMetadata"))
   }
 
   @Test
   fun `isTaskNotFoundMessage is task-name specific`() {
-    val msg = "Task 'spotlessApply' not found in root project"
+    val msg = "Task 'ppMetadata' not found in root project"
     // Looking for a different task — should not match
     assertEquals(false, GradleBridge.isTaskNotFoundMessage(msg, "otherTask"))
   }

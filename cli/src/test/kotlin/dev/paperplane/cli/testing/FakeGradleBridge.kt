@@ -19,7 +19,6 @@ class FakeGradleBridge(
     ui: TerminalUI,
     var nextBuildResult: Boolean = true,
     var nextCleanResult: Boolean = true,
-    var nextFormatResult: GradleBridge.FormatResult = GradleBridge.FormatResult(success = true),
     var nextTestResult: Boolean = true,
     var nextMetadata: ProjectMetadata? =
         ProjectMetadata(
@@ -64,11 +63,6 @@ class FakeGradleBridge(
   override fun clean(): Boolean {
     calls += "clean"
     return nextCleanResult
-  }
-
-  override fun format(check: Boolean): GradleBridge.FormatResult {
-    calls += "format(check=$check)"
-    return nextFormatResult
   }
 
   override fun test(quiet: Boolean, filter: String?): Boolean {
