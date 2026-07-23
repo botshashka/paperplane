@@ -324,6 +324,7 @@ internal object ProjectTemplates {
         dev:
           mode: $devMode      # hot-reload | blue-green | restart
           jbr: "$jbr"             # auto | on | off | /path/to/jbr
+          instant: true       # patch body-only edits into the live server in place
     """
           .trimIndent() + "\n"
 
