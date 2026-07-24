@@ -1,0 +1,21 @@
+{
+  "jarPath": "build/libs/modeseltest-1.0.0.jar",
+  "paperApiVersion": "1.21",
+  "mainClass": "me.dev.modeseltest.Modeseltest",
+  "pluginName": "Modeseltest",
+  "projectDir": "/private/tmp/claude-501/-Users-david-projects-personal-paperplane/17d221e0-c5b0-412e-bf43-dd97923d3020/scratchpad/modeseltest",
+  "version": "1.0.0",
+  "classesDir": "/private/tmp/claude-501/-Users-david-projects-personal-paperplane/17d221e0-c5b0-412e-bf43-dd97923d3020/scratchpad/modeseltest/build/classes/java/main",
+  "classesDirs": [
+    "/private/tmp/claude-501/-Users-david-projects-personal-paperplane/17d221e0-c5b0-412e-bf43-dd97923d3020/scratchpad/modeseltest/build/classes/java/main"
+  ],
+  "resourcesDir": "/private/tmp/claude-501/-Users-david-projects-personal-paperplane/17d221e0-c5b0-412e-bf43-dd97923d3020/scratchpad/modeseltest/build/resources/main",
+  "runtimeClasspath": [
+    "/Users/david/.gradle/caches/modules-2/files-2.1/dev.jorel/commandapi-bukkit-shade/10.1.2/132e19eaa0cf25d338cec7a0c3f2217866d5b3a1/commandapi-bukkit-shade-10.1.2.jar"
+  ],
+  "depend": [],
+  "softdepend": [],
+  "loadbefore": [],
+  "load": "POSTWORLD",
+  "apiVersion": "1.21"
+}

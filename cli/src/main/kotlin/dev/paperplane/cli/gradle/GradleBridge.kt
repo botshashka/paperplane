@@ -156,7 +156,8 @@ open class GradleBridge(private val projectDir: File, private val ui: TerminalUI
     }
   }
 
-  private fun parseMetadataFile(metadataFile: File): ProjectMetadata? {
+  /** Internal for the golden test that locks in the real on-disk metadata.json shape. */
+  internal fun parseMetadataFile(metadataFile: File): ProjectMetadata? {
     val type = object : TypeToken<Map<String, Any>>() {}.type
     val map: Map<String, Any> = Gson().fromJson(metadataFile.readText(), type)
     return ProjectMetadata(
