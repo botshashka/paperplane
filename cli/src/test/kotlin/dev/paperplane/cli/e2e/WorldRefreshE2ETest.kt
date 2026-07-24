@@ -35,7 +35,16 @@ import org.junit.jupiter.api.io.TempDir
 class WorldRefreshE2ETest {
 
   companion object {
-    private const val PAPER_VERSION = "1.21.11" // what `ppl create` scaffolds today
+    /**
+     * The newest release in the newest api-version line this CLI supports
+     * ([dev.paperplane.cli.Versions.SUPPORTED_API_VERSIONS]) — deliberately not the newest Paper,
+     * which is a 26.x build the CLI cannot yet resolve. Overridable with `PPL_E2E_PAPER_VERSION` so
+     * CI single-sources it alongside the smoke test's `SMOKE_PAPER_VERSION`; point it at a newer
+     * build to use this as a world-load drift canary.
+     */
+    private val PAPER_VERSION: String
+      get() = System.getenv("PPL_E2E_PAPER_VERSION")?.takeIf { it.isNotBlank() } ?: "1.21.11"
+
     private const val PORT = 25599
   }
 
