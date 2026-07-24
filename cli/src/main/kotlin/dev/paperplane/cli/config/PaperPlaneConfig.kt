@@ -104,10 +104,27 @@ data class ServerConfig(
 )
 
 @Serializable
-enum class DevMode {
-  @SerialName("hot-reload") HOT_RELOAD,
-  @SerialName("blue-green") BLUE_GREEN,
-  @SerialName("restart") RESTART,
+enum class DevMode(
+    /** The user-facing name — identical to the `dev.mode` serial form in `paperplane.yml`. */
+    val label: String
+) {
+  @SerialName("hot-reload") HOT_RELOAD("hot-reload"),
+  @SerialName("blue-green") BLUE_GREEN("blue-green"),
+  @SerialName("restart") RESTART("restart"),
+}
+
+/**
+ * What `ppl dev` does when the requested mode is categorically unavailable for the session (a
+ * curated can't-late-load dependency, the hot-reload Paper version floor):
+ * - [ASK] — the default: offer a consent prompt to demote to a native mode for this session. In a
+ *   non-interactive session (no TTY) the prompt is impossible, so startup fails loudly instead.
+ * - [AUTO] — demote without asking, announced by a banner. The banner is unconditional: the session
+ *   never swaps modes silently.
+ */
+@Serializable
+enum class FallbackPolicy {
+  @SerialName("ask") ASK,
+  @SerialName("auto") AUTO,
 }
 
 @Serializable
@@ -127,6 +144,8 @@ data class DevConfig(
      */
     @SerialName("leak-diagnostics")
     val leakDiagnostics: LeakDiagnosticsMode = LeakDiagnosticsMode.SUMMARY,
+    /** How to fall back when the configured mode is unavailable. See [FallbackPolicy]. */
+    val fallback: FallbackPolicy = FallbackPolicy.ASK,
     /**
      * Debug tee for the CLI↔companion socket protocol: when true, every message crossing the
      * connection (both directions, including the handshake) is appended to
