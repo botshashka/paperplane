@@ -182,6 +182,21 @@ class DevSessionTest {
   }
 
   @Test
+  fun `eligibility scans the dev server's plugins directory`() {
+    // Wiring assertion for the dir source: the session must point the selector at
+    // .paperplane/server/plugins, where a hand-dropped jar lives.
+    val fixture = DevSessionFixture(tempDir)
+    val pluginsDir = File(fixture.ppDir, "server/plugins").apply { mkdirs() }
+    File(pluginsDir, "ProtocolLib.jar").writeText("fake")
+
+    val ex =
+        assertThrows(IllegalArgumentException::class.java) {
+          fixture.session.enforceHotReloadEligibility(metadata())
+        }
+    assertTrue(ex.message!!.contains("server plugins/ jar 'ProtocolLib'"))
+  }
+
+  @Test
   fun `config server version overrides metadata for the eligibility floor`() {
     val session = createSession(mode = DevMode.HOT_RELOAD, serverVersion = "1.19.2")
     val ex =
