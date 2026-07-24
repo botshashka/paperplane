@@ -1,6 +1,7 @@
 package dev.paperplane.cli.devserver
 
 import dev.paperplane.cli.Versions
+import dev.paperplane.cli.config.DevConfig
 import dev.paperplane.cli.config.DevMode
 import dev.paperplane.cli.config.PaperPlaneConfig
 import dev.paperplane.cli.devserver.instant.InstantBanner
@@ -148,14 +149,14 @@ class DevSessionTest {
     assertTrue(ex.message!!.contains("1.17"))
   }
 
-  // ── enforceHotReloadVersionFloor ────────────────────────────────────
+  // ── enforceHotReloadEligibility ─────────────────────────────────────
 
   @Test
   fun `hot-reload rejects Paper below 1_19_3`() {
     val session = createSession(mode = DevMode.HOT_RELOAD)
     val ex =
         assertThrows(IllegalArgumentException::class.java) {
-          session.enforceHotReloadVersionFloor("1.19.2")
+          session.enforceHotReloadEligibility(metadata("1.19.2"))
         }
     assertTrue(ex.message!!.contains("Hot-reload requires Paper 1.19.3+"))
     assertTrue(ex.message!!.contains("restart") && ex.message!!.contains("blue-green"))
@@ -165,13 +166,49 @@ class DevSessionTest {
   fun `hot-reload accepts Paper at and above 1_19_3`() {
     val session = createSession(mode = DevMode.HOT_RELOAD)
     // Exactly the floor and above must not throw.
-    session.enforceHotReloadVersionFloor("1.19.3")
-    session.enforceHotReloadVersionFloor("1.21.11")
+    session.enforceHotReloadEligibility(metadata("1.19.3"))
+    session.enforceHotReloadEligibility(metadata("1.21.11"))
   }
 
   @Test
-  fun `initialBuild enforces the hot-reload version floor`() {
-    // Wiring test: the floor must actually run on the startup path, not just exist as a function.
+  fun `hot-reload rejects a curated can't-late-load dependency`() {
+    val session = createSession(mode = DevMode.HOT_RELOAD)
+    val ex =
+        assertThrows(IllegalArgumentException::class.java) {
+          session.enforceHotReloadEligibility(metadata().copy(depend = listOf("CommandAPI")))
+        }
+    assertTrue(ex.message!!.contains("plugin.yml depend 'CommandAPI'"))
+    assertTrue(ex.message!!.contains("dev.fallback"))
+  }
+
+  @Test
+  fun `eligibility scans the dev server's plugins directory`() {
+    // Wiring assertion for the dir source: the session must point the selector at
+    // .paperplane/server/plugins, where a hand-dropped jar lives.
+    val fixture = DevSessionFixture(tempDir)
+    val pluginsDir = File(fixture.ppDir, "server/plugins").apply { mkdirs() }
+    File(pluginsDir, "ProtocolLib.jar").writeText("fake")
+
+    val ex =
+        assertThrows(IllegalArgumentException::class.java) {
+          fixture.session.enforceHotReloadEligibility(metadata())
+        }
+    assertTrue(ex.message!!.contains("server plugins/ jar 'ProtocolLib'"))
+  }
+
+  @Test
+  fun `config server version overrides metadata for the eligibility floor`() {
+    val session = createSession(mode = DevMode.HOT_RELOAD, serverVersion = "1.19.2")
+    val ex =
+        assertThrows(IllegalArgumentException::class.java) {
+          session.enforceHotReloadEligibility(metadata("1.21.4"))
+        }
+    assertTrue(ex.message!!.contains("Hot-reload requires Paper 1.19.3+"))
+  }
+
+  @Test
+  fun `initialBuild enforces hot-reload eligibility`() {
+    // Wiring test: the check must actually run on the startup path, not just exist as a function.
     val fixture = DevSessionFixture(tempDir).withMetadata(paperApiVersion = "1.19.2")
     val server =
         FakePaperServerManager(
@@ -187,9 +224,11 @@ class DevSessionTest {
   }
 
   @Test
-  fun `handleFixAttempt surfaces a floor violation and keeps the fix loop alive`() {
-    // The fix loop runs on the watcher thread — a floor violation must render as a failed attempt,
-    // not an escaping throw that would kill the watcher and hang the session.
+  fun `handleFixAttempt surfaces an eligibility violation and keeps the fix loop alive`() {
+    // The fix loop runs on the watcher thread — an eligibility violation must render as a failed
+    // attempt, not an escaping throw that would kill the watcher and hang the session. This is also
+    // the enforcement point for a session whose broken initial build hid its dependencies from
+    // session-start selection.
     val fixture = DevSessionFixture(tempDir).withMetadata(paperApiVersion = "1.19.2")
 
     val result = fixture.session.handleFixAttempt(null)
@@ -202,16 +241,78 @@ class DevSessionTest {
   }
 
   @Test
-  fun `restart and blue-green skip the hot-reload version floor`() {
+  fun `restart and blue-green skip hot-reload eligibility`() {
     for (mode in
         listOf(
             DevMode.RESTART,
             DevMode.BLUE_GREEN,
         )) {
       val session = createSession(mode = mode)
-      // Even ancient Paper is fine for native modes — no floor applies.
-      session.enforceHotReloadVersionFloor("1.16.5")
+      // Even ancient Paper plus a curated dependency is fine for native modes — no rules apply.
+      session.enforceHotReloadEligibility(metadata("1.16.5").copy(depend = listOf("ProtocolLib")))
     }
+  }
+
+  // ── preflightMetadata / demoteMode ──────────────────────────────────
+
+  @Test
+  fun `preflight result is consumed by exactly one resolveMetadata call`() {
+    val fixture = DevSessionFixture(tempDir)
+
+    val preflight = fixture.session.preflightMetadata()
+    assertEquals(listOf("metadata"), fixture.gradle.calls.filter { it == "metadata" })
+
+    // The dispatched mode's own call reuses the preflight without touching Gradle...
+    assertEquals(preflight, fixture.session.resolveMetadata())
+    assertEquals(1, fixture.gradle.calls.count { it == "metadata" })
+
+    // ...and any later call (fix recovery, restart paths) sees fresh Gradle state again.
+    fixture.session.resolveMetadata()
+    assertEquals(2, fixture.gradle.calls.count { it == "metadata" })
+  }
+
+  @Test
+  fun `demoteMode swaps the config mode and records the selection report`() {
+    val fixture =
+        DevSessionFixture(
+            tempDir,
+            config = PaperPlaneConfig(dev = DevConfig(mode = DevMode.HOT_RELOAD)),
+        )
+    val rejection = ModeRejection("commandapi", "plugin.yml depend 'CommandAPI'", "reason")
+
+    fixture.session.demoteMode(DevMode.RESTART, listOf(rejection))
+
+    assertEquals(DevMode.RESTART, fixture.session.config.dev.mode)
+    val report = fixture.session.selectionReport!!
+    assertEquals(DevMode.HOT_RELOAD, report.requested)
+    assertEquals(listOf(rejection), report.rejections)
+  }
+
+  @Test
+  fun `showServerInfo reports a demotion next to the mode line`() {
+    val fixture = DevSessionFixture(tempDir)
+    fixture.session.demoteMode(
+        DevMode.RESTART,
+        listOf(ModeRejection("commandapi", "plugin.yml depend 'CommandAPI'", "reason")),
+    )
+
+    fixture.ui.block { fixture.session.showServerInfo(metadata(), "localhost:25565", "restart") }
+
+    val writes = fixture.terminal.writes
+    assertTrue(writes.any { it.contains("Mode:") && it.contains("restart") })
+    assertTrue(
+        writes.any {
+          it.contains("Demoted from hot-reload") && it.contains("plugin.yml depend 'CommandAPI'")
+        },
+        "tier report must state the demotion and its cause; writes were $writes",
+    )
+  }
+
+  @Test
+  fun `showServerInfo stays silent about demotion for a session running its requested mode`() {
+    val fixture = DevSessionFixture(tempDir)
+    fixture.ui.block { fixture.session.showServerInfo(metadata(), "localhost:25565", "hot-reload") }
+    assertFalse(fixture.terminal.writes.any { it.contains("Demoted") })
   }
 
   // ── syncOpsBackToConfig ─────────────────────────────────────────────

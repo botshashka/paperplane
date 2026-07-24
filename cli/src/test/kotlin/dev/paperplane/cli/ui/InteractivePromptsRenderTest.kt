@@ -237,6 +237,29 @@ class InteractivePromptsRenderTest {
     assertFalse(prompts.confirm("Proceed?"))
   }
 
+  @Test
+  fun `confirm with default true renders Y-n and returns true on empty input`() {
+    stubStdin("\n")
+    val (prompts, t) = newPrompts(FakeReader(emptyList()))
+    assertTrue(prompts.confirm("Switch this session to restart?", default = true))
+    assertTrue(t.raw.contains("Switch this session to restart? (Y/n)"))
+  }
+
+  @Test
+  fun `confirm with default true still honors an explicit n`() {
+    stubStdin("n\n")
+    val (prompts, _) = newPrompts(FakeReader(emptyList()))
+    assertFalse(prompts.confirm("Proceed?", default = true))
+  }
+
+  @Test
+  fun `confirm on EOF returns false regardless of default`() {
+    // Closed stdin means nobody is there to consent — a default of true must not be taken.
+    stubStdin("")
+    val (prompts, _) = newPrompts(FakeReader(emptyList()))
+    assertFalse(prompts.confirm("Proceed?", default = true))
+  }
+
   // ── Raw-mode lifecycle ─────────────────────────────────────────────
 
   @Test

@@ -373,11 +373,26 @@ class InteractivePrompts(private val terminal: Terminal) {
 
   // ── Confirm (y/N) ──────────────────────────────────────────────────
 
-  /** Prints a confirmation prompt and returns true if the user answers y/yes. */
-  fun confirm(message: String): Boolean {
+  /**
+   * Prints a confirmation prompt and returns the user's answer. [default] is what an empty answer
+   * (bare Enter) means and is reflected in the suffix — `(y/N)` for the destructive-action default
+   * of false, `(Y/n)` for consent prompts where proceeding is the expected path. An explicit
+   * `y`/`yes` is true, anything else non-empty is false. EOF (closed stdin) is always false — an
+   * absent user cannot consent, whatever the default.
+   */
+  fun confirm(message: String, default: Boolean = false): Boolean {
     writer.writeLine()
-    writer.write("  $message (y/N): ")
-    val answer = readlnOrNull()?.trim()?.lowercase()
+    writer.write("  $message ${if (default) "(Y/n)" else "(y/N)"}: ")
+    val answer = readlnOrNull()?.trim()?.lowercase() ?: return false
+    if (answer.isEmpty()) return default
     return answer == "y" || answer == "yes"
   }
+
+  /**
+   * Whether prompts can actually be answered — stdout is a TTY. Callers with a non-interactive
+   * fallback path (e.g. `dev.fallback`) check this before offering a prompt that would otherwise
+   * read an empty pipe.
+   */
+  val isInteractive: Boolean
+    get() = isTty
 }
