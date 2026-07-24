@@ -234,9 +234,7 @@ class DevSessionTest {
         )) {
       val session = createSession(mode = mode)
       // Even ancient Paper plus a curated dependency is fine for native modes — no rules apply.
-      session.enforceHotReloadEligibility(
-          metadata("1.16.5").copy(depend = listOf("ProtocolLib"))
-      )
+      session.enforceHotReloadEligibility(metadata("1.16.5").copy(depend = listOf("ProtocolLib")))
     }
   }
 
@@ -284,9 +282,7 @@ class DevSessionTest {
         listOf(ModeRejection("commandapi", "plugin.yml depend 'CommandAPI'", "reason")),
     )
 
-    fixture.ui.block {
-      fixture.session.showServerInfo(metadata(), "localhost:25565", "restart")
-    }
+    fixture.ui.block { fixture.session.showServerInfo(metadata(), "localhost:25565", "restart") }
 
     val writes = fixture.terminal.writes
     assertTrue(writes.any { it.contains("Mode:") && it.contains("restart") })
@@ -301,9 +297,7 @@ class DevSessionTest {
   @Test
   fun `showServerInfo stays silent about demotion for a session running its requested mode`() {
     val fixture = DevSessionFixture(tempDir)
-    fixture.ui.block {
-      fixture.session.showServerInfo(metadata(), "localhost:25565", "hot-reload")
-    }
+    fixture.ui.block { fixture.session.showServerInfo(metadata(), "localhost:25565", "hot-reload") }
     assertFalse(fixture.terminal.writes.any { it.contains("Demoted") })
   }
 

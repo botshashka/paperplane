@@ -26,9 +26,8 @@ import java.io.File
  * project's configured mode is blue-green — then its proxy infrastructure already exists and is
  * what the user runs daily, so demote to that instead of introducing a third mode.
  *
- * Native-mode requests pass straight through: restart and blue-green have no categorical
- * rejections today. Fresh mode later becomes another selectable tier here without reshaping the
- * flow.
+ * Native-mode requests pass straight through: restart and blue-green have no categorical rejections
+ * today. Fresh mode later becomes another selectable tier here without reshaping the flow.
  */
 internal class ModeSelectionFlow(
     private val ui: TerminalUI,
@@ -51,7 +50,8 @@ internal class ModeSelectionFlow(
     if (preflight == MetadataResult.PluginNotApplied) return requested
 
     // A failed build has no metadata; the selector still scans the config-side sources. Whatever
-    // it can't see here is enforced in-session once metadata resolves (enforceHotReloadEligibility).
+    // it can't see here is enforced in-session once metadata resolves
+    // (enforceHotReloadEligibility).
     val rejections =
         selector.rejections(
             requested,
@@ -70,7 +70,9 @@ internal class ModeSelectionFlow(
 
     return when {
       session.config.dev.fallback == FallbackPolicy.AUTO -> {
-        ui.block { warning("Falling back to ${target.label} for this session (dev.fallback: auto)") }
+        ui.block {
+          warning("Falling back to ${target.label} for this session (dev.fallback: auto)")
+        }
         demote(session, target, rejections)
       }
       !prompts.isInteractive -> {

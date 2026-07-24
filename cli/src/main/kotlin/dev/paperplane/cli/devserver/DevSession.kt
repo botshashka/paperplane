@@ -218,19 +218,18 @@ internal class DevSession(
   /**
    * The result of a [preflightMetadata] call, held for the next [resolveMetadata] to consume. The
    * cache is one-shot by design: mode selection runs metadata resolution moments before the mode's
-   * own startup would, and only that immediate re-read may reuse the result — every later call
-   * (fix recovery, restarts) must see fresh Gradle state.
+   * own startup would, and only that immediate re-read may reuse the result — every later call (fix
+   * recovery, restarts) must see fresh Gradle state.
    */
   private var preflightResult: MetadataResult? = null
 
   /**
    * Session-start metadata resolution for mode selection, before any mode object exists. Runs
    * [resolveMetadata] with its full UI framing and stashes the result so the dispatched mode's own
-   * `resolveMetadata()` call returns it without a second Gradle invocation (and without
-   * re-printing build errors the preflight already surfaced).
+   * `resolveMetadata()` call returns it without a second Gradle invocation (and without re-printing
+   * build errors the preflight already surfaced).
    */
-  internal fun preflightMetadata(): MetadataResult =
-      resolveMetadata().also { preflightResult = it }
+  internal fun preflightMetadata(): MetadataResult = resolveMetadata().also { preflightResult = it }
 
   fun resolveMetadata(): MetadataResult {
     preflightResult?.let {
@@ -278,8 +277,8 @@ internal class DevSession(
    * rules with a consent flow; this enforcement catches what selection couldn't see (a broken
    * initial build resolving mid-session in fix recovery) or what changed under it (a build edit
    * adding a curated dependency). Fail fast with an actionable message instead of letting the
-   * companion's probe reject the load deep into startup. Restart and blue-green deploy natively
-   * and are unaffected — including sessions already demoted to them.
+   * companion's probe reject the load deep into startup. Restart and blue-green deploy natively and
+   * are unaffected — including sessions already demoted to them.
    */
   fun enforceHotReloadEligibility(metadata: ProjectMetadata) {
     if (config.dev.mode != DevMode.HOT_RELOAD) return

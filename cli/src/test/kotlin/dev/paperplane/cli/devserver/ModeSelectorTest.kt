@@ -104,8 +104,7 @@ class ModeSelectorTest {
   fun `artifact matching is anchored — a plugin merely mentioning commandapi mid-name passes`() {
     val result =
         rejections(
-            metadata =
-                metadata(runtimeClasspath = listOf("/libs/my-commandapi-wrapper-1.0.jar")),
+            metadata = metadata(runtimeClasspath = listOf("/libs/my-commandapi-wrapper-1.0.jar")),
         )
     assertEquals(emptyList<ModeRejection>(), result)
   }
@@ -141,7 +140,8 @@ class ModeSelectorTest {
   fun `local jar path in server plugins rejects hot-reload`() {
     val result =
         rejections(
-            config = config(plugins = listOf(PluginDependency.local("./libs/CommandAPI-10.1.2.jar")))
+            config =
+                config(plugins = listOf(PluginDependency.local("./libs/CommandAPI-10.1.2.jar")))
         )
     assertEquals(1, result.size)
     assertEquals("commandapi", result[0].ruleId)

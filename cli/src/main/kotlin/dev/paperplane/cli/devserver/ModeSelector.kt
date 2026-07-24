@@ -37,8 +37,8 @@ internal data class LateLoadRule(
 }
 
 /**
- * The curated seed list (concept §5): CommandAPI and ProtocolLib-hook patterns. Additions are
- * cheap — one [LateLoadRule] entry; the shape is the deliverable, not list completeness.
+ * The curated seed list (concept §5): CommandAPI and ProtocolLib-hook patterns. Additions are cheap
+ * — one [LateLoadRule] entry; the shape is the deliverable, not list completeness.
  */
 internal val CURATED_LATE_LOAD_RULES: List<LateLoadRule> =
     listOf(
@@ -93,8 +93,8 @@ internal data class SelectionReport(
  * - The project's runtime classpath jar names, from metadata.json — catches shaded dependencies
  *   like `commandapi-bukkit-shade`.
  * - `server.plugins` entries in `paperplane.yml` (Modrinth slugs / local jar paths).
- * - Jar names already present in the dev server's `plugins/` directory — catches jars dropped in
- *   by hand outside PaperPlane's managed list.
+ * - Jar names already present in the dev server's `plugins/` directory — catches jars dropped in by
+ *   hand outside PaperPlane's managed list.
  */
 internal class ModeSelector(private val rules: List<LateLoadRule> = CURATED_LATE_LOAD_RULES) {
 
@@ -127,44 +127,54 @@ internal class ModeSelector(private val rules: List<LateLoadRule> = CURATED_LATE
       config: PaperPlaneConfig,
       metadata: ProjectMetadata?,
       serverPluginsDir: File?,
-  ): List<ModeRejection> =
-      rules.mapNotNull { rule ->
-        val match = firstMatch(rule, config, metadata, serverPluginsDir) ?: return@mapNotNull null
-        ModeRejection(rule.id, match, rule.reason)
-      }
+  ): List<ModeRejection> = rules.mapNotNull { rule ->
+    val match = firstMatch(rule, config, metadata, serverPluginsDir) ?: return@mapNotNull null
+    ModeRejection(rule.id, match, rule.reason)
+  }
 
-  /** The first source [rule] fires on, as the human `matchedBy` string, or null when none do. */
+  /**
+   * The first source [rule] fires on, as the human `matchedBy` string, or null when none do. The
+   * sources are thunks so later ones (directory listing) aren't evaluated once an earlier one hits.
+   */
   private fun firstMatch(
       rule: LateLoadRule,
       config: PaperPlaneConfig,
       metadata: ProjectMetadata?,
       serverPluginsDir: File?,
-  ): String? {
-    metadata?.depend?.firstOrNull(rule::matchesPluginName)?.let {
-      return "plugin.yml depend '$it'"
-    }
-    metadata?.softdepend?.firstOrNull(rule::matchesPluginName)?.let {
-      return "plugin.yml softdepend '$it'"
-    }
-    metadata
-        ?.runtimeClasspath
-        ?.map { File(it).name.removeSuffix(".jar") }
-        ?.firstOrNull(rule::matchesArtifact)
-        ?.let {
-          return "runtime classpath '$it'"
-        }
-    config.server.plugins.map { it.slug }.firstOrNull(rule::matchesArtifact)?.let {
-      return "dev-server plugin '$it' (paperplane.yml)"
-    }
-    serverPluginsDir
-        ?.listFiles { f -> f.isFile && f.name.endsWith(".jar") }
-        ?.map { it.name.removeSuffix(".jar") }
-        ?.firstOrNull(rule::matchesArtifact)
-        ?.let {
-          return "server plugins/ jar '$it'"
-        }
-    return null
-  }
+  ): String? =
+      sequenceOf(
+              {
+                metadata?.depend?.firstOrNull(rule::matchesPluginName)?.let {
+                  "plugin.yml depend '$it'"
+                }
+              },
+              {
+                metadata?.softdepend?.firstOrNull(rule::matchesPluginName)?.let {
+                  "plugin.yml softdepend '$it'"
+                }
+              },
+              {
+                metadata
+                    ?.runtimeClasspath
+                    ?.map { File(it).name.removeSuffix(".jar") }
+                    ?.firstOrNull(rule::matchesArtifact)
+                    ?.let { "runtime classpath '$it'" }
+              },
+              {
+                config.server.plugins
+                    .map { it.slug }
+                    .firstOrNull(rule::matchesArtifact)
+                    ?.let { "dev-server plugin '$it' (paperplane.yml)" }
+              },
+              {
+                serverPluginsDir
+                    ?.listFiles { f -> f.isFile && f.name.endsWith(".jar") }
+                    ?.map { it.name.removeSuffix(".jar") }
+                    ?.firstOrNull(rule::matchesArtifact)
+                    ?.let { "server plugins/ jar '$it'" }
+              },
+          )
+          .firstNotNullOfOrNull { it() }
 
   /**
    * The Paper version floor as a rejection rather than the throw it used to be
