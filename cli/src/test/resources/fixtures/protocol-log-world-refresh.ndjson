@@ -1,13 +1,13 @@
-{"at":1784903043600,"dir":"send","line":"{\"type\":\"hello\",\"token\":\"eb57c8d5e528b10c56d067113496e7ac\",\"protocolVersion\":4}"}
-{"at":1784903043602,"dir":"recv","line":"{\"type\":\"welcome\",\"protocolVersion\":4,\"serverReady\":false,\"capability\":\"none\"}"}
-{"at":1784903044042,"dir":"recv","line":"{\"type\":\"ready\"}"}
-{"at":1784903044126,"dir":"send","line":"{\"type\":\"status\",\"state\":\"saving\"}"}
-{"at":1784903044192,"dir":"recv","line":"{\"type\":\"saveComplete\"}"}
-{"at":1784903044212,"dir":"send","line":"{\"requestId\":\"9199a95e-f88c-4771-9348-bcf0393806a4\",\"type\":\"worldWarmup\"}"}
-{"at":1784903044493,"dir":"recv","line":"{\"requestId\":\"9199a95e-f88c-4771-9348-bcf0393806a4\",\"status\":\"ok\",\"op\":\"warmup\",\"worldName\":\"paperplane_warmup\",\"durationMs\":247,\"type\":\"worldReport\"}"}
-{"at":1784903044499,"dir":"send","line":"{\"requestId\":\"d685146e-5ce3-4b1a-a3bb-bdfaf40c58b2\",\"worldName\":\"devworld\",\"type\":\"worldRefresh\"}"}
-{"at":1784903044579,"dir":"recv","line":"{\"requestId\":\"d685146e-5ce3-4b1a-a3bb-bdfaf40c58b2\",\"status\":\"ok\",\"op\":\"refresh\",\"worldName\":\"devworld\",\"durationMs\":78,\"type\":\"worldReport\"}"}
-{"at":1784903044581,"dir":"send","line":"{\"requestId\":\"408afe07-86b1-4fa7-bc40-edfec25abdae\",\"worldName\":\"devworld\",\"type\":\"worldRefresh\"}"}
-{"at":1784903044606,"dir":"recv","line":"{\"requestId\":\"408afe07-86b1-4fa7-bc40-edfec25abdae\",\"status\":\"ok\",\"op\":\"refresh\",\"worldName\":\"devworld\",\"durationMs\":22,\"type\":\"worldReport\"}"}
-{"at":1784903044606,"dir":"send","line":"{\"requestId\":\"f67172d6-4d65-4a32-872e-1cbdaf72b928\",\"worldName\":\"never_synced\",\"type\":\"worldRefresh\"}"}
-{"at":1784903044608,"dir":"recv","line":"{\"requestId\":\"f67172d6-4d65-4a32-872e-1cbdaf72b928\",\"status\":\"failed\",\"op\":\"refresh\",\"worldName\":\"never_synced\",\"durationMs\":1,\"message\":\"no world files for 'never_synced' in /private/var/folders/dm/zwl08lqx2fgb3r1d86_6sn3m0000gn/T/junit-2479325266698157191/server — world sync must complete before the refresh\",\"type\":\"worldReport\"}"}
+{"at":1784915979766,"dir":"send","line":"{\"type\":\"hello\",\"token\":\"ea735f5cac7297c8d2131a1b171e6eaf\",\"protocolVersion\":5}"}
+{"at":1784915979768,"dir":"recv","line":"{\"type\":\"welcome\",\"protocolVersion\":5,\"serverReady\":false,\"capability\":\"none\"}"}
+{"at":1784915981417,"dir":"recv","line":"{\"type\":\"ready\"}"}
+{"at":1784915981492,"dir":"send","line":"{\"type\":\"status\",\"state\":\"saving\"}"}
+{"at":1784915981555,"dir":"recv","line":"{\"type\":\"saveComplete\"}"}
+{"at":1784915981570,"dir":"send","line":"{\"requestId\":\"3194126e-27b3-4327-9b8a-126307802d89\",\"type\":\"worldWarmup\"}"}
+{"at":1784915981916,"dir":"recv","line":"{\"requestId\":\"3194126e-27b3-4327-9b8a-126307802d89\",\"status\":\"ok\",\"op\":\"warmup\",\"worldName\":\"paperplane_warmup\",\"durationMs\":294,\"reloaded\":false,\"type\":\"worldReport\"}"}
+{"at":1784915981922,"dir":"send","line":"{\"requestId\":\"cd9434b3-a5b3-4793-9b9e-bea8d85e34a6\",\"worldName\":\"devworld\",\"type\":\"worldRefresh\"}"}
+{"at":1784915982002,"dir":"recv","line":"{\"requestId\":\"cd9434b3-a5b3-4793-9b9e-bea8d85e34a6\",\"status\":\"ok\",\"op\":\"refresh\",\"worldName\":\"devworld\",\"durationMs\":79,\"reloaded\":false,\"type\":\"worldReport\"}"}
+{"at":1784915982003,"dir":"send","line":"{\"requestId\":\"c1eae17b-7429-4388-b895-f65550711172\",\"worldName\":\"devworld\",\"type\":\"worldRefresh\"}"}
+{"at":1784915982023,"dir":"recv","line":"{\"requestId\":\"c1eae17b-7429-4388-b895-f65550711172\",\"status\":\"ok\",\"op\":\"refresh\",\"worldName\":\"devworld\",\"durationMs\":20,\"reloaded\":true,\"type\":\"worldReport\"}"}
+{"at":1784915982023,"dir":"send","line":"{\"requestId\":\"4aa4a94a-a340-4d33-9654-9865fefc9377\",\"worldName\":\"never_synced\",\"type\":\"worldRefresh\"}"}
+{"at":1784915982025,"dir":"recv","line":"{\"requestId\":\"4aa4a94a-a340-4d33-9654-9865fefc9377\",\"status\":\"failed\",\"op\":\"refresh\",\"worldName\":\"never_synced\",\"durationMs\":1,\"reloaded\":false,\"message\":\"no world files for 'never_synced' in /private/var/folders/dm/zwl08lqx2fgb3r1d86_6sn3m0000gn/T/junit-12624857558650060304/server — world sync must complete before the refresh\",\"type\":\"worldReport\"}"}

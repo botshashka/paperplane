@@ -5,6 +5,7 @@ import java.io.DataInputStream
 import java.io.File
 import java.io.IOException
 import java.util.UUID
+import org.bukkit.World
 import org.bukkit.WorldCreator
 import org.bukkit.WorldType
 import org.bukkit.plugin.java.JavaPlugin
@@ -30,6 +31,16 @@ class WorldRefresher(
      * because MockBukkit doesn't implement `getWorldContainer`).
      */
     private val worldContainer: File,
+    /**
+     * Loads the world [WorldCreator] describes, or null when the server refuses. Injectable for the
+     * same reason [unloadWorld] is: MockBukkit always succeeds, so the refusal branches are
+     * unreachable from outside without a seam.
+     */
+    private val createWorld: (WorldCreator) -> World? = { it.createWorld() },
+    /** Unloads a world, false when the server refuses. See [createWorld]. */
+    private val unloadWorld: (World, Boolean) -> Boolean = { world, save ->
+      plugin.server.unloadWorld(world, save)
+    },
 ) {
   companion object {
     /** The throwaway world [warmup] loads and unloads. */
@@ -49,7 +60,17 @@ class WorldRefresher(
     abstract val worldName: String
     abstract val durationMs: Long
 
-    data class Ok(override val worldName: String, override val durationMs: Long) : Outcome()
+    /**
+     * [reloaded] is true when a previous incarnation was found loaded and unloaded before this load
+     * — the difference between a first load and a genuine replacement. It is the only proof of that
+     * available across the socket: the world's UUID deliberately survives a refresh (see
+     * [resolveUidCollision]), so it cannot distinguish the two.
+     */
+    data class Ok(
+        override val worldName: String,
+        override val durationMs: Long,
+        val reloaded: Boolean,
+    ) : Outcome()
 
     data class Failed(
         override val worldName: String,
@@ -74,7 +95,8 @@ class WorldRefresher(
       return failed(it)
     }
 
-    plugin.server.getWorld(worldName)?.let { previous ->
+    val previous = plugin.server.getWorld(worldName)
+    if (previous != null) {
       // Unload refuses while players stand in the world; parking them at the default spawn is the
       // mechanical minimum. Where players should actually end up is presentation-time policy that
       // lives with the transfer machinery, not here.
@@ -82,16 +104,16 @@ class WorldRefresher(
       if (parkAt != null) {
         for (player in previous.players) player.teleport(parkAt)
       }
-      if (!plugin.server.unloadWorld(previous, false)) {
+      if (!unloadWorld(previous, false)) {
         return failed("could not unload the previous incarnation of '$worldName'")
       }
     }
 
     resolveUidCollision(worldName)
-    WorldCreator(worldName).createWorld()
+    createWorld(WorldCreator(worldName))
         ?: return failed("the server refused to load world '$worldName'")
     plugin.logger.info("Refreshed world '$worldName'")
-    return Outcome.Ok(worldName, System.currentTimeMillis() - start)
+    return Outcome.Ok(worldName, System.currentTimeMillis() - start, reloaded = previous != null)
   }
 
   /**
@@ -135,21 +157,22 @@ class WorldRefresher(
   fun warmup(): Outcome {
     val start = System.currentTimeMillis()
     val dir = File(worldContainer, WARMUP_WORLD_NAME)
-    deleteRecursively(dir) // a leftover from a crashed run must not be loaded as a stale world
+    dir.deleteRecursively() // a leftover from a crashed run must not be loaded as a stale world
 
     val world =
-        WorldCreator(WARMUP_WORLD_NAME)
-            .type(WorldType.FLAT)
-            .generatorSettings(VOID_GENERATOR_SETTINGS)
-            .generateStructures(false)
-            .createWorld()
+        createWorld(
+            WorldCreator(WARMUP_WORLD_NAME)
+                .type(WorldType.FLAT)
+                .generatorSettings(VOID_GENERATOR_SETTINGS)
+                .generateStructures(false)
+        )
             ?: return Outcome.Failed(
                 WARMUP_WORLD_NAME,
                 "the server refused to load the warmup world",
                 System.currentTimeMillis() - start,
             )
-    val unloaded = plugin.server.unloadWorld(world, false)
-    if (!tryDelete(dir)) retryDeleteAsync(dir, DELETE_RETRIES)
+    val unloaded = unloadWorld(world, false)
+    if (!dir.deleteRecursively()) retryDeleteAsync(dir, DELETE_RETRIES)
     if (!unloaded) {
       return Outcome.Failed(
           WARMUP_WORLD_NAME,
@@ -157,13 +180,7 @@ class WorldRefresher(
           System.currentTimeMillis() - start,
       )
     }
-    return Outcome.Ok(WARMUP_WORLD_NAME, System.currentTimeMillis() - start)
-  }
-
-  /** Recursively deletes [dir]; true when it is gone afterwards. */
-  private fun tryDelete(dir: File): Boolean {
-    deleteRecursively(dir)
-    return !dir.exists()
+    return Outcome.Ok(WARMUP_WORLD_NAME, System.currentTimeMillis() - start, reloaded = false)
   }
 
   /**
@@ -179,17 +196,9 @@ class WorldRefresher(
     }
     plugin.server.scheduler.runTaskLaterAsynchronously(
         plugin,
-        Runnable { if (!tryDelete(dir)) retryDeleteAsync(dir, attemptsLeft - 1) },
+        Runnable { if (!dir.deleteRecursively()) retryDeleteAsync(dir, attemptsLeft - 1) },
         DELETE_RETRY_DELAY_TICKS,
     )
-  }
-
-  private fun deleteRecursively(dir: File) {
-    if (!dir.exists()) return
-    dir.listFiles()?.forEach { child ->
-      if (child.isDirectory) deleteRecursively(child) else child.delete()
-    }
-    dir.delete()
   }
 }
 
@@ -215,7 +224,9 @@ enum class HostWorldOp {
  * Mirror of the CLI's `WorldReport`, sent as a `worldReport` message. Answers both world
  * primitives, discriminated by [op]; [requestId] echoes the request so the CLI's waiter can discard
  * stale answers. [durationMs] is the companion-side cost of the world operation (the CLI times its
- * own wall clock separately, like the load path).
+ * own wall clock separately, like the load path). [reloaded] is true when the refresh unloaded a
+ * previous incarnation before loading — the CLI's only handle on whether a repeat refresh really
+ * replaced the world rather than silently no-op'ing.
  */
 data class HostWorldReport(
     val requestId: String,
@@ -223,5 +234,6 @@ data class HostWorldReport(
     val op: HostWorldOp,
     val worldName: String,
     val durationMs: Long,
+    val reloaded: Boolean = false,
     val message: String? = null,
 )

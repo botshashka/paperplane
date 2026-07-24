@@ -34,7 +34,8 @@ enum class WorldOp {
  * Mirror of the companion's `HostWorldReport` — same JSON shape, no cross-module dependency.
  * Arrives as a `worldReport` message. All fields default so an unexpected document shape
  * deserializes without throwing; `requestId` echoes the request so the waiter can discard stale
- * answers. [durationMs] is the companion-side cost of the operation.
+ * answers. [durationMs] is the companion-side cost of the operation. [reloaded] is true when the
+ * refresh unloaded a previous incarnation before loading, false on a first load.
  */
 data class WorldReport(
     val requestId: String = "",
@@ -42,6 +43,7 @@ data class WorldReport(
     val op: WorldOp? = null,
     val worldName: String = "",
     val durationMs: Long = 0,
+    val reloaded: Boolean = false,
     val message: String? = null,
 )
 
@@ -78,9 +80,15 @@ internal class WorldRefreshFlow(private val ipc: CompanionIpc) {
 
   /**
    * Proof that [worldName] finished refreshing on the target server. Constructed only by [refresh]
-   * — hold one and the §2.1 ordering is already satisfied.
+   * — hold one and the §2.1 ordering is already satisfied. [reloaded] distinguishes a first load
+   * from a genuine replacement of a previously loaded incarnation.
    */
-  class RefreshedWorld internal constructor(val worldName: String, val companionDurationMs: Long)
+  class RefreshedWorld
+  internal constructor(
+      val worldName: String,
+      val companionDurationMs: Long,
+      val reloaded: Boolean,
+  )
 
   sealed interface RefreshResult {
     data class Ok(val world: RefreshedWorld) : RefreshResult
@@ -113,7 +121,7 @@ internal class WorldRefreshFlow(private val ipc: CompanionIpc) {
       is WorldWaitResult.Answered ->
           wait.report.let { report ->
             if (report.status == WorldOpStatus.OK) {
-              RefreshResult.Ok(RefreshedWorld(report.worldName, report.durationMs))
+              RefreshResult.Ok(RefreshedWorld(report.worldName, report.durationMs, report.reloaded))
             } else {
               RefreshResult.Failed(report.message ?: "world refresh failed")
             }

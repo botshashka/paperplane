@@ -147,6 +147,35 @@ class WorldSyncTest {
   }
 
   @Test
+  fun `a clone that reports success but produces nothing falls back instead of emptying the world`() {
+    populateWorld(src)
+    dst.mkdirs()
+    File(dst, "level.dat").writeText("previous")
+
+    // Success with no temp directory to swap in: the rename must fail and the fallback must run,
+    // or the target is left deleted and the standby boots a world with no level.dat.
+    val sync = WorldSync(fakeArgv, { true })
+    sync.sync(src, dst, IncrementalSync.SKIP_LOCK_FILES)
+
+    assertEquals(WorldSync.Strategy.INCREMENTAL, sync.lastStrategy)
+    assertEquals("level", File(dst, "level.dat").readText())
+    assertEquals("region-data", File(dst, "region/r.0.0.mca").readText())
+  }
+
+  @Test
+  fun `a clone command that cannot be exec'd is a failure, not a crash`() {
+    populateWorld(src)
+
+    // The real runProcess, pointed at a binary that does not exist: ProcessBuilder throws
+    // IOException, which must surface as "clone failed" and route to the fallback.
+    val sync = WorldSync({ s, d -> listOf("ppl-no-such-binary", s.path, d.path) })
+    sync.sync(src, dst, IncrementalSync.SKIP_LOCK_FILES)
+
+    assertEquals(WorldSync.Strategy.INCREMENTAL, sync.lastStrategy)
+    assertEquals("level", File(dst, "level.dat").readText())
+  }
+
+  @Test
   fun `without a platform clone command the incremental tier is used and nothing is exec'd`() {
     populateWorld(src)
     val sync = WorldSync(cloneArgv = null, runCommand = { error("nothing may be exec'd") })

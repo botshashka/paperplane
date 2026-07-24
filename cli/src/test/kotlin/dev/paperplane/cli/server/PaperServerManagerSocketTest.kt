@@ -108,10 +108,10 @@ class PaperServerManagerSocketTest {
   // ── saveWorld ───────────────────────────────────────────────────────
 
   @Test
-  fun `saveWorld returns false without a companion connection`() {
+  fun `saveWorld reports Unreachable without a companion connection`() {
     val manager = createManager()
     manager.serverDir.mkdirs()
-    assertFalse(manager.saveWorld(timeoutMs = 300))
+    assertEquals(PaperServerManager.SaveOutcome.Unreachable, manager.saveWorld(timeoutMs = 300))
   }
 
   @Test
@@ -135,7 +135,7 @@ class PaperServerManagerSocketTest {
             }
             .start()
 
-        assertTrue(manager.saveWorld(timeoutMs = 5_000))
+        assertEquals(PaperServerManager.SaveOutcome.Saved, manager.saveWorld(timeoutMs = 5_000))
         assertTrue(
             companion.received.any { it.contains("\"state\":\"saving\"") },
             "saveWorld must send the saving status; received: ${companion.received}",
@@ -151,7 +151,11 @@ class PaperServerManagerSocketTest {
     FakeCompanionSocket(manager.serverDir, serverReadyOnWelcome = true).start().use { _ ->
       withSleeperProcess(manager) {
         assertTrue(manager.waitForReady(), "welcome snapshot alone must satisfy readiness")
-        assertFalse(manager.saveWorld(timeoutMs = 300), "no saveComplete → timeout")
+        assertEquals(
+            PaperServerManager.SaveOutcome.TimedOut,
+            manager.saveWorld(timeoutMs = 300),
+            "a reachable companion that never confirms must time out, not read as unreachable",
+        )
       }
     }
   }

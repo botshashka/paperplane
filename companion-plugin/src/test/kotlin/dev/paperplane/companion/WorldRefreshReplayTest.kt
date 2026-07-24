@@ -21,8 +21,9 @@ import org.junit.jupiter.api.io.TempDir
  * module's `WorldRefreshE2ETest` against Paper 1.21.11 —
  * `fixtures/protocol-log-world-refresh.ndjson` — into a live [CompanionSocketServer] over TCP. Pins
  * the companion's parse of what the real CLI actually sends for the world primitives; the CLI
- * module's twin replays the companion→CLI direction. The captured hello is re-tokened (each server
- * instance generates a fresh auth token) but otherwise sent verbatim.
+ * module's twin replays the companion→CLI direction. The captured hello is re-stamped with this
+ * instance's auth token and the current protocol version — neither is a wire-shape fact — but is
+ * otherwise sent verbatim.
  */
 class WorldRefreshReplayTest {
 
@@ -72,10 +73,11 @@ class WorldRefreshReplayTest {
         val reader = InputStreamReader(it.getInputStream(), Charsets.UTF_8).buffered()
 
         val sends = capturedSends()
-        // The captured hello, re-tokened for this server instance's fresh auth token.
+        // The captured hello, re-stamped for this server instance — see the class doc.
         val hello =
             gson.fromJson(sends.first(), JsonObject::class.java).apply {
               addProperty("token", info.get("token").asString)
+              addProperty("protocolVersion", CompanionSocketServer.PROTOCOL_VERSION)
             }
         writer.write(hello.toString())
         writer.write("\n")

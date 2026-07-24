@@ -96,10 +96,10 @@ class FakePaperServerManager(
     return readyResult
   }
 
-  /** Scripted [saveWorld] outcome — false simulates a timed-out or unreachable companion save. */
-  var saveWorldResult: Boolean = true
+  /** Scripted [saveWorld] outcome — see [PaperServerManager.SaveOutcome]. */
+  var saveWorldResult: PaperServerManager.SaveOutcome = PaperServerManager.SaveOutcome.Saved
 
-  override fun saveWorld(timeoutMs: Long): Boolean {
+  override fun saveWorld(timeoutMs: Long): PaperServerManager.SaveOutcome {
     calls += "saveWorld"
     return saveWorldResult
   }

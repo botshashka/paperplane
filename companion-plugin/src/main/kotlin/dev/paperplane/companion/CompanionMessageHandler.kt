@@ -291,17 +291,23 @@ class CompanionMessageHandler(
    * gets the real cause instead of a timeout.
    */
   fun handleWorldRefresh(request: HostWorldRefreshRequest) {
-    answerWorldReport(request.requestId, HostWorldOp.REFRESH) { it.refresh(request.worldName) }
+    answerWorldReport(request.requestId, HostWorldOp.REFRESH, request.worldName) {
+      it.refresh(request.worldName)
+    }
   }
 
   /** Runs the throwaway-world warmup (JIT-warms the world-load path) and answers likewise. */
   fun handleWorldWarmup(request: HostWorldWarmupRequest) {
-    answerWorldReport(request.requestId, HostWorldOp.WARMUP) { it.warmup() }
+    answerWorldReport(request.requestId, HostWorldOp.WARMUP, WorldRefresher.WARMUP_WORLD_NAME) {
+      it.warmup()
+    }
   }
 
   private fun answerWorldReport(
       requestId: String,
       op: HostWorldOp,
+      /** The world the request named — the fallback when a throw leaves us no outcome to read. */
+      requestedWorldName: String,
       operation: (WorldRefresher) -> WorldRefresher.Outcome,
   ) {
     // Same last-resort net as the load and patch paths: the CLI blocks on this report, and a
@@ -314,7 +320,11 @@ class CompanionMessageHandler(
           operation(refresher)
         } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
           plugin.logger.log(Level.WARNING, "World ${op.name.lowercase()} failed unexpectedly", e)
-          WorldRefresher.Outcome.Failed("", "${e.javaClass.simpleName}: ${e.message}", 0)
+          WorldRefresher.Outcome.Failed(
+              requestedWorldName,
+              "${e.javaClass.simpleName}: ${e.message}",
+              0,
+          )
         }
     val report =
         when (outcome) {
@@ -325,6 +335,7 @@ class CompanionMessageHandler(
                   op = op,
                   worldName = outcome.worldName,
                   durationMs = outcome.durationMs,
+                  reloaded = outcome.reloaded,
               )
           is WorldRefresher.Outcome.Failed ->
               HostWorldReport(

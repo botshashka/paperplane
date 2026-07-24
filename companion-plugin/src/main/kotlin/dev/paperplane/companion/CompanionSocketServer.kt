@@ -74,7 +74,7 @@ class CompanionSocketServer(
 ) : CompanionIpc, AutoCloseable {
   companion object {
     /** Mirror of the CLI's `CompanionSocketFile.PROTOCOL_VERSION`. */
-    const val PROTOCOL_VERSION = 4
+    const val PROTOCOL_VERSION = 5
 
     // Wire message `type` discriminators. Mirror of the CLI's CompanionWire tags; the modules share
     // no code, so a tag introduced on one side must be added on the other.

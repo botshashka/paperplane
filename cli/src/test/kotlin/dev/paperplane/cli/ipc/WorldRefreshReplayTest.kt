@@ -62,6 +62,13 @@ class WorldRefreshReplayTest {
         reports.map { it.status },
     )
     assertTrue(reports.all { it.requestId.isNotEmpty() })
+    // A real server distinguishes the first load from the reload that unloaded it. Anything else
+    // here means the refresh silently no-op'd on the second request.
+    assertEquals(
+        listOf(false, false, true, false),
+        reports.map { it.reloaded },
+        "warmup loads, the first refresh loads, only the repeat refresh reloads",
+    )
 
     val warmup = reports[0]
     assertEquals("paperplane_warmup", warmup.worldName)

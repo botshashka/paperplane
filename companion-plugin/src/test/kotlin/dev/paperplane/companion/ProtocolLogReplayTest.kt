@@ -77,10 +77,14 @@ class ProtocolLogReplayTest {
         val reader = InputStreamReader(it.getInputStream(), Charsets.UTF_8).buffered()
 
         val sends = capturedSends()
-        // The captured hello, re-tokened for this server instance's fresh auth token.
+        // The captured hello, re-stamped for this server instance: the auth token is per-instance,
+        // and the protocol version is per-era. Neither is a wire-shape fact, and pinning the
+        // fixture to one version would make every future bump fail this test for the wrong reason.
+        // Version negotiation has its own direct coverage in CompanionSocketServerTest.
         val hello =
             gson.fromJson(sends.first(), JsonObject::class.java).apply {
               addProperty("token", info.get("token").asString)
+              addProperty("protocolVersion", CompanionSocketServer.PROTOCOL_VERSION)
             }
         writer.write(hello.toString())
         writer.write("\n")

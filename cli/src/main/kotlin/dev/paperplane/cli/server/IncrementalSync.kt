@@ -25,9 +25,16 @@ internal object IncrementalSync {
   }
 
   /**
-   * Two-pass directory sync: removes orphans in [dst] that aren't in [src] (skipping any name
-   * matching [skipName]), then walks [src] and either recurses on directories ([onDirectory]) or
-   * copies files ([onFile]). Skip predicate is applied to both passes.
+   * Two-pass sync of [src]'s immediate children into [dst]: removes orphans in [dst] that aren't in
+   * [src] (skipping any name matching [skipName]), then walks [src] and either recurses on
+   * directories ([onDirectory]) or copies files ([onFile]).
+   *
+   * [skipName] governs THIS level only — it is not threaded into [onDirectory], because the names
+   * callers skip here (managed config files, the dev plugin jar, `.paperplane`) are top-level
+   * concepts that would be wrong to match against arbitrary nested entries. Recursion policy is
+   * entirely [onDirectory]'s to decide; the default recurses with the lock-file predicate. A caller
+   * that does want its predicate applied at every depth passes an [onDirectory] that threads it
+   * through, the way [syncDir] does.
    */
   fun syncChildren(
       src: File,
@@ -73,14 +80,8 @@ internal object IncrementalSync {
     return srcTime != dstTime
   }
 
+  /** Removes [dir] and everything under it. Best-effort: a file the OS won't release stays. */
   fun deleteDir(dir: File) {
-    if (!dir.exists()) return
-    val files = dir.listFiles()
-    if (files != null) {
-      for (child in files) {
-        if (child.isDirectory) deleteDir(child) else child.delete()
-      }
-    }
-    dir.delete()
+    dir.deleteRecursively()
   }
 }

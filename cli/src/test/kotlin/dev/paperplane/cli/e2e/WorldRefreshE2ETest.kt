@@ -10,8 +10,8 @@ import dev.paperplane.cli.ui.RecordingTerminal
 import dev.paperplane.cli.ui.TerminalUI
 import java.io.File
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
-import org.junit.jupiter.api.Assertions.assertNotSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
@@ -59,6 +59,26 @@ class WorldRefreshE2ETest {
     return manager
   }
 
+  /**
+   * Runs the warmup and waits out its directory deletion. Deletion is eventually-consistent —
+   * Paper's async chunk I/O can drop a late file into the directory after the unload, which the
+   * companion's retry chain then removes — so poll instead of asserting immediately.
+   */
+  private fun assertWarmupLeavesNothingBehind(flow: WorldRefreshFlow, serverDir: File) {
+    val warmup = flow.warmUp()
+    assertInstanceOf(WorldRefreshFlow.WarmupResult.Ok::class.java, warmup, "warmup: $warmup")
+    val warmupDir = File(serverDir, "paperplane_warmup")
+    val deleteDeadline = System.currentTimeMillis() + 10_000
+    while (warmupDir.exists() && System.currentTimeMillis() < deleteDeadline) {
+      Thread.sleep(200)
+    }
+    assertFalse(
+        warmupDir.exists(),
+        "the warmup world directory must be deleted; leftover: " +
+            warmupDir.walkTopDown().joinToString { it.relativeTo(serverDir).path },
+    )
+  }
+
   @Test
   fun `flushed save, CoW sync, warmup, and secondary-world refresh against a real server`() {
     val serverDir = File(tempDir, "server")
@@ -67,7 +87,11 @@ class WorldRefreshE2ETest {
       assertTrue(manager.waitForReady(), "the real server must become ready")
 
       // 1. Flushed save over the socket: saveComplete only after World#save(flush=true) returns.
-      assertTrue(manager.saveWorld(), "the flushed save must confirm")
+      assertEquals(
+          PaperServerManager.SaveOutcome.Saved,
+          manager.saveWorld(),
+          "the flushed save must confirm",
+      )
 
       // 2. CoW sync of the freshly-saved default world into a secondary world directory.
       val sync = WorldSync()
@@ -80,22 +104,8 @@ class WorldRefreshE2ETest {
 
       val flow = WorldRefreshFlow(manager.ipc)
 
-      // 3. Warmup hook: throwaway world loads, unloads, and leaves no directory behind. Deletion
-      // is eventually-consistent — Paper's async chunk I/O can write a late file, which the
-      // companion's retry chain then removes — so poll instead of asserting immediately.
-      val warmup = flow.warmUp()
-      assertInstanceOf(WorldRefreshFlow.WarmupResult.Ok::class.java, warmup, "warmup: $warmup")
-      val warmupDir = File(serverDir, "paperplane_warmup")
-      val deleteDeadline = System.currentTimeMillis() + 10_000
-      while (warmupDir.exists() && System.currentTimeMillis() < deleteDeadline) {
-        Thread.sleep(200)
-      }
-      assertEquals(
-          false,
-          warmupDir.exists(),
-          "the warmup world directory must be deleted; leftover: " +
-              warmupDir.walkTopDown().joinToString { it.relativeTo(serverDir).path },
-      )
+      // 3. Warmup hook: throwaway world loads, unloads, and leaves no directory behind.
+      assertWarmupLeavesNothingBehind(flow, serverDir)
 
       // 4. Secondary-world refresh: first load...
       val first = flow.refresh("devworld")
@@ -103,11 +113,18 @@ class WorldRefreshE2ETest {
           assertInstanceOf(WorldRefreshFlow.RefreshResult.Ok::class.java, first, "first: $first")
       assertEquals("devworld", firstOk.world.worldName)
 
-      // ...and a repeat refresh, which must unload the previous incarnation and load anew.
+      assertFalse(firstOk.world.reloaded, "the first refresh loads, it does not reload")
+
+      // ...and a repeat refresh, which must unload the previous incarnation and load anew. Without
+      // this the second refresh could silently no-op (Bukkit handing back the already-loaded
+      // world) and still report Ok.
       val second = flow.refresh("devworld")
       val secondOk =
           assertInstanceOf(WorldRefreshFlow.RefreshResult.Ok::class.java, second, "second: $second")
-      assertNotSame(firstOk.world, secondOk.world)
+      assertTrue(
+          secondOk.world.reloaded,
+          "the repeat refresh must have unloaded the previous incarnation before loading",
+      )
 
       // 5. A refresh whose world was never synced fails with the real cause, not a timeout.
       val missing = flow.refresh("never_synced")

@@ -337,18 +337,32 @@ internal open class BlueGreenMode(
     // saveWorld sends the `saving` status (which also opens the companion's save-protection
     // window) and awaits the saveComplete event. The companion saves with flush=true, so the
     // event means the world files are actually on disk — the sync below never races the saver.
-    val saved = session.ui.spin("Saving world...") { active.saveWorld() }
-    if (!saved && active.isRunning()) {
-      // A live server that never confirmed the save may still be writing region files; syncing
-      // now would hand the standby a torn world. Skip this swap — the next change retries.
-      session.ui.error("World save did not complete — skipping this swap")
-      active.ipc.sendStatus(CompanionWire.STATE_ERROR, message = "World save did not complete")
-      return false
-    }
-    if (!saved) {
-      // Dead server: nothing is writing the world files, so the last-saved state is consistent —
-      // and swapping to the standby is exactly how the session recovers.
-      session.ui.warning("Server not responding — standby will sync the last-saved world state")
+    when (session.ui.spin("Saving world...") { active.saveWorld() }) {
+      PaperServerManager.SaveOutcome.Saved -> {}
+      PaperServerManager.SaveOutcome.TimedOut ->
+          if (active.isRunning()) {
+            // A live server that was asked to save and never confirmed may still be writing region
+            // files; syncing now would hand the standby a torn world. Skip this swap — the next
+            // change retries, and a companion that is merely slow will confirm then.
+            session.ui.error("World save did not complete — skipping this swap")
+            active.ipc.sendStatus(
+                CompanionWire.STATE_ERROR,
+                message = "World save did not complete",
+            )
+            return false
+          } else {
+            // Dead server: nothing is writing the world files, so the last-saved state is
+            // consistent — and swapping to the standby is exactly how the session recovers.
+            session.ui.warning(
+                "Server not responding — standby will sync the last-saved world state"
+            )
+          }
+      // The request never left the CLI, so nothing was told to save and no save is in flight. The
+      // socket does not reconnect within a session, so skipping here would wedge every future
+      // rebuild on the same unreachable companion; the swap is the only way out, and it starts a
+      // fresh server with a fresh connection.
+      PaperServerManager.SaveOutcome.Unreachable ->
+          session.ui.warning("Companion unreachable — standby will sync the last-saved world state")
     }
 
     if (standby.isRunning()) standby.stop()

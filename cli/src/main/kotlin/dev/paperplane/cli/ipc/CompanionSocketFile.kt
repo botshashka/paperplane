@@ -27,9 +27,14 @@ object CompanionSocketFile {
    * handshake carries it so a stale companion jar can't silently misparse. (Versions 1–2 were the
    * retired flag-file protocol's `companion-config.json`/`companion-status.json` markers; version 3
    * predates the instant tier — v4 adds `instantSwap`/`instantReport`, welcome capabilities, and
-   * removes the load request's `changedClasses`.)
+   * removes the load request's `changedClasses`; v5 adds the world primitives
+   * `worldRefresh`/`worldWarmup`/`worldReport`.)
+   *
+   * The bump is what makes a stale companion fail the handshake with the actionable "rebuild"
+   * error. Without it the versions still match, the handshake succeeds, and the first world request
+   * goes unanswered — surfacing as a 30 s timeout instead of the real cause.
    */
-  const val PROTOCOL_VERSION = 4
+  const val PROTOCOL_VERSION = 5
 
   private const val FILE_NAME = "companion-socket.json"
   private const val MAX_PORT = 65535
