@@ -4,6 +4,7 @@ import dev.paperplane.cli.Versions
 import dev.paperplane.cli.config.DevMode
 import dev.paperplane.cli.config.PaperPlaneConfig
 import dev.paperplane.cli.gradle.ProjectMetadata
+import dev.paperplane.cli.plugins.PluginDependency
 import java.io.File
 
 /**
@@ -68,13 +69,13 @@ internal val CURATED_LATE_LOAD_RULES: List<LateLoadRule> =
 internal data class ModeRejection(val ruleId: String, val matchedBy: String, val reason: String)
 
 /**
- * The outcome of session-start mode selection when it demoted: what the user asked for, what the
- * session actually runs, and why. Carried on the [DevSession] so the server-info tier report can
- * state the demotion — the §1 closing rule ("the tool always reports which tier it chose and why").
+ * The outcome of session-start mode selection when it demoted: what the user asked for and why.
+ * Carried on the [DevSession] so the server-info tier report can state the demotion — the §1
+ * closing rule ("the tool always reports which tier it chose and why"). The mode actually running
+ * is read from `config.dev.mode`, which demotion has already set.
  */
 internal data class SelectionReport(
     val requested: DevMode,
-    val actual: DevMode,
     val rejections: List<ModeRejection>,
 )
 
@@ -127,61 +128,68 @@ internal class ModeSelector(private val rules: List<LateLoadRule> = CURATED_LATE
       config: PaperPlaneConfig,
       metadata: ProjectMetadata?,
       serverPluginsDir: File?,
-  ): List<ModeRejection> = rules.mapNotNull { rule ->
-    val match = firstMatch(rule, config, metadata, serverPluginsDir) ?: return@mapNotNull null
-    ModeRejection(rule.id, match, rule.reason)
+  ): List<ModeRejection> {
+    // Derived once, not once per rule. The classpath/config/dir sources are `lazy` so a scan
+    // (especially the `plugins/` directory listing) happens at most once total, and only if some
+    // rule reaches that source without an earlier one having matched first.
+    val dependNames = metadata?.depend.orEmpty()
+    val softdependNames = metadata?.softdepend.orEmpty()
+    val classpathSlugs by
+        lazy(LazyThreadSafetyMode.NONE) {
+          metadata?.runtimeClasspath.orEmpty().map { PluginDependency.localSlug(it) }
+        }
+    val configSlugs by lazy(LazyThreadSafetyMode.NONE) { config.server.plugins.map { it.slug } }
+    val serverJarSlugs by
+        lazy(LazyThreadSafetyMode.NONE) {
+          serverPluginsDir
+              ?.listFiles { f -> f.isFile && f.name.endsWith(".jar") }
+              ?.map { PluginDependency.localSlug(it.path) }
+              .orEmpty()
+        }
+
+    // The first source a rule fires on, as the human `matchedBy` string. The sources are thunks so
+    // later ones aren't evaluated once an earlier one hits (and the shared lazy derivations above
+    // aren't forced needlessly).
+    fun firstMatch(rule: LateLoadRule): String? =
+        sequenceOf(
+                {
+                  dependNames.firstOrNull(rule::matchesPluginName)?.let {
+                    "plugin.yml depend '$it'"
+                  }
+                },
+                {
+                  softdependNames.firstOrNull(rule::matchesPluginName)?.let {
+                    "plugin.yml softdepend '$it'"
+                  }
+                },
+                {
+                  classpathSlugs.firstOrNull(rule::matchesArtifact)?.let {
+                    "runtime classpath '$it'"
+                  }
+                },
+                {
+                  configSlugs.firstOrNull(rule::matchesArtifact)?.let {
+                    "dev-server plugin '$it' (paperplane.yml)"
+                  }
+                },
+                {
+                  serverJarSlugs.firstOrNull(rule::matchesArtifact)?.let {
+                    "server plugins/ jar '$it'"
+                  }
+                },
+            )
+            .firstNotNullOfOrNull { it() }
+
+    return rules.mapNotNull { rule ->
+      firstMatch(rule)?.let { ModeRejection(rule.id, it, rule.reason) }
+    }
   }
 
   /**
-   * The first source [rule] fires on, as the human `matchedBy` string, or null when none do. The
-   * sources are thunks so later ones (directory listing) aren't evaluated once an earlier one hits.
-   */
-  private fun firstMatch(
-      rule: LateLoadRule,
-      config: PaperPlaneConfig,
-      metadata: ProjectMetadata?,
-      serverPluginsDir: File?,
-  ): String? =
-      sequenceOf(
-              {
-                metadata?.depend?.firstOrNull(rule::matchesPluginName)?.let {
-                  "plugin.yml depend '$it'"
-                }
-              },
-              {
-                metadata?.softdepend?.firstOrNull(rule::matchesPluginName)?.let {
-                  "plugin.yml softdepend '$it'"
-                }
-              },
-              {
-                metadata
-                    ?.runtimeClasspath
-                    ?.map { File(it).name.removeSuffix(".jar") }
-                    ?.firstOrNull(rule::matchesArtifact)
-                    ?.let { "runtime classpath '$it'" }
-              },
-              {
-                config.server.plugins
-                    .map { it.slug }
-                    .firstOrNull(rule::matchesArtifact)
-                    ?.let { "dev-server plugin '$it' (paperplane.yml)" }
-              },
-              {
-                serverPluginsDir
-                    ?.listFiles { f -> f.isFile && f.name.endsWith(".jar") }
-                    ?.map { it.name.removeSuffix(".jar") }
-                    ?.firstOrNull(rule::matchesArtifact)
-                    ?.let { "server plugins/ jar '$it'" }
-              },
-          )
-          .firstNotNullOfOrNull { it() }
-
-  /**
-   * The Paper version floor as a rejection rather than the throw it used to be
-   * (`enforceHotReloadVersionFloor`), so it rides the same consent-based demotion flow as a
-   * dependency hit. The version is derived the same way `resolveMcVersion` derives it; when neither
-   * source yields a parseable version (broken build, no override) the floor abstains — supported-
-   * version validation happens elsewhere.
+   * The Paper version floor, emitted as a rejection so it rides the same consent-based demotion
+   * flow as a dependency hit. The version is derived the same way `resolveMcVersion` derives it;
+   * when neither source yields a parseable version (broken build, no override) the floor abstains —
+   * supported-version validation happens elsewhere.
    */
   private fun versionFloorRejection(
       config: PaperPlaneConfig,

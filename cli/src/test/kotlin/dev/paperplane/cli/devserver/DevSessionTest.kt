@@ -285,7 +285,6 @@ class DevSessionTest {
     assertEquals(DevMode.RESTART, fixture.session.config.dev.mode)
     val report = fixture.session.selectionReport!!
     assertEquals(DevMode.HOT_RELOAD, report.requested)
-    assertEquals(DevMode.RESTART, report.actual)
     assertEquals(listOf(rejection), report.rejections)
   }
 

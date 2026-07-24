@@ -6,7 +6,6 @@ import dev.paperplane.cli.config.FallbackPolicy
 import dev.paperplane.cli.gradle.MetadataResult
 import dev.paperplane.cli.ui.InteractivePrompts
 import dev.paperplane.cli.ui.TerminalUI
-import java.io.File
 
 /**
  * Session-start mode selection: decides which dev mode the session actually runs, before any mode
@@ -57,7 +56,7 @@ internal class ModeSelectionFlow(
             requested,
             session.config,
             preflight.metadataOrNull,
-            File(session.ppDir, "server/plugins"),
+            session.serverPluginsDir,
         )
     if (rejections.isEmpty()) return requested
 

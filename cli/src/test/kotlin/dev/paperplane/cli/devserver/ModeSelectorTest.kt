@@ -230,6 +230,12 @@ class ModeSelectorTest {
         emptyList<ModeRejection>(),
         rejections(metadata = metadata(paperApiVersion = "unknown")),
     )
+    // A snapshot/pre-release string is non-numeric too — the floor abstains rather than guessing
+    // whether it precedes 1.19.3.
+    assertEquals(
+        emptyList<ModeRejection>(),
+        rejections(metadata = metadata(paperApiVersion = "1.21-pre")),
+    )
     assertEquals(emptyList<ModeRejection>(), rejections(metadata = null))
   }
 

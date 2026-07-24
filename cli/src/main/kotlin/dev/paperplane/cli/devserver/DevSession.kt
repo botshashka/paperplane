@@ -69,7 +69,7 @@ internal class DevSession(
    * on. The pre-demotion mode is preserved on the [selectionReport] for the tier report.
    */
   internal fun demoteMode(target: DevMode, rejections: List<ModeRejection>) {
-    selectionReport = SelectionReport(config.dev.mode, target, rejections)
+    selectionReport = SelectionReport(config.dev.mode, rejections)
     config = config.copy(dev = config.dev.copy(mode = target))
   }
 
@@ -207,15 +207,6 @@ internal class DevSession(
   }
 
   /**
-   * Runs the metadata-resolution step inside a spinner and emits the appropriate framing for each
-   * outcome:
-   * - [MetadataResult.Success]: silently creates `.paperplane/`.
-   * - [MetadataResult.PluginNotApplied]: prints the "ppl init / ppl create" hint and closes the
-   *   gradle connection (caller will return without entering fix-recovery).
-   * - [MetadataResult.TaskFailed]: prints "Build failed" with timing so the user sees the same UI
-   *   they would for a build failure proper. Caller routes to fix-recovery.
-   */
-  /**
    * The result of a [preflightMetadata] call, held for the next [resolveMetadata] to consume. The
    * cache is one-shot by design: mode selection runs metadata resolution moments before the mode's
    * own startup would, and only that immediate re-read may reuse the result — every later call (fix
@@ -231,6 +222,15 @@ internal class DevSession(
    */
   internal fun preflightMetadata(): MetadataResult = resolveMetadata().also { preflightResult = it }
 
+  /**
+   * Runs the metadata-resolution step inside a spinner and emits the appropriate framing for each
+   * outcome:
+   * - [MetadataResult.Success]: silently creates `.paperplane/`.
+   * - [MetadataResult.PluginNotApplied]: prints the "ppl init / ppl create" hint and closes the
+   *   gradle connection (caller will return without entering fix-recovery).
+   * - [MetadataResult.TaskFailed]: prints "Build failed" with timing so the user sees the same UI
+   *   they would for a build failure proper. Caller routes to fix-recovery.
+   */
   fun resolveMetadata(): MetadataResult {
     preflightResult?.let {
       preflightResult = null
@@ -271,6 +271,14 @@ internal class DevSession(
   private val modeSelector = ModeSelector()
 
   /**
+   * The restart-mode dev server's `plugins/` directory — the one [ModeSelector] scans for
+   * hand-dropped jars during session-start selection and in-session enforcement. Best-effort: it
+   * may not exist yet on a first run.
+   */
+  internal val serverPluginsDir: File
+    get() = File(ppDir, "server/plugins")
+
+  /**
    * The in-session backstop for hot-reload's categorical rejections — the Paper version floor
    * (1.19.3, the version that introduced `ConfiguredPluginClassLoader`) and the curated
    * can't-late-load dependency list, both via [ModeSelector]. Session-start selection runs the same
@@ -287,7 +295,7 @@ internal class DevSession(
             DevMode.HOT_RELOAD,
             config,
             metadata,
-            File(ppDir, "server/plugins"),
+            serverPluginsDir,
         )
     if (rejections.isEmpty()) return
     throw IllegalArgumentException(
