@@ -9,6 +9,7 @@ import dev.paperplane.cli.config.PaperPlaneConfig
 import dev.paperplane.cli.devserver.BlueGreenMode
 import dev.paperplane.cli.devserver.DevSession
 import dev.paperplane.cli.devserver.HotReloadMode
+import dev.paperplane.cli.devserver.ModeSelectionFlow
 import dev.paperplane.cli.devserver.RestartMode
 import dev.paperplane.cli.gradle.GradleBridge
 import dev.paperplane.cli.server.PaperDownloader
@@ -63,8 +64,8 @@ class DevCommand(
     val session =
         DevSession(
             // Fold the --mode override back into the config: DevSession keys mode-specific behavior
-            // (e.g. the hot-reload version floor) on config.dev.mode, which must match the mode
-            // actually run.
+            // (e.g. hot-reload eligibility) on config.dev.mode, which must match the mode actually
+            // run. A demotion below updates it again via DevSession.demoteMode.
             config = config.copy(dev = config.dev.copy(mode = resolvedMode)),
             ppDir = ppDir,
             gradle = GradleBridge(projectDir, ui),
@@ -73,7 +74,13 @@ class DevCommand(
             ui = ui,
         )
 
-    when (resolvedMode) {
+    // Session-start mode selection (concept §5): a hot-reload request is scanned for categorical
+    // rejections and may demote — with consent or a banner — to a native mode. Null means the user
+    // declined the fallback and the session must not start.
+    val sessionMode =
+        ModeSelectionFlow(ui, prompts).resolve(session, resolvedMode, config.dev.mode) ?: return
+
+    when (sessionMode) {
       DevMode.HOT_RELOAD -> HotReloadMode(session).run()
       DevMode.BLUE_GREEN -> BlueGreenMode(session).run()
       DevMode.RESTART -> RestartMode(session).run()

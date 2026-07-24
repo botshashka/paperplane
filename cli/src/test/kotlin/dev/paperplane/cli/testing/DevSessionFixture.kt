@@ -35,8 +35,10 @@ class DevSessionFixture(
     tempDir: File,
     config: PaperPlaneConfig = PaperPlaneConfig(),
     pluginResolver: PluginResolver? = null,
+    /** Set false to exercise non-interactive (no-TTY) paths, e.g. the `dev.fallback` failure. */
+    isTty: Boolean = true,
 ) {
-  val terminal: RecordingTerminal = RecordingTerminal()
+  val terminal: RecordingTerminal = RecordingTerminal(isTty = isTty)
   val ui: TerminalUI = TerminalUI(terminal)
 
   val ppDir: File = File(tempDir, ".paperplane").apply { mkdirs() }

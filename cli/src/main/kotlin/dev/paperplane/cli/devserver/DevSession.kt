@@ -54,6 +54,25 @@ internal class DevSession(
   var config: PaperPlaneConfig = config
     private set
 
+  /**
+   * Why this session is not running the mode the user asked for. Set once by [demoteMode] during
+   * startup mode selection, before any mode object exists; read by [showServerInfo] so the tier
+   * report can state the demotion. Null for sessions running their requested mode.
+   */
+  internal var selectionReport: SelectionReport? = null
+    private set
+
+  /**
+   * Demotes the session to [target] after a categorical rejection of the configured mode (consented
+   * or `dev.fallback: auto`). Must run before mode dispatch — everything that keys behavior on
+   * `config.dev.mode` (eligibility checks, mode-specific floors) reads the demoted value from here
+   * on. The pre-demotion mode is preserved on the [selectionReport] for the tier report.
+   */
+  internal fun demoteMode(target: DevMode, rejections: List<ModeRejection>) {
+    selectionReport = SelectionReport(config.dev.mode, target, rejections)
+    config = config.copy(dev = config.dev.copy(mode = target))
+  }
+
   companion object {
     private const val MAIN_LOOP_POLL_INTERVAL_MS = 1000L
     /**
@@ -61,13 +80,6 @@ internal class DevSession(
      * because the first load races the tail of server startup (worlds, datapacks) on a cold JVM.
      */
     private const val INITIAL_LOAD_TIMEOUT_MS = 30_000L
-
-    /**
-     * Minimum Paper version for hot-reload. The companion host implements
-     * `ConfiguredPluginClassLoader`, which only exists on Paper 1.19.3+. Restart and blue-green
-     * load natively and have no such floor.
-     */
-    private const val HOT_RELOAD_MIN_PAPER = "1.19.3"
   }
 
   /**
@@ -203,7 +215,28 @@ internal class DevSession(
    * - [MetadataResult.TaskFailed]: prints "Build failed" with timing so the user sees the same UI
    *   they would for a build failure proper. Caller routes to fix-recovery.
    */
+  /**
+   * The result of a [preflightMetadata] call, held for the next [resolveMetadata] to consume. The
+   * cache is one-shot by design: mode selection runs metadata resolution moments before the mode's
+   * own startup would, and only that immediate re-read may reuse the result — every later call
+   * (fix recovery, restarts) must see fresh Gradle state.
+   */
+  private var preflightResult: MetadataResult? = null
+
+  /**
+   * Session-start metadata resolution for mode selection, before any mode object exists. Runs
+   * [resolveMetadata] with its full UI framing and stashes the result so the dispatched mode's own
+   * `resolveMetadata()` call returns it without a second Gradle invocation (and without
+   * re-printing build errors the preflight already surfaced).
+   */
+  internal fun preflightMetadata(): MetadataResult =
+      resolveMetadata().also { preflightResult = it }
+
   fun resolveMetadata(): MetadataResult {
+    preflightResult?.let {
+      preflightResult = null
+      return it
+    }
     val started = System.currentTimeMillis()
     val result = ui.spin("Reading project metadata...") { gradle.metadata() }
     when (result) {
@@ -236,22 +269,34 @@ internal class DevSession(
     return mcVersion
   }
 
+  private val modeSelector = ModeSelector()
+
   /**
-   * Hot-reload requires Paper 1.19.3+ (the version that introduced `ConfiguredPluginClassLoader`,
-   * which the companion host implements). Fail fast with an actionable message instead of letting
-   * the companion's probe reject the first load deep into startup. Restart and blue-green deploy
-   * natively and are unaffected — they run on any supported Paper version.
+   * The in-session backstop for hot-reload's categorical rejections — the Paper version floor
+   * (1.19.3, the version that introduced `ConfiguredPluginClassLoader`) and the curated
+   * can't-late-load dependency list, both via [ModeSelector]. Session-start selection runs the same
+   * rules with a consent flow; this enforcement catches what selection couldn't see (a broken
+   * initial build resolving mid-session in fix recovery) or what changed under it (a build edit
+   * adding a curated dependency). Fail fast with an actionable message instead of letting the
+   * companion's probe reject the load deep into startup. Restart and blue-green deploy natively
+   * and are unaffected — including sessions already demoted to them.
    */
-  fun enforceHotReloadVersionFloor(mcVersion: String) {
-    if (
-        config.dev.mode == DevMode.HOT_RELOAD &&
-            Versions.compareVersions(mcVersion, HOT_RELOAD_MIN_PAPER) < 0
-    ) {
-      throw IllegalArgumentException(
-          "Hot-reload requires Paper $HOT_RELOAD_MIN_PAPER+. " +
-              "Use `dev.mode: restart` or `blue-green`, or update Paper."
-      )
-    }
+  fun enforceHotReloadEligibility(metadata: ProjectMetadata) {
+    if (config.dev.mode != DevMode.HOT_RELOAD) return
+    val rejections =
+        modeSelector.rejections(
+            DevMode.HOT_RELOAD,
+            config,
+            metadata,
+            File(ppDir, "server/plugins"),
+        )
+    if (rejections.isEmpty()) return
+    throw IllegalArgumentException(
+        "Hot-reload is unavailable — " +
+            rejections.joinToString("; ") { "${it.matchedBy}: ${it.reason}" } +
+            ". Use `dev.mode: restart` or `blue-green`, or set `dev.fallback: auto` " +
+            "and restart `ppl dev` to fall back automatically."
+    )
   }
 
   /**
@@ -276,7 +321,7 @@ internal class DevSession(
     ui.success("Build succeeded", buildDuration)
 
     val mcVersion = resolveMcVersion(metadata)
-    enforceHotReloadVersionFloor(mcVersion)
+    enforceHotReloadEligibility(metadata)
     val paperJar = downloadPaper(mcVersion)
     return BuildOutcome.Success(paperJar)
   }
@@ -340,6 +385,11 @@ internal class DevSession(
    *
    * An armed instant lane rides the mode line as a suffix; a lane that was asked for and could not
    * arm gets a warning of its own, because that is the one instant state the user did not choose.
+   *
+   * A demoted session ([selectionReport] set) gets a warning naming the requested mode and what
+   * rejected it — the standing tier-report rule: the tool always states which mode it chose and
+   * why, and a demotion the user consented to at startup must still be visible next to the server
+   * info they scroll back to.
    */
   fun showServerInfo(
       metadata: ProjectMetadata,
@@ -351,6 +401,10 @@ internal class DevSession(
     ui.info("Server:", serverAddress)
     ui.info("Plugin:", "${metadata.pluginName} v${metadata.version}")
     ui.info("Mode:", if (instant is InstantBanner.Armed) "$modeLabel + instant" else modeLabel)
+    selectionReport?.let { report ->
+      val causes = report.rejections.joinToString("; ") { it.matchedBy }
+      ui.warning("Demoted from ${report.requested.label} for this session — $causes")
+    }
     if (instant is InstantBanner.Unavailable) {
       ui.warning("Instant unavailable — ${instant.reason}; changes take a full reload")
     }
@@ -421,7 +475,7 @@ internal class DevSession(
     val metadata = gradle.metadata().metadataOrNull ?: return FixAttempt.BuildFailed
     return try {
       val mcVersion = resolveMcVersion(metadata)
-      enforceHotReloadVersionFloor(mcVersion)
+      enforceHotReloadEligibility(metadata)
       FixAttempt.Success(metadata, downloader.download(mcVersion))
     } catch (
         @Suppress("TooGenericExceptionCaught") // The fix loop runs on the watcher thread: an
