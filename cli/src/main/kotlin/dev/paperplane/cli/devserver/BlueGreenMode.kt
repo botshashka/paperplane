@@ -335,8 +335,21 @@ internal open class BlueGreenMode(
     preWarmThread = null
 
     // saveWorld sends the `saving` status (which also opens the companion's save-protection
-    // window) and awaits the saveComplete event.
-    session.ui.spin("Saving world...") { active.saveWorld() }
+    // window) and awaits the saveComplete event. The companion saves with flush=true, so the
+    // event means the world files are actually on disk — the sync below never races the saver.
+    val saved = session.ui.spin("Saving world...") { active.saveWorld() }
+    if (!saved && active.isRunning()) {
+      // A live server that never confirmed the save may still be writing region files; syncing
+      // now would hand the standby a torn world. Skip this swap — the next change retries.
+      session.ui.error("World save did not complete — skipping this swap")
+      active.ipc.sendStatus(CompanionWire.STATE_ERROR, message = "World save did not complete")
+      return false
+    }
+    if (!saved) {
+      // Dead server: nothing is writing the world files, so the last-saved state is consistent —
+      // and swapping to the standby is exactly how the session recovers.
+      session.ui.warning("Server not responding — standby will sync the last-saved world state")
+    }
 
     if (standby.isRunning()) standby.stop()
 

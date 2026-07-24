@@ -368,7 +368,11 @@ class CompanionMessageHandler(
     try {
       plugin.server.savePlayers()
       for (world in plugin.server.worlds) {
-        world.save()
+        // flush=true is load-bearing: modern Paper saves asynchronously, so the unflushed
+        // save() (like the `save-all flush` console command) returns before region files hit
+        // disk — and the CLI starts copying the world the moment saveComplete arrives. Only
+        // the flushed call blocks until the files are really written.
+        world.save(true)
       }
       ipc.sendSaveComplete()
     } catch (e: IOException) {

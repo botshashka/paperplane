@@ -96,9 +96,12 @@ class FakePaperServerManager(
     return readyResult
   }
 
+  /** Scripted [saveWorld] outcome — false simulates a timed-out or unreachable companion save. */
+  var saveWorldResult: Boolean = true
+
   override fun saveWorld(timeoutMs: Long): Boolean {
     calls += "saveWorld"
-    return true
+    return saveWorldResult
   }
 
   override fun sendCommand(command: String) {

@@ -678,6 +678,27 @@ class CompanionMessageHandlerTest {
   }
 
   @Test
+  fun `the world save is flushed, and saveComplete is sent only after every flushed save returns`() {
+    val worldA = FlushRecordingWorld(ipc)
+    val worldB = FlushRecordingWorld(ipc)
+    server.addWorld(worldA)
+    server.addWorld(worldB)
+
+    handler.handleStatus(StatusUpdate("saving", null, null))
+
+    // flush=true is the gate-5 mandate: the unflushed save returns before region files are
+    // written, so the CLI would copy a world the saver is still writing.
+    assertEquals(listOf(true), worldA.flushArgs, "world A must be saved with flush=true")
+    assertEquals(listOf(true), worldB.flushArgs, "world B must be saved with flush=true")
+    assertEquals(
+        listOf(0, 0),
+        listOf(worldA.completionsWhenSaved, worldB.completionsWhenSaved),
+        "saveComplete must not be sent before the flushed saves return",
+    )
+    assertEquals(1, ipc.saveCompletions)
+  }
+
+  @Test
   fun `status transitions broadcast to online players`() {
     val player = server.addPlayer()
 
@@ -714,6 +735,21 @@ class CompanionMessageHandlerTest {
       generateSequence { player.nextComponentMessage() }
           .map { PlainTextComponentSerializer.plainText().serialize(it) }
           .toList()
+
+  /**
+   * Records each `save(flush)` argument plus how many saveComplete events had been sent when the
+   * save ran — proving the completion is sent only after the flushed saves return.
+   */
+  private class FlushRecordingWorld(private val ipc: RecordingIpc) :
+      org.mockbukkit.mockbukkit.world.WorldMock() {
+    val flushArgs = mutableListOf<Boolean>()
+    var completionsWhenSaved = -1
+
+    override fun save(flush: Boolean) {
+      flushArgs += flush
+      completionsWhenSaved = ipc.saveCompletions
+    }
+  }
 
   /** Records everything the handler sends, plus the relative ordering of sends. */
   private class RecordingIpc : CompanionIpc {
