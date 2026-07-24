@@ -1,7 +1,10 @@
 package dev.paperplane.companion
 
 import com.google.gson.annotations.SerializedName
+import java.io.DataInputStream
 import java.io.File
+import java.io.IOException
+import java.util.UUID
 import org.bukkit.WorldCreator
 import org.bukkit.WorldType
 import org.bukkit.plugin.java.JavaPlugin
@@ -31,6 +34,11 @@ class WorldRefresher(
   companion object {
     /** The throwaway world [warmup] loads and unloads. */
     const val WARMUP_WORLD_NAME = "paperplane_warmup"
+
+    // Paper's async chunk I/O can still be writing world files when unloadWorld returns, so a
+    // one-shot delete can race a late write and leave the directory behind. Retry off-thread.
+    private const val DELETE_RETRIES = 10
+    private const val DELETE_RETRY_DELAY_TICKS = 10L // 0.5 s
 
     // Superflat preset with no layers in a void biome: loading it exercises the full chunk
     // pipeline (the JIT warmup that matters) while generating essentially nothing.
@@ -79,10 +87,31 @@ class WorldRefresher(
       }
     }
 
+    resolveUidCollision(worldName)
     WorldCreator(worldName).createWorld()
         ?: return failed("the server refused to load world '$worldName'")
     plugin.logger.info("Refreshed world '$worldName'")
     return Outcome.Ok(worldName, System.currentTimeMillis() - start)
+  }
+
+  /**
+   * A world directory cloned from a still-loaded world carries that world's `uid.dat`, and Bukkit
+   * refuses to load two worlds with the same UUID — `createWorld` returns null with only a console
+   * line. Deleting the copy's `uid.dat` mints a fresh UUID for the new incarnation; done only on a
+   * genuine collision (or an unreadable file) so an ordinary refresh keeps its stable world UUID.
+   */
+  private fun resolveUidCollision(worldName: String) {
+    val uidFile = File(File(worldContainer, worldName), "uid.dat")
+    if (!uidFile.isFile) return
+    val uuid =
+        try {
+          DataInputStream(uidFile.inputStream().buffered()).use {
+            UUID(it.readLong(), it.readLong())
+          }
+        } catch (_: IOException) {
+          null // unreadable — the server would trip over it, so mint fresh below
+        }
+    if (uuid == null || plugin.server.getWorld(uuid) != null) uidFile.delete()
   }
 
   /** The reason [worldName] can't be refreshed at all, or null when the request is well-formed. */
@@ -120,7 +149,7 @@ class WorldRefresher(
                 System.currentTimeMillis() - start,
             )
     val unloaded = plugin.server.unloadWorld(world, false)
-    deleteRecursively(dir)
+    if (!tryDelete(dir)) retryDeleteAsync(dir, DELETE_RETRIES)
     if (!unloaded) {
       return Outcome.Failed(
           WARMUP_WORLD_NAME,
@@ -129,6 +158,30 @@ class WorldRefresher(
       )
     }
     return Outcome.Ok(WARMUP_WORLD_NAME, System.currentTimeMillis() - start)
+  }
+
+  /** Recursively deletes [dir]; true when it is gone afterwards. */
+  private fun tryDelete(dir: File): Boolean {
+    deleteRecursively(dir)
+    return !dir.exists()
+  }
+
+  /**
+   * Deletion retry chain for the warmup directory: Paper's async chunk I/O may drop a late file
+   * into it after unload, resurrecting the tree the synchronous delete just removed. Best-effort —
+   * a directory that survives every retry is harmless (nothing references it) and is cleared by the
+   * next [warmup].
+   */
+  private fun retryDeleteAsync(dir: File, attemptsLeft: Int) {
+    if (attemptsLeft <= 0) {
+      plugin.logger.fine("Warmup world directory not fully deleted: ${dir.absolutePath}")
+      return
+    }
+    plugin.server.scheduler.runTaskLaterAsynchronously(
+        plugin,
+        Runnable { if (!tryDelete(dir)) retryDeleteAsync(dir, attemptsLeft - 1) },
+        DELETE_RETRY_DELAY_TICKS,
+    )
   }
 
   private fun deleteRecursively(dir: File) {

@@ -131,6 +131,48 @@ class WorldRefresherTest {
     )
   }
 
+  private fun writeUid(worldName: String, uuid: java.util.UUID) {
+    java.io.DataOutputStream(File(container, "$worldName/uid.dat").outputStream()).use {
+      it.writeLong(uuid.mostSignificantBits)
+      it.writeLong(uuid.leastSignificantBits)
+    }
+  }
+
+  @Test
+  fun `a uid dat colliding with a loaded world is deleted so a fresh UUID is minted`() {
+    val defaultWorld = server.addSimpleWorld("world")
+    createWorldFiles("devworld")
+    writeUid("devworld", defaultWorld.uid) // cloned from the live world — same UUID
+
+    val outcome = refresher.refresh("devworld")
+
+    assertInstanceOf(WorldRefresher.Outcome.Ok::class.java, outcome)
+    assertFalse(
+        File(container, "devworld/uid.dat").exists(),
+        "the colliding uid.dat must be removed so the server mints a fresh world UUID",
+    )
+  }
+
+  @Test
+  fun `a non-colliding uid dat is kept — the refreshed world keeps its stable UUID`() {
+    server.addSimpleWorld("world")
+    createWorldFiles("devworld")
+    writeUid("devworld", java.util.UUID.randomUUID())
+
+    assertInstanceOf(WorldRefresher.Outcome.Ok::class.java, refresher.refresh("devworld"))
+    assertTrue(File(container, "devworld/uid.dat").exists())
+  }
+
+  @Test
+  fun `an unreadable uid dat is deleted rather than handed to the server`() {
+    server.addSimpleWorld("world")
+    createWorldFiles("devworld")
+    File(container, "devworld/uid.dat").writeBytes(byteArrayOf(1, 2, 3)) // truncated
+
+    assertInstanceOf(WorldRefresher.Outcome.Ok::class.java, refresher.refresh("devworld"))
+    assertFalse(File(container, "devworld/uid.dat").exists())
+  }
+
   // ── warmup ──────────────────────────────────────────────────────────
 
   @Test

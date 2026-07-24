@@ -1,0 +1,13 @@
+{"at":1784903043600,"dir":"send","line":"{\"type\":\"hello\",\"token\":\"eb57c8d5e528b10c56d067113496e7ac\",\"protocolVersion\":4}"}
+{"at":1784903043602,"dir":"recv","line":"{\"type\":\"welcome\",\"protocolVersion\":4,\"serverReady\":false,\"capability\":\"none\"}"}
+{"at":1784903044042,"dir":"recv","line":"{\"type\":\"ready\"}"}
+{"at":1784903044126,"dir":"send","line":"{\"type\":\"status\",\"state\":\"saving\"}"}
+{"at":1784903044192,"dir":"recv","line":"{\"type\":\"saveComplete\"}"}
+{"at":1784903044212,"dir":"send","line":"{\"requestId\":\"9199a95e-f88c-4771-9348-bcf0393806a4\",\"type\":\"worldWarmup\"}"}
+{"at":1784903044493,"dir":"recv","line":"{\"requestId\":\"9199a95e-f88c-4771-9348-bcf0393806a4\",\"status\":\"ok\",\"op\":\"warmup\",\"worldName\":\"paperplane_warmup\",\"durationMs\":247,\"type\":\"worldReport\"}"}
+{"at":1784903044499,"dir":"send","line":"{\"requestId\":\"d685146e-5ce3-4b1a-a3bb-bdfaf40c58b2\",\"worldName\":\"devworld\",\"type\":\"worldRefresh\"}"}
+{"at":1784903044579,"dir":"recv","line":"{\"requestId\":\"d685146e-5ce3-4b1a-a3bb-bdfaf40c58b2\",\"status\":\"ok\",\"op\":\"refresh\",\"worldName\":\"devworld\",\"durationMs\":78,\"type\":\"worldReport\"}"}
+{"at":1784903044581,"dir":"send","line":"{\"requestId\":\"408afe07-86b1-4fa7-bc40-edfec25abdae\",\"worldName\":\"devworld\",\"type\":\"worldRefresh\"}"}
+{"at":1784903044606,"dir":"recv","line":"{\"requestId\":\"408afe07-86b1-4fa7-bc40-edfec25abdae\",\"status\":\"ok\",\"op\":\"refresh\",\"worldName\":\"devworld\",\"durationMs\":22,\"type\":\"worldReport\"}"}
+{"at":1784903044606,"dir":"send","line":"{\"requestId\":\"f67172d6-4d65-4a32-872e-1cbdaf72b928\",\"worldName\":\"never_synced\",\"type\":\"worldRefresh\"}"}
+{"at":1784903044608,"dir":"recv","line":"{\"requestId\":\"f67172d6-4d65-4a32-872e-1cbdaf72b928\",\"status\":\"failed\",\"op\":\"refresh\",\"worldName\":\"never_synced\",\"durationMs\":1,\"message\":\"no world files for 'never_synced' in /private/var/folders/dm/zwl08lqx2fgb3r1d86_6sn3m0000gn/T/junit-2479325266698157191/server — world sync must complete before the refresh\",\"type\":\"worldReport\"}"}
