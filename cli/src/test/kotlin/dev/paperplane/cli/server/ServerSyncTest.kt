@@ -260,6 +260,55 @@ class ServerSyncTest {
   }
 
   @Test
+  fun `world directories are routed through the CoW world primitive, everything else is not`() {
+    File(sourceDir, "world/region").mkdirs()
+    File(sourceDir, "world/level.dat").writeText("level")
+    File(sourceDir, "world/region/r.0.0.mca").writeText("region-data")
+    File(sourceDir, "logs").mkdirs()
+    File(sourceDir, "logs/latest.log").writeText("log")
+    File(sourceDir, "plugins/MyPlugin").mkdirs()
+    File(sourceDir, "plugins/MyPlugin/config.yml").writeText("cfg")
+
+    val routedWorlds = mutableListOf<String>()
+    val recordingWorldSync =
+        WorldSync(
+            cloneArgv = { s, d ->
+              routedWorlds += s.name
+              listOf("clone", s.path, d.path)
+            },
+            runCommand = { false }, // fall back to incremental — content must still arrive
+        )
+    ServerSync.syncServerState(sourceDir, targetDir, "my-plugin.jar", recordingWorldSync)
+
+    assertEquals(listOf("world"), routedWorlds, "only level.dat directories are worlds")
+    assertEquals("region-data", File(targetDir, "world/region/r.0.0.mca").readText())
+    assertEquals("log", File(targetDir, "logs/latest.log").readText())
+    assertEquals("cfg", File(targetDir, "plugins/MyPlugin/config.yml").readText())
+  }
+
+  @Test
+  fun `a cloned world sync still skips lock files and removes orphans`() {
+    File(sourceDir, "world/region").mkdirs()
+    File(sourceDir, "world/level.dat").writeText("level")
+    File(sourceDir, "world/region/r.0.0.mca").writeText("new-data")
+    File(sourceDir, "world/session.lock").writeText("locked")
+    File(targetDir, "world/region").mkdirs()
+    File(targetDir, "world/region/r.9.9.mca").writeText("stale")
+
+    val cloningWorldSync =
+        WorldSync(
+            cloneArgv = { s, d -> listOf("clone", s.path, d.path) },
+            runCommand = { argv -> File(argv[1]).copyRecursively(File(argv[2])) },
+        )
+    ServerSync.syncServerState(sourceDir, targetDir, "my-plugin.jar", cloningWorldSync)
+
+    assertEquals(WorldSync.Strategy.CLONE, cloningWorldSync.lastStrategy)
+    assertEquals("new-data", File(targetDir, "world/region/r.0.0.mca").readText())
+    assertFalse(File(targetDir, "world/session.lock").exists())
+    assertFalse(File(targetDir, "world/region/r.9.9.mca").exists())
+  }
+
+  @Test
   fun `removes files deleted from source`() {
     // Setup source with two files
     File(sourceDir, "world/region").mkdirs()

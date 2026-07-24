@@ -377,16 +377,35 @@ open class PaperServerManager(
   }
 
   /**
+   * Why a [saveWorld] request did not end in a confirmed save. The distinction is load-bearing for
+   * callers that sync world files afterwards: only [TimedOut] means a live server was asked to save
+   * and may still be writing region files. [Unreachable] means the request never left the CLI, so
+   * nothing on the server side was told to save and the on-disk state is whatever the last save
+   * left — the same consistency guarantee a dead server gives.
+   */
+  sealed interface SaveOutcome {
+    /** The companion confirmed the flushed save; the world files are on disk. */
+    object Saved : SaveOutcome
+
+    /** The companion never confirmed within the timeout. */
+    object TimedOut : SaveOutcome
+
+    /** There is no companion connection to ask — it never connected, or the socket dropped. */
+    object Unreachable : SaveOutcome
+  }
+
+  /**
    * Asks the companion to save the world and waits for its `saveComplete` event. The `saving`
    * status message triggers the save (via Bukkit API, no broadcast) and opens the companion's
    * save-protection window; any stale completion from a previous save is drained first so it can't
    * satisfy this wait.
    */
-  open fun saveWorld(timeoutMs: Long = SAVE_TIMEOUT_MS): Boolean {
-    val client = companion ?: return false
+  open fun saveWorld(timeoutMs: Long = SAVE_TIMEOUT_MS): SaveOutcome {
+    val client = companion ?: return SaveOutcome.Unreachable
     client.drainSaveCompletions()
-    if (!client.sendStatus(CompanionWire.STATE_SAVING)) return false
-    return client.awaitSaveComplete(timeoutMs, isAlive = ::isRunning)
+    if (!client.sendStatus(CompanionWire.STATE_SAVING)) return SaveOutcome.Unreachable
+    return if (client.awaitSaveComplete(timeoutMs, isAlive = ::isRunning)) SaveOutcome.Saved
+    else SaveOutcome.TimedOut
   }
 
   open fun isRunning(): Boolean = process?.isAlive == true

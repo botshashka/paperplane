@@ -40,6 +40,8 @@ class CompanionSocketServerTest {
   private val statuses = CopyOnWriteArrayList<StatusUpdate>()
   private val loadRequests = CopyOnWriteArrayList<HostLoadRequest>()
   private val instantSwaps = CopyOnWriteArrayList<HostInstantSwapRequest>()
+  private val worldRefreshes = CopyOnWriteArrayList<HostWorldRefreshRequest>()
+  private val worldWarmups = CopyOnWriteArrayList<HostWorldWarmupRequest>()
   private lateinit var server: CompanionSocketServer
   private val openSockets = mutableListOf<Socket>()
 
@@ -51,6 +53,8 @@ class CompanionSocketServerTest {
             onStatus = { statuses += it },
             onLoadRequest = { loadRequests += it },
             onInstantSwap = { instantSwaps += it },
+            onWorldRefresh = { worldRefreshes += it },
+            onWorldWarmup = { worldWarmups += it },
             capability = HostRedefineCapability.BODY_ONLY,
         )
   }
@@ -306,6 +310,30 @@ class CompanionSocketServerTest {
   }
 
   @Test
+  fun `a worldRefresh message is dispatched as a HostWorldRefreshRequest with all fields`() {
+    server.start(serverRoot)
+    val (client, _) = connect()
+
+    client.send("""{"type":"worldRefresh","requestId":"w1","worldName":"devworld"}""")
+
+    awaitTrue("worldRefresh dispatched") { worldRefreshes.isNotEmpty() }
+    val request = worldRefreshes.single()
+    assertEquals("w1", request.requestId)
+    assertEquals("devworld", request.worldName)
+  }
+
+  @Test
+  fun `a worldWarmup message is dispatched as a HostWorldWarmupRequest`() {
+    server.start(serverRoot)
+    val (client, _) = connect()
+
+    client.send("""{"type":"worldWarmup","requestId":"w2"}""")
+
+    awaitTrue("worldWarmup dispatched") { worldWarmups.isNotEmpty() }
+    assertEquals("w2", worldWarmups.single().requestId)
+  }
+
+  @Test
   fun `a status message without a state is ignored`() {
     server.start(serverRoot)
     val (client, _) = connect()
@@ -371,6 +399,32 @@ class CompanionSocketServerTest {
     )
     assertEquals(42, obj.get("durationMs").asInt)
     assertEquals("restart", obj.get("action").asString)
+  }
+
+  @Test
+  fun `sendWorldReport serializes the full report with the worldReport type tag`() {
+    server.start(serverRoot)
+    val (client, _) = connect()
+
+    server.sendWorldReport(
+        HostWorldReport(
+            requestId = "w1",
+            status = HostWorldOpStatus.FAILED,
+            op = HostWorldOp.REFRESH,
+            worldName = "devworld",
+            durationMs = 7,
+            message = "no world files",
+        )
+    )
+
+    val obj = gson.fromJson(client.readLine(), JsonObject::class.java)
+    assertEquals("worldReport", obj.get("type").asString)
+    assertEquals("w1", obj.get("requestId").asString)
+    assertEquals("failed", obj.get("status").asString, "status must serialize as the wire value")
+    assertEquals("refresh", obj.get("op").asString, "op must serialize as the wire value")
+    assertEquals("devworld", obj.get("worldName").asString)
+    assertEquals(7, obj.get("durationMs").asInt)
+    assertEquals("no world files", obj.get("message").asString)
   }
 
   @Test

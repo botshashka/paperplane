@@ -96,9 +96,12 @@ class FakePaperServerManager(
     return readyResult
   }
 
-  override fun saveWorld(timeoutMs: Long): Boolean {
+  /** Scripted [saveWorld] outcome — see [PaperServerManager.SaveOutcome]. */
+  var saveWorldResult: PaperServerManager.SaveOutcome = PaperServerManager.SaveOutcome.Saved
+
+  override fun saveWorld(timeoutMs: Long): PaperServerManager.SaveOutcome {
     calls += "saveWorld"
-    return true
+    return saveWorldResult
   }
 
   override fun sendCommand(command: String) {

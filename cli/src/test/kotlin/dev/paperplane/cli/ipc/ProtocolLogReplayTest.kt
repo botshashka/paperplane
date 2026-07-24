@@ -64,7 +64,12 @@ class ProtocolLogReplayTest {
     // The session's semantic arc: handshake welcome (with the JVM's redefine capabilities),
     // explicit readiness, then a fresh load, a full reload, and an instant patch.
     val welcome = assertInstanceOf(CompanionEvent.Welcome::class.java, events.first())
-    assertEquals(CompanionSocketFile.PROTOCOL_VERSION, welcome.protocolVersion)
+    // The recorded version is the one that session ran at, not today's constant — a fixture is a
+    // record of a past session, so pinning it to PROTOCOL_VERSION would fail on every future bump
+    // for reasons that have nothing to do with wire shape. What matters here is that the field
+    // decoded at all; version negotiation itself is covered by CompanionClientTest and
+    // CompanionSocketServerTest, which drive mismatches directly.
+    assertTrue(welcome.protocolVersion > 0, "the welcome must carry a decodable protocol version")
     assertEquals(false, welcome.serverReady, "the CLI connected before ServerLoadEvent")
     assertEquals(
         RedefineCapability.BODY_ONLY,
@@ -110,7 +115,7 @@ class ProtocolLogReplayTest {
     // hello: token + version, exactly what the companion's handshake validates.
     val hello = sends.first()
     assertEquals("hello", hello.get("type").asString)
-    assertEquals(CompanionSocketFile.PROTOCOL_VERSION, hello.get("protocolVersion").asInt)
+    assertTrue(hello.get("protocolVersion").asInt > 0)
     assertTrue(hello.get("token").asString.isNotEmpty())
 
     // Every captured load message must round-trip into the CLI's LoadRequest with no field loss.

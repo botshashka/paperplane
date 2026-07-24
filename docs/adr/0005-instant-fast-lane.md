@@ -2,7 +2,11 @@
 
 **Status:** Accepted — amended 2026-07-23: the ADDITIVE tier is cut, body-only
 everywhere (see the Amendment section; the Decision below is edited to the
-amended design, since protocol v4 is unreleased and is amended in place)
+amended design, since protocol v4 is unreleased and is amended in place).
+The instant-tier decision stands; its *amend-an-unreleased-protocol-in-place*
+reasoning does not — see [0007](0007-world-refresh-primitive.md), which bumps
+to v5 and explains why "unreleased" protects shipping artifacts but not an
+already-running server. Statements below that there is "no v5" are historical.
 **Date:** 2026-07-22, amended 2026-07-23
 
 ## Context

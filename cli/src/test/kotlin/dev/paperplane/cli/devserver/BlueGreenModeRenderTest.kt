@@ -1,6 +1,7 @@
 package dev.paperplane.cli.devserver
 
 import dev.paperplane.cli.gradle.MetadataResult
+import dev.paperplane.cli.server.PaperServerManager
 import dev.paperplane.cli.testing.DevSessionFixture
 import dev.paperplane.cli.testing.FakePaperServerManager
 import dev.paperplane.cli.testing.FakeVelocityDownloader
@@ -323,6 +324,173 @@ class BlueGreenModeRenderTest {
             (serverA.launchSpecs + serverB.launchSpecs).all { it == fixture.session.launchSpec },
         "every blue-green start must use the session LaunchSpec; " +
             "A=${serverA.launchSpecs} B=${serverB.launchSpecs}",
+    )
+  }
+
+  // ── Failed world save: never sync a world the saver may still be writing ─
+
+  @Test
+  fun `a failed save on a live server skips the swap without touching the standby`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    val serverA =
+        FakePaperServerManager(
+            File(fixture.ppDir, "server").apply { mkdirs() },
+            fixture.downloader,
+            fixture.ui,
+        )
+    val serverB =
+        FakePaperServerManager(
+            File(fixture.ppDir, "server-swap").apply { mkdirs() },
+            fixture.downloader,
+            fixture.ui,
+        )
+    val mode =
+        TestableBlueGreenMode(
+            session = fixture.session,
+            servers =
+                mapOf(BlueGreenMode.Slot.SERVER to serverA, BlueGreenMode.Slot.SWAP to serverB),
+            velocityDownloader = FakeVelocityDownloader(File(fixture.ppDir, "cache")),
+            velocityManager = FakeVelocityManager(File(fixture.ppDir, "proxy"), fixture.ui),
+        )
+    assertInstanceOf(DevSession.StartupOutcome.Running::class.java, mode.runStartup())
+    serverA.calls.clear()
+    serverB.calls.clear()
+    // A live server (runningResult stays true) that was asked to save and never confirmed.
+    serverA.saveWorldResult = PaperServerManager.SaveOutcome.TimedOut
+    val paperJar = File(fixture.ppDir, "paper.jar").apply { writeText("fake") }
+
+    val (newSlot, end) = mode.rebuild(fixture.gradle.nextMetadata!!, paperJar)
+
+    assertEquals(BlueGreenMode.Slot.SERVER, newSlot, "the active slot must not change")
+    assertEquals(PhaseEnd.Waiting, end)
+    assertTrue(fixture.terminal.writes.any { it.contains("World save did not complete") })
+    assertFalse(
+        serverB.calls.any { it.startsWith("start") || it == "stop" },
+        "the standby must not be touched when the save never completed; calls: ${serverB.calls}",
+    )
+    assertTrue(
+        serverA.calls.contains("sendCompanionStatus(error)"),
+        "the companion must be told the cycle failed; calls: ${serverA.calls}",
+    )
+  }
+
+  @Test
+  fun `a failed save on a dead server warns and proceeds — swapping is the recovery path`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    val serverA =
+        FakePaperServerManager(
+            File(fixture.ppDir, "server").apply { mkdirs() },
+            fixture.downloader,
+            fixture.ui,
+        )
+    val serverB =
+        FakePaperServerManager(
+            File(fixture.ppDir, "server-swap").apply { mkdirs() },
+            fixture.downloader,
+            fixture.ui,
+        )
+    val mode =
+        TestableBlueGreenMode(
+            session = fixture.session,
+            servers =
+                mapOf(BlueGreenMode.Slot.SERVER to serverA, BlueGreenMode.Slot.SWAP to serverB),
+            velocityDownloader = FakeVelocityDownloader(File(fixture.ppDir, "cache")),
+            velocityManager = FakeVelocityManager(File(fixture.ppDir, "proxy"), fixture.ui),
+        )
+    assertInstanceOf(DevSession.StartupOutcome.Running::class.java, mode.runStartup())
+    serverA.calls.clear()
+    serverB.calls.clear()
+    serverA.saveWorldResult = PaperServerManager.SaveOutcome.TimedOut
+    serverA.runningResult = false // dead active — nothing can still be writing the world
+    val paperJar = File(fixture.ppDir, "paper.jar").apply { writeText("fake") }
+
+    val (newSlot, end) = mode.rebuild(fixture.gradle.nextMetadata!!, paperJar)
+    mode.awaitPreWarmForTest()
+
+    assertEquals(BlueGreenMode.Slot.SWAP, newSlot, "the swap must proceed — it IS the recovery")
+    assertEquals(PhaseEnd.Watching, end)
+    assertTrue(fixture.terminal.writes.any { it.contains("last-saved world state") })
+  }
+
+  @Test
+  fun `an unreachable companion on a live server still swaps — skipping would wedge the session`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    val serverA =
+        FakePaperServerManager(
+            File(fixture.ppDir, "server").apply { mkdirs() },
+            fixture.downloader,
+            fixture.ui,
+        )
+    val serverB =
+        FakePaperServerManager(
+            File(fixture.ppDir, "server-swap").apply { mkdirs() },
+            fixture.downloader,
+            fixture.ui,
+        )
+    val mode =
+        TestableBlueGreenMode(
+            session = fixture.session,
+            servers =
+                mapOf(BlueGreenMode.Slot.SERVER to serverA, BlueGreenMode.Slot.SWAP to serverB),
+            velocityDownloader = FakeVelocityDownloader(File(fixture.ppDir, "cache")),
+            velocityManager = FakeVelocityManager(File(fixture.ppDir, "proxy"), fixture.ui),
+        )
+    assertInstanceOf(DevSession.StartupOutcome.Running::class.java, mode.runStartup())
+    serverA.calls.clear()
+    serverB.calls.clear()
+    // The socket dropped on a still-running server. The client does not reconnect within a
+    // session, so treating this like a timed-out save would skip every future swap too.
+    serverA.saveWorldResult = PaperServerManager.SaveOutcome.Unreachable
+    val paperJar = File(fixture.ppDir, "paper.jar").apply { writeText("fake") }
+
+    val (newSlot, end) = mode.rebuild(fixture.gradle.nextMetadata!!, paperJar)
+    mode.awaitPreWarmForTest()
+
+    assertEquals(
+        BlueGreenMode.Slot.SWAP,
+        newSlot,
+        "an unreachable companion must not wedge the loop; calls: ${serverB.calls}",
+    )
+    assertEquals(PhaseEnd.Watching, end)
+    assertTrue(fixture.terminal.writes.any { it.contains("Companion unreachable") })
+  }
+
+  @Test
+  fun `a live server that times out twice keeps skipping rather than syncing a torn world`() {
+    val fixture = DevSessionFixture(tempDir).withMetadata()
+    val serverA =
+        FakePaperServerManager(
+            File(fixture.ppDir, "server").apply { mkdirs() },
+            fixture.downloader,
+            fixture.ui,
+        )
+    val serverB =
+        FakePaperServerManager(
+            File(fixture.ppDir, "server-swap").apply { mkdirs() },
+            fixture.downloader,
+            fixture.ui,
+        )
+    val mode =
+        TestableBlueGreenMode(
+            session = fixture.session,
+            servers =
+                mapOf(BlueGreenMode.Slot.SERVER to serverA, BlueGreenMode.Slot.SWAP to serverB),
+            velocityDownloader = FakeVelocityDownloader(File(fixture.ppDir, "cache")),
+            velocityManager = FakeVelocityManager(File(fixture.ppDir, "proxy"), fixture.ui),
+        )
+    assertInstanceOf(DevSession.StartupOutcome.Running::class.java, mode.runStartup())
+    serverA.saveWorldResult = PaperServerManager.SaveOutcome.TimedOut
+    val paperJar = File(fixture.ppDir, "paper.jar").apply { writeText("fake") }
+
+    mode.rebuild(fixture.gradle.nextMetadata!!, paperJar)
+    serverB.calls.clear()
+    val (newSlot, end) = mode.rebuild(fixture.gradle.nextMetadata!!, paperJar)
+
+    assertEquals(BlueGreenMode.Slot.SERVER, newSlot, "the active slot must still not change")
+    assertEquals(PhaseEnd.Waiting, end)
+    assertFalse(
+        serverB.calls.any { it.startsWith("start") || it == "stop" },
+        "a live server that may still be writing must never have its world synced",
     )
   }
 

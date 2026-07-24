@@ -9,9 +9,15 @@
 # Run locally with:
 #   .github/scripts/smoke-test.sh
 #
-# SMOKE_PAPER_VERSION pins the Paper version to scaffold against (default 1.21.4). Set it to
-# "latest" to omit the pin and let the CLI resolve the newest supported Paper — the CI drift
-# canary for the ReflectionProbe/CPCL integration.
+# SMOKE_PAPER_VERSION pins the Paper version to scaffold against (default 1.21.11 — the newest
+# release in the newest api-version line the CLI supports; keep it in step with
+# WorldRefreshE2ETest's PPL_E2E_PAPER_VERSION default). Set it to "latest" to omit the pin and
+# let the CLI resolve the newest supported Paper — the CI drift canary for the
+# ReflectionProbe/CPCL integration.
+#
+# NOTE: "latest" is currently NOT the newest Paper. `resolveLatest()` filters to
+# Versions.SUPPORTED_API_VERSIONS, which has no 26.x entry, so the canary resolves to the same
+# 1.21.x line as the pin and cannot see the version family it was built to watch.
 #
 # Designed for CI: exits non-zero on any verification failure, prints the relevant log lines
 # for diagnosis, and cleans up child processes.
@@ -22,7 +28,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORK_DIR="$(mktemp -d)"
 LOG_FILE="$WORK_DIR/dev.log"
 TIMEOUT_SECONDS=120
-PAPER_VERSION="${SMOKE_PAPER_VERSION:-1.21.4}"
+PAPER_VERSION="${SMOKE_PAPER_VERSION:-1.21.11}"
 
 cleanup() {
   if [[ -n "${DEV_PID:-}" ]] && kill -0 "$DEV_PID" 2>/dev/null; then

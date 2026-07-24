@@ -4,6 +4,9 @@ import dev.paperplane.cli.devserver.InstantSwapRequest
 import dev.paperplane.cli.devserver.InstantWaitResult
 import dev.paperplane.cli.devserver.LoadRequest
 import dev.paperplane.cli.devserver.LoadWaitResult
+import dev.paperplane.cli.devserver.WorldRefreshRequest
+import dev.paperplane.cli.devserver.WorldWaitResult
+import dev.paperplane.cli.devserver.WorldWarmupRequest
 import dev.paperplane.cli.devserver.instant.RedefineCapability
 import dev.paperplane.cli.ipc.CompanionClient
 
@@ -63,4 +66,17 @@ internal constructor(
   ): InstantWaitResult =
       client()?.awaitInstantReport(expectedRequestId, timeoutMs, isAlive = serverAlive)
           ?: InstantWaitResult.ServerExited
+
+  /** Sends a [WorldRefreshRequest], best-effort like [sendLoadRequest]. */
+  internal open fun sendWorldRefresh(request: WorldRefreshRequest): Boolean =
+      client()?.sendWorldRefresh(request) ?: false
+
+  /** Sends a [WorldWarmupRequest], best-effort like [sendLoadRequest]. */
+  internal open fun sendWorldWarmup(request: WorldWarmupRequest): Boolean =
+      client()?.sendWorldWarmup(request) ?: false
+
+  /** Waits for the world report answering [expectedRequestId]; see [awaitLoadReport]. */
+  internal open fun awaitWorldReport(expectedRequestId: String, timeoutMs: Long): WorldWaitResult =
+      client()?.awaitWorldReport(expectedRequestId, timeoutMs, isAlive = serverAlive)
+          ?: WorldWaitResult.ServerExited
 }

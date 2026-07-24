@@ -16,6 +16,7 @@ even after the code moves on.
 - [0004 — Localhost TCP socket transport for the CLI↔companion protocol](0004-socket-transport.md)
 - [0005 — The instant tier: a universal redefine fast lane (protocol v4)](0005-instant-fast-lane.md)
 - [0006 — Categorical mode rejection with consent-based fallback](0006-mode-selection-consent-fallback.md)
+- [0007 — The world-refresh primitive: copy-on-write sync and secondary-world reload (protocol v5)](0007-world-refresh-primitive.md)
 
 ## Format
 

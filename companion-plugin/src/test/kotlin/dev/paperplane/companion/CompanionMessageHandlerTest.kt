@@ -23,6 +23,7 @@ import org.bukkit.plugin.SimplePluginManager
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -617,9 +618,13 @@ class CompanionMessageHandlerTest {
     val sample = MockBukkit.createMockPlugin("Sample")
     assertNull(sample.description.apiVersion, "the fixture must be a legacy plugin to be a test")
     val legacyHandler =
-        CompanionMessageHandler(hostingPlugin, { fakeHost }, ipc, serverRoot) {
-          mismatchingSwapper()
-        }
+        CompanionMessageHandler(
+            hostingPlugin,
+            { fakeHost },
+            ipc,
+            serverRoot,
+            instantSwapperProvider = { mismatchingSwapper() },
+        )
 
     legacyHandler.handleInstantSwap(instantRequest("i6", fqcn = loadableFqcn))
 
@@ -642,9 +647,13 @@ class CompanionMessageHandlerTest {
           override fun current() = hosted
         }
     val hostedHandler =
-        CompanionMessageHandler(hostingPlugin, { hostingSample }, ipc, serverRoot) {
-          mismatchingSwapper()
-        }
+        CompanionMessageHandler(
+            hostingPlugin,
+            { hostingSample },
+            ipc,
+            serverRoot,
+            instantSwapperProvider = { mismatchingSwapper() },
+        )
     hostedHandler.handleLoadRequest(request("r1")) // memoizes the host
     ipc.instantReports.clear()
 
@@ -655,6 +664,67 @@ class CompanionMessageHandlerTest {
     assertTrue(
         report.reason!!.contains("baseline drift"),
         "a hosted plugin must reach the source-bytes check; got: ${report.reason}",
+    )
+  }
+
+  // ── World refresh / warmup ──────────────────────────────────────────
+
+  @Test
+  fun `a failed world refresh is answered with a failed report echoing the requestId`() {
+    // The default provider builds a real WorldRefresher against serverRoot; with no synced world
+    // files the refusal comes from the primitive and must reach the wire, never silence.
+    handler.handleWorldRefresh(HostWorldRefreshRequest(requestId = "w1", worldName = "devworld"))
+
+    val report = ipc.worldReports.single()
+    assertEquals("w1", report.requestId)
+    assertEquals(HostWorldOpStatus.FAILED, report.status)
+    assertEquals(HostWorldOp.REFRESH, report.op)
+    assertNotNull(report.message)
+  }
+
+  @Test
+  fun `a successful world refresh is answered with an ok report`() {
+    File(serverRoot, "devworld").mkdirs()
+    File(serverRoot, "devworld/level.dat").writeText("level")
+
+    handler.handleWorldRefresh(HostWorldRefreshRequest(requestId = "w2", worldName = "devworld"))
+
+    val report = ipc.worldReports.single()
+    assertEquals("w2", report.requestId)
+    assertEquals(HostWorldOpStatus.OK, report.status)
+    assertEquals(HostWorldOp.REFRESH, report.op)
+    assertEquals("devworld", report.worldName)
+  }
+
+  @Test
+  fun `a world warmup is answered with an ok report`() {
+    handler.handleWorldWarmup(HostWorldWarmupRequest(requestId = "w3"))
+
+    val report = ipc.worldReports.single()
+    assertEquals("w3", report.requestId)
+    assertEquals(HostWorldOpStatus.OK, report.status)
+    assertEquals(HostWorldOp.WARMUP, report.op)
+  }
+
+  @Test
+  fun `a throwing world operation is answered with a failed report, not silence`() {
+    val throwingHandler =
+        CompanionMessageHandler(
+            hostingPlugin,
+            { fakeHost },
+            ipc,
+            serverRoot,
+            worldRefresherProvider = { error("boom") },
+        )
+
+    throwingHandler.handleWorldRefresh(HostWorldRefreshRequest(requestId = "w4", worldName = "x"))
+
+    val report = ipc.worldReports.single()
+    assertEquals("w4", report.requestId)
+    assertEquals(HostWorldOpStatus.FAILED, report.status)
+    assertTrue(
+        report.message!!.contains("boom"),
+        "the real cause must ride the report; got: ${report.message}",
     )
   }
 
@@ -675,6 +745,27 @@ class CompanionMessageHandlerTest {
 
     assertTrue(handler.blockWorldEdits, "saving must block world edits")
     assertEquals(1, ipc.saveCompletions, "the save must be answered with a saveComplete event")
+  }
+
+  @Test
+  fun `the world save is flushed, and saveComplete is sent only after every flushed save returns`() {
+    val worldA = FlushRecordingWorld(ipc)
+    val worldB = FlushRecordingWorld(ipc)
+    server.addWorld(worldA)
+    server.addWorld(worldB)
+
+    handler.handleStatus(StatusUpdate("saving", null, null))
+
+    // flush=true is the gate-5 mandate: the unflushed save returns before region files are
+    // written, so the CLI would copy a world the saver is still writing.
+    assertEquals(listOf(true), worldA.flushArgs, "world A must be saved with flush=true")
+    assertEquals(listOf(true), worldB.flushArgs, "world B must be saved with flush=true")
+    assertEquals(
+        listOf(0, 0),
+        listOf(worldA.completionsWhenSaved, worldB.completionsWhenSaved),
+        "saveComplete must not be sent before the flushed saves return",
+    )
+    assertEquals(1, ipc.saveCompletions)
   }
 
   @Test
@@ -715,10 +806,26 @@ class CompanionMessageHandlerTest {
           .map { PlainTextComponentSerializer.plainText().serialize(it) }
           .toList()
 
+  /**
+   * Records each `save(flush)` argument plus how many saveComplete events had been sent when the
+   * save ran — proving the completion is sent only after the flushed saves return.
+   */
+  private class FlushRecordingWorld(private val ipc: RecordingIpc) :
+      org.mockbukkit.mockbukkit.world.WorldMock() {
+    val flushArgs = mutableListOf<Boolean>()
+    var completionsWhenSaved = -1
+
+    override fun save(flush: Boolean) {
+      flushArgs += flush
+      completionsWhenSaved = ipc.saveCompletions
+    }
+  }
+
   /** Records everything the handler sends, plus the relative ordering of sends. */
   private class RecordingIpc : CompanionIpc {
     val reports = mutableListOf<HostLoadReport>()
     val instantReports = mutableListOf<HostInstantSwapReport>()
+    val worldReports = mutableListOf<HostWorldReport>()
     val progress = mutableListOf<Pair<String, String>>()
     var saveCompletions = 0
     val order = mutableListOf<String>()
@@ -741,6 +848,11 @@ class CompanionMessageHandlerTest {
     override fun sendLoadProgress(requestId: String, stage: String) {
       progress += requestId to stage
       order += "progress"
+    }
+
+    override fun sendWorldReport(report: HostWorldReport) {
+      worldReports += report
+      order += "worldReport"
     }
   }
 
