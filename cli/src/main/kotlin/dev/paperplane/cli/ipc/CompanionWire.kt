@@ -7,6 +7,9 @@ import dev.paperplane.cli.devserver.InstantSwapReport
 import dev.paperplane.cli.devserver.InstantSwapRequest
 import dev.paperplane.cli.devserver.LoadReport
 import dev.paperplane.cli.devserver.LoadRequest
+import dev.paperplane.cli.devserver.WorldRefreshRequest
+import dev.paperplane.cli.devserver.WorldReport
+import dev.paperplane.cli.devserver.WorldWarmupRequest
 import dev.paperplane.cli.devserver.instant.RedefineCapability
 
 /**
@@ -15,13 +18,16 @@ import dev.paperplane.cli.devserver.instant.RedefineCapability
  * change here must land there too (and bump [CompanionSocketFile.PROTOCOL_VERSION]).
  *
  * CLI → companion: `hello` (auth handshake), `status` (build-state broadcast + save trigger),
- * `load` ([LoadRequest] + type tag), `instantSwap` ([InstantSwapRequest] — in-place patch).
+ * `load` ([LoadRequest] + type tag), `instantSwap` ([InstantSwapRequest] — in-place patch),
+ * `worldRefresh` ([WorldRefreshRequest] — secondary-world (re)load), `worldWarmup`
+ * ([WorldWarmupRequest] — throwaway-world load-path warmup).
  *
  * Companion → CLI ([CompanionEvent]): `welcome` (handshake reply + server-state snapshot + the
  * JVM's redefine capability), `ready` (explicit server-readiness event — an established connection
  * proves the COMPANION is alive, not that the server is player-ready, so readiness is always a
  * streamed event and never inferred from the connection), `saveComplete`, `loadProgress` (streamed
- * load stages), `report` ([LoadReport]), `instantReport` ([InstantSwapReport]).
+ * load stages), `report` ([LoadReport]), `instantReport` ([InstantSwapReport]), `worldReport`
+ * ([WorldReport]).
  */
 internal object CompanionWire {
   const val STATE_SAVING = "saving"
@@ -35,12 +41,15 @@ internal object CompanionWire {
   private const val TYPE_STATUS = "status"
   private const val TYPE_LOAD = "load"
   private const val TYPE_INSTANT_SWAP = "instantSwap"
+  private const val TYPE_WORLD_REFRESH = "worldRefresh"
+  private const val TYPE_WORLD_WARMUP = "worldWarmup"
   private const val TYPE_WELCOME = "welcome"
   private const val TYPE_READY = "ready"
   private const val TYPE_SAVE_COMPLETE = "saveComplete"
   private const val TYPE_LOAD_PROGRESS = "loadProgress"
   private const val TYPE_REPORT = "report"
   private const val TYPE_INSTANT_REPORT = "instantReport"
+  private const val TYPE_WORLD_REPORT = "worldReport"
 
   private val gson = Gson()
 
@@ -68,6 +77,12 @@ internal object CompanionWire {
 
   /** Encodes an [InstantSwapRequest] as its plain JSON object plus the `instantSwap` type tag. */
   fun encodeInstantSwap(request: InstantSwapRequest): String = tagged(request, TYPE_INSTANT_SWAP)
+
+  /** Encodes a [WorldRefreshRequest] as its plain JSON object plus the `worldRefresh` type tag. */
+  fun encodeWorldRefresh(request: WorldRefreshRequest): String = tagged(request, TYPE_WORLD_REFRESH)
+
+  /** Encodes a [WorldWarmupRequest] as its plain JSON object plus the `worldWarmup` type tag. */
+  fun encodeWorldWarmup(request: WorldWarmupRequest): String = tagged(request, TYPE_WORLD_WARMUP)
 
   /** A request object serialized as its plain JSON shape plus the wire's `type` discriminator. */
   private fun tagged(payload: Any, type: String): String =
@@ -99,21 +114,20 @@ internal object CompanionWire {
               requestId = obj.str("requestId") ?: "",
               stage = obj.str("stage") ?: "",
           )
-      TYPE_REPORT ->
-          try {
-            CompanionEvent.Report(gson.fromJson(obj, LoadReport::class.java))
-          } catch (_: JsonParseException) {
-            null
-          }
-      TYPE_INSTANT_REPORT ->
-          try {
-            CompanionEvent.InstantReport(gson.fromJson(obj, InstantSwapReport::class.java))
-          } catch (_: JsonParseException) {
-            null
-          }
+      TYPE_REPORT -> obj.decodeAs<LoadReport> { CompanionEvent.Report(it) }
+      TYPE_INSTANT_REPORT -> obj.decodeAs<InstantSwapReport> { CompanionEvent.InstantReport(it) }
+      TYPE_WORLD_REPORT -> obj.decodeAs<WorldReport> { CompanionEvent.WorldOpReport(it) }
       else -> null
     }
   }
+
+  /** Deserializes the object as [T] and wraps it, or null on a shape Gson refuses. */
+  private inline fun <reified T> JsonObject.decodeAs(wrap: (T) -> CompanionEvent): CompanionEvent? =
+      try {
+        wrap(gson.fromJson(this, T::class.java))
+      } catch (_: JsonParseException) {
+        null
+      }
 
   // Typed accessors over a possibly-absent, possibly-wrong-typed field. A companion one version
   // ahead or behind must degrade to the default rather than throw — the reader logs and skips, so
@@ -166,4 +180,7 @@ internal sealed interface CompanionEvent {
 
   /** Terminal answer to an `instantSwap` request. */
   data class InstantReport(val report: InstantSwapReport) : CompanionEvent
+
+  /** Terminal answer to a `worldRefresh` or `worldWarmup` request. */
+  data class WorldOpReport(val report: WorldReport) : CompanionEvent
 }

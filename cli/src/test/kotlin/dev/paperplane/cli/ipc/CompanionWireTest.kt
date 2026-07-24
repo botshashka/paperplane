@@ -103,6 +103,73 @@ class CompanionWireTest {
   }
 
   @Test
+  fun `encodeWorldRefresh flattens the request beside the type tag`() {
+    val obj =
+        parse(
+            CompanionWire.encodeWorldRefresh(
+                dev.paperplane.cli.devserver.WorldRefreshRequest("w1", "devworld")
+            )
+        )
+
+    assertEquals("worldRefresh", obj.get("type").asString)
+    assertEquals("w1", obj.get("requestId").asString)
+    assertEquals("devworld", obj.get("worldName").asString)
+  }
+
+  @Test
+  fun `encodeWorldWarmup carries the request id beside the type tag`() {
+    val obj =
+        parse(
+            CompanionWire.encodeWorldWarmup(dev.paperplane.cli.devserver.WorldWarmupRequest("w2"))
+        )
+
+    assertEquals("worldWarmup", obj.get("type").asString)
+    assertEquals("w2", obj.get("requestId").asString)
+  }
+
+  @Test
+  fun `decodes an ok worldReport into the typed event`() {
+    val event =
+        CompanionWire.decode(
+            """{"type":"worldReport","requestId":"w1","status":"ok","op":"refresh",""" +
+                """"worldName":"devworld","durationMs":61}"""
+        )
+
+    val report = (event as CompanionEvent.WorldOpReport).report
+    assertEquals("w1", report.requestId)
+    assertEquals(dev.paperplane.cli.devserver.WorldOpStatus.OK, report.status)
+    assertEquals(dev.paperplane.cli.devserver.WorldOp.REFRESH, report.op)
+    assertEquals("devworld", report.worldName)
+    assertEquals(61L, report.durationMs)
+  }
+
+  @Test
+  fun `decodes a failed warmup worldReport with its message`() {
+    val event =
+        CompanionWire.decode(
+            """{"type":"worldReport","requestId":"w2","status":"failed","op":"warmup",""" +
+                """"worldName":"paperplane_warmup","message":"could not unload"}"""
+        )
+
+    val report = (event as CompanionEvent.WorldOpReport).report
+    assertEquals(dev.paperplane.cli.devserver.WorldOpStatus.FAILED, report.status)
+    assertEquals(dev.paperplane.cli.devserver.WorldOp.WARMUP, report.op)
+    assertEquals("could not unload", report.message)
+  }
+
+  @Test
+  fun `a worldReport with unknown enum values decodes with null status and op`() {
+    val event =
+        CompanionWire.decode(
+            """{"type":"worldReport","requestId":"w3","status":"mystery","op":"mystery"}"""
+        )
+
+    val report = (event as CompanionEvent.WorldOpReport).report
+    assertNull(report.status, "unknown status must degrade to null, not throw")
+    assertNull(report.op, "unknown op must degrade to null, not throw")
+  }
+
+  @Test
   fun `decodes an instantReport into the typed event`() {
     val event =
         CompanionWire.decode(

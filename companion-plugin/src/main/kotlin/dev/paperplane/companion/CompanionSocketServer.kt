@@ -35,6 +35,9 @@ interface CompanionIpc {
 
   /** Streamed load stage for [requestId] (`loading` today; Fresh mode will add more). */
   fun sendLoadProgress(requestId: String, stage: String)
+
+  /** Terminal answer to a `worldRefresh` or `worldWarmup` request. */
+  fun sendWorldReport(report: HostWorldReport)
 }
 
 /**
@@ -61,6 +64,8 @@ class CompanionSocketServer(
     private val onStatus: (StatusUpdate) -> Unit,
     private val onLoadRequest: (HostLoadRequest) -> Unit,
     private val onInstantSwap: (HostInstantSwapRequest) -> Unit = {},
+    private val onWorldRefresh: (HostWorldRefreshRequest) -> Unit = {},
+    private val onWorldWarmup: (HostWorldWarmupRequest) -> Unit = {},
     /**
      * The JVM's redefine capability, stamped into every welcome so the CLI knows the instant tier's
      * ceiling for this server. Detected once — capability is a process property.
@@ -79,8 +84,11 @@ class CompanionSocketServer(
     private const val TYPE_STATUS = "status"
     private const val TYPE_LOAD = "load"
     private const val TYPE_INSTANT_SWAP = "instantSwap"
+    private const val TYPE_WORLD_REFRESH = "worldRefresh"
+    private const val TYPE_WORLD_WARMUP = "worldWarmup"
     private const val TYPE_REPORT = "report"
     private const val TYPE_INSTANT_REPORT = "instantReport"
+    private const val TYPE_WORLD_REPORT = "worldReport"
     private const val TYPE_SAVE_COMPLETE = "saveComplete"
     private const val TYPE_LOAD_PROGRESS = "loadProgress"
 
@@ -152,6 +160,8 @@ class CompanionSocketServer(
 
   override fun sendInstantReport(report: HostInstantSwapReport) =
       sendTagged(report, TYPE_INSTANT_REPORT)
+
+  override fun sendWorldReport(report: HostWorldReport) = sendTagged(report, TYPE_WORLD_REPORT)
 
   /** Sends a report object as its plain JSON shape plus the wire's `type` discriminator. */
   private fun sendTagged(payload: Any, type: String) {
@@ -340,6 +350,18 @@ class CompanionSocketServer(
             onInstantSwap(gson.fromJson(obj, HostInstantSwapRequest::class.java))
           } catch (e: JsonParseException) {
             logger.warning("Invalid instant swap request: ${e.message}")
+          }
+      TYPE_WORLD_REFRESH ->
+          try {
+            onWorldRefresh(gson.fromJson(obj, HostWorldRefreshRequest::class.java))
+          } catch (e: JsonParseException) {
+            logger.warning("Invalid world refresh request: ${e.message}")
+          }
+      TYPE_WORLD_WARMUP ->
+          try {
+            onWorldWarmup(gson.fromJson(obj, HostWorldWarmupRequest::class.java))
+          } catch (e: JsonParseException) {
+            logger.warning("Invalid world warmup request: ${e.message}")
           }
       else -> logger.fine("Unknown companion socket message type: $type")
     }

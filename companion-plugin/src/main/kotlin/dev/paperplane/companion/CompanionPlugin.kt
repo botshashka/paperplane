@@ -16,30 +16,7 @@ class CompanionPlugin : JavaPlugin() {
   override fun onEnable() {
     try {
       errorCatcher = ErrorCatcher(this)
-      // The socket server's callbacks fire on its reader threads; hop every message onto the
-      // server main thread before it reaches the handler, whose state is main-thread-confined
-      // (same discipline the old scheduler-poll loop enforced). The callbacks close over
-      // [messageHandler], assigned below — safe because nothing can connect until start() runs,
-      // which happens after the assignment.
-      val socket =
-          CompanionSocketServer(
-              logger,
-              onStatus = { update ->
-                server.scheduler.runTask(this, Runnable { messageHandler.handleStatus(update) })
-              },
-              onLoadRequest = { request ->
-                server.scheduler.runTask(
-                    this,
-                    Runnable { messageHandler.handleLoadRequest(request) },
-                )
-              },
-              onInstantSwap = { request ->
-                server.scheduler.runTask(
-                    this,
-                    Runnable { messageHandler.handleInstantSwap(request) },
-                )
-              },
-          )
+      val socket = buildSocketServer()
       // The host is built lazily on the first load request (hot-reload only). Probing Paper
       // internals here would fail-fast the whole companion on Paper versions that predate the
       // plugin-loader API — but restart/blue-green legitimately run on those and only need the
@@ -93,6 +70,27 @@ class CompanionPlugin : JavaPlugin() {
       writeCompanionError("PaperPlane companion failed to enable: ${e.message}")
       server.pluginManager.disablePlugin(this)
     }
+  }
+
+  /**
+   * The socket endpoint with every message hopped onto the server main thread before it reaches the
+   * handler, whose state is main-thread-confined (same discipline the old scheduler-poll loop
+   * enforced). The callbacks close over [messageHandler], assigned after this returns — safe
+   * because nothing can connect until start() runs, which happens after the assignment.
+   */
+  private fun buildSocketServer(): CompanionSocketServer =
+      CompanionSocketServer(
+          logger,
+          onStatus = onMainThread { messageHandler.handleStatus(it) },
+          onLoadRequest = onMainThread { messageHandler.handleLoadRequest(it) },
+          onInstantSwap = onMainThread { messageHandler.handleInstantSwap(it) },
+          onWorldRefresh = onMainThread { messageHandler.handleWorldRefresh(it) },
+          onWorldWarmup = onMainThread { messageHandler.handleWorldWarmup(it) },
+      )
+
+  /** Wraps [handle] so it runs on the server main thread via the scheduler. */
+  private fun <T> onMainThread(handle: (T) -> Unit): (T) -> Unit = { value ->
+    server.scheduler.runTask(this, Runnable { handle(value) })
   }
 
   /**

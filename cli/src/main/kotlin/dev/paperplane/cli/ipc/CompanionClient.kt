@@ -7,6 +7,10 @@ import dev.paperplane.cli.devserver.LoadReport
 import dev.paperplane.cli.devserver.LoadRequest
 import dev.paperplane.cli.devserver.LoadStatus
 import dev.paperplane.cli.devserver.LoadWaitResult
+import dev.paperplane.cli.devserver.WorldRefreshRequest
+import dev.paperplane.cli.devserver.WorldReport
+import dev.paperplane.cli.devserver.WorldWaitResult
+import dev.paperplane.cli.devserver.WorldWarmupRequest
 import dev.paperplane.cli.devserver.instant.RedefineCapability
 import java.io.BufferedReader
 import java.io.BufferedWriter
@@ -97,6 +101,7 @@ internal class CompanionClient(
   private val saveCompletions = LinkedBlockingQueue<Unit>()
   private val reports = LinkedBlockingQueue<LoadReport>()
   private val instantReports = LinkedBlockingQueue<InstantSwapReport>()
+  private val worldReports = LinkedBlockingQueue<WorldReport>()
 
   val isConnected: Boolean
     get() = connected
@@ -236,6 +241,7 @@ internal class CompanionClient(
           is CompanionEvent.SaveComplete -> saveCompletions.put(Unit)
           is CompanionEvent.Report -> reports.put(event.report)
           is CompanionEvent.InstantReport -> instantReports.put(event.report)
+          is CompanionEvent.WorldOpReport -> worldReports.put(event.report)
           // LoadProgress is a streamed stage with no consumer yet (Fresh mode will read it); a
           // Welcome outside the handshake and an unknown line are likewise ignored.
           is CompanionEvent.LoadProgress,
@@ -282,6 +288,12 @@ internal class CompanionClient(
 
   fun sendInstantSwap(request: InstantSwapRequest): Boolean =
       send(CompanionWire.encodeInstantSwap(request))
+
+  fun sendWorldRefresh(request: WorldRefreshRequest): Boolean =
+      send(CompanionWire.encodeWorldRefresh(request))
+
+  fun sendWorldWarmup(request: WorldWarmupRequest): Boolean =
+      send(CompanionWire.encodeWorldWarmup(request))
 
   /**
    * Waits for the explicit server-readiness event. Readiness already streamed (or snapshotted in
@@ -384,6 +396,23 @@ internal class CompanionClient(
           onTimeout = { InstantWaitResult.TimedOut },
           accept = {
             it.takeIf { r -> r.requestId == expectedRequestId }?.let(InstantWaitResult::Answered)
+          },
+      )
+
+  /** Waits for the [WorldReport] answering [expectedRequestId]; same contract as [awaitReport]. */
+  fun awaitWorldReport(
+      expectedRequestId: String,
+      timeoutMs: Long,
+      isAlive: () -> Boolean,
+  ): WorldWaitResult =
+      await(
+          worldReports,
+          timeoutMs,
+          isAlive,
+          onDisconnected = { WorldWaitResult.ServerExited },
+          onTimeout = { WorldWaitResult.TimedOut },
+          accept = {
+            it.takeIf { r -> r.requestId == expectedRequestId }?.let(WorldWaitResult::Answered)
           },
       )
 

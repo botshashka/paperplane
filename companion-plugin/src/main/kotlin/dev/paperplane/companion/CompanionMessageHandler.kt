@@ -40,6 +40,13 @@ class CompanionMessageHandler(
      * needs a live agent and a live plugin classloader, which no test can stand up.
      */
     private val instantSwapperProvider: () -> InstantSwapper = { InstantSwapper(plugin.logger) },
+    /**
+     * Builds the [WorldRefresher] on the first world request, memoized after. Worlds live in the
+     * server root for PaperPlane-managed servers.
+     */
+    private val worldRefresherProvider: () -> WorldRefresher = {
+      WorldRefresher(plugin, serverRoot)
+    },
 ) {
   companion object {
     /** Streamed stage sent when a load request is accepted for dispatch. */
@@ -54,6 +61,7 @@ class CompanionMessageHandler(
   }
 
   private var instantSwapper: InstantSwapper? = null
+  private var worldRefresher: WorldRefresher? = null
   private var agentWarningLogged = false
 
   // Lazily built by [resolveHost] on the first load request. Null until then (native modes never
@@ -272,6 +280,63 @@ class CompanionMessageHandler(
       is InstantSwapper.Outcome.Failed ->
           answer(HostInstantSwapStatus.FAILED, reason = outcome.reason)
     }
+  }
+
+  // ── World refresh (`worldRefresh` / `worldWarmup` messages) ────────
+
+  /**
+   * Loads (or reloads) the synced dev world as a secondary world and answers with a `worldReport`.
+   * The CLI sequences this strictly before the host-load of the new build; the handler just runs
+   * the primitive and reports honestly — a failure is answered, never silence, so the CLI's waiter
+   * gets the real cause instead of a timeout.
+   */
+  fun handleWorldRefresh(request: HostWorldRefreshRequest) {
+    answerWorldReport(request.requestId, HostWorldOp.REFRESH) { it.refresh(request.worldName) }
+  }
+
+  /** Runs the throwaway-world warmup (JIT-warms the world-load path) and answers likewise. */
+  fun handleWorldWarmup(request: HostWorldWarmupRequest) {
+    answerWorldReport(request.requestId, HostWorldOp.WARMUP) { it.warmup() }
+  }
+
+  private fun answerWorldReport(
+      requestId: String,
+      op: HostWorldOp,
+      operation: (WorldRefresher) -> WorldRefresher.Outcome,
+  ) {
+    // Same last-resort net as the load and patch paths: the CLI blocks on this report, and a
+    // world API throw escaping here would strand it until timeout with the cause buried in a
+    // scheduler stack trace. The provider sits inside the net too — a failed construction must
+    // be answered like any other failure.
+    val outcome =
+        try {
+          val refresher = worldRefresher ?: worldRefresherProvider().also { worldRefresher = it }
+          operation(refresher)
+        } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
+          plugin.logger.log(Level.WARNING, "World ${op.name.lowercase()} failed unexpectedly", e)
+          WorldRefresher.Outcome.Failed("", "${e.javaClass.simpleName}: ${e.message}", 0)
+        }
+    val report =
+        when (outcome) {
+          is WorldRefresher.Outcome.Ok ->
+              HostWorldReport(
+                  requestId = requestId,
+                  status = HostWorldOpStatus.OK,
+                  op = op,
+                  worldName = outcome.worldName,
+                  durationMs = outcome.durationMs,
+              )
+          is WorldRefresher.Outcome.Failed ->
+              HostWorldReport(
+                  requestId = requestId,
+                  status = HostWorldOpStatus.FAILED,
+                  op = op,
+                  worldName = outcome.worldName,
+                  durationMs = outcome.durationMs,
+                  message = outcome.message,
+              )
+        }
+    ipc.sendWorldReport(report)
   }
 
   /** What a patch needs to know about the live plugin it targets. */

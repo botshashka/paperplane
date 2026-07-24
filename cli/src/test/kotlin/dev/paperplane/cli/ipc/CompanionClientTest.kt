@@ -4,6 +4,11 @@ import dev.paperplane.cli.devserver.InstantWaitResult
 import dev.paperplane.cli.devserver.LoadRequest
 import dev.paperplane.cli.devserver.LoadStatus
 import dev.paperplane.cli.devserver.LoadWaitResult
+import dev.paperplane.cli.devserver.WorldOp
+import dev.paperplane.cli.devserver.WorldOpStatus
+import dev.paperplane.cli.devserver.WorldRefreshRequest
+import dev.paperplane.cli.devserver.WorldWaitResult
+import dev.paperplane.cli.devserver.WorldWarmupRequest
 import dev.paperplane.cli.devserver.instant.RedefineCapability
 import dev.paperplane.cli.testing.FakeCompanionSocket
 import java.io.File
@@ -454,6 +459,67 @@ class CompanionClientTest {
             InstantWaitResult.ServerExited,
             client.awaitInstantReport("i1", 10_000) { false },
         )
+      }
+    }
+  }
+
+  // ── World reports ───────────────────────────────────────────────────
+  // Same await contract again; these pin the world mapper and the request encodings.
+
+  @Test
+  fun `world requests are encoded onto the wire`() {
+    FakeCompanionSocket(serverDir).use { companion ->
+      companion.start()
+      CompanionClient(serverDir).use { client ->
+        connectOrFail(client)
+        companion.awaitConnection()
+
+        assertTrue(client.sendWorldRefresh(WorldRefreshRequest("w1", "devworld")))
+        assertTrue(client.sendWorldWarmup(WorldWarmupRequest("w2")))
+
+        companion.awaitReceived(3) // hello + worldRefresh + worldWarmup
+        assertTrue(companion.received[1].contains("\"type\":\"worldRefresh\""))
+        assertTrue(companion.received[1].contains("\"worldName\":\"devworld\""))
+        assertTrue(companion.received[2].contains("\"type\":\"worldWarmup\""))
+        assertTrue(companion.received[2].contains("\"requestId\":\"w2\""))
+      }
+    }
+  }
+
+  @Test
+  fun `awaitWorldReport resolves Answered for the matching report and drops stale ids`() {
+    FakeCompanionSocket(serverDir).use { companion ->
+      companion.start()
+      CompanionClient(serverDir).use { client ->
+        connectOrFail(client)
+        companion.awaitConnection()
+        companion.send("""{"type":"worldReport","requestId":"STALE","status":"ok"}""")
+        companion.send(
+            """{"type":"worldReport","requestId":"w1","status":"ok","op":"refresh",""" +
+                """"worldName":"devworld","durationMs":61}"""
+        )
+
+        val result = client.awaitWorldReport("w1", 5_000, alive)
+
+        val answered = assertInstanceOf(WorldWaitResult.Answered::class.java, result)
+        assertEquals("w1", answered.report.requestId)
+        assertEquals(WorldOpStatus.OK, answered.report.status)
+        assertEquals(WorldOp.REFRESH, answered.report.op)
+        assertEquals("devworld", answered.report.worldName)
+      }
+    }
+  }
+
+  @Test
+  fun `awaitWorldReport times out without an answer and short-circuits on death`() {
+    FakeCompanionSocket(serverDir).use { companion ->
+      companion.start()
+      CompanionClient(serverDir).use { client ->
+        connectOrFail(client)
+        companion.awaitConnection()
+
+        assertEquals(WorldWaitResult.TimedOut, client.awaitWorldReport("w1", 300, alive))
+        assertEquals(WorldWaitResult.ServerExited, client.awaitWorldReport("w1", 10_000) { false })
       }
     }
   }

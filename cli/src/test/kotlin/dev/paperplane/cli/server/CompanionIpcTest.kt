@@ -4,6 +4,9 @@ import dev.paperplane.cli.devserver.InstantSwapRequest
 import dev.paperplane.cli.devserver.InstantWaitResult
 import dev.paperplane.cli.devserver.LoadRequest
 import dev.paperplane.cli.devserver.LoadWaitResult
+import dev.paperplane.cli.devserver.WorldRefreshRequest
+import dev.paperplane.cli.devserver.WorldWaitResult
+import dev.paperplane.cli.devserver.WorldWarmupRequest
 import dev.paperplane.cli.devserver.instant.RedefineCapability
 import dev.paperplane.cli.ipc.CompanionClient
 import dev.paperplane.cli.testing.FakeCompanionSocket
@@ -29,6 +32,8 @@ class CompanionIpcTest {
     ipc.sendStatus("building") // must not throw
     assertFalse(ipc.sendLoadRequest(LoadRequest("r1", "/x.jar", "Sample")))
     assertFalse(ipc.sendInstantSwap(InstantSwapRequest("i1", "Sample")))
+    assertFalse(ipc.sendWorldRefresh(WorldRefreshRequest("w1", "devworld")))
+    assertFalse(ipc.sendWorldWarmup(WorldWarmupRequest("w2")))
   }
 
   @Test
@@ -38,6 +43,7 @@ class CompanionIpcTest {
         InstantWaitResult.ServerExited,
         ipc.awaitInstantReport("i1", timeoutMs = 10_000),
     )
+    assertEquals(WorldWaitResult.ServerExited, ipc.awaitWorldReport("w1", timeoutMs = 10_000))
   }
 
   @Test
